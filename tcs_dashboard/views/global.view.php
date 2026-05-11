@@ -8,7 +8,7 @@
 $asset_base = 'modules/tcs_dashboard/assets';
 ?>
 <style>
-    body > header, body > nav, body > .menu-main, body > .header-title { display: none !important; }
+    body > header, body > nav, body > footer, body > .menu-main, body > .header-title, body > .footer, #page-footer, .footer, #footer { display: none !important; }
     body { margin: 0 !important; padding: 0 !important; background: #0d1117 !important; }
     main, .wrapper, .article { padding: 0 !important; margin: 0 !important; max-width: none !important; }
     main { all: revert; }

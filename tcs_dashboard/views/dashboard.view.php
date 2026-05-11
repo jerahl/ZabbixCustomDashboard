@@ -17,7 +17,7 @@ $asset_base = 'modules/tcs_dashboard/assets';
 // the full viewport. If you'd rather keep Zabbix chrome, delete this block.
 ?>
 <style>
-    body > header, body > nav, body > .menu-main, body > .header-title { display: none !important; }
+    body > header, body > nav, body > footer, body > .menu-main, body > .header-title, body > .footer, #page-footer, .footer, #footer { display: none !important; }
     body { margin: 0 !important; padding: 0 !important; background: #0d1117 !important; }
     main, .wrapper, .article { padding: 0 !important; margin: 0 !important; max-width: none !important; }
     /* Avoid Zabbix's base styles bleeding through into our cards. */
