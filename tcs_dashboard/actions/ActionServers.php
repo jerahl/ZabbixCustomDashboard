@@ -44,9 +44,13 @@ class ActionServers extends CController {
     }
 
     protected function doAction(): void {
+        $hostid = $this->getInput('hostid', '');
+        $boot = (new ActionServersData())->collect($hostid);
+
         $data = [
             'title'  => _('TCS Servers'),
-            'hostid' => $this->getInput('hostid', '')
+            'hostid' => $hostid,
+            'boot'   => $boot
         ];
 
         $response = new CControllerResponseData($data);

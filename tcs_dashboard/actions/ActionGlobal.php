@@ -39,8 +39,11 @@ class ActionGlobal extends CController {
     }
 
     protected function doAction(): void {
+        $boot = (new ActionGlobalData())->collect();
+
         $data = [
-            'title' => _('TCS Global Dashboard')
+            'title' => _('TCS Global Dashboard'),
+            'boot'  => $boot
         ];
 
         $response = new CControllerResponseData($data);

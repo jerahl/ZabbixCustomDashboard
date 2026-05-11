@@ -38,13 +38,18 @@ $asset_base = 'modules/tcs_dashboard/assets';
 
 <div id="root"></div>
 
+<script>
+    window.GLOBAL_BOOT         = <?= json_encode($data['boot'] ?? null, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+    window.TCS_GLOBAL_DATA_URL = "zabbix.php?action=tcs.global.data";
+</script>
+
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
 
-<!-- Order: tweaks → primitives → unified sidebar → global data → global app -->
+<!-- Order: tweaks → primitives → unified sidebar → live-data bridge → global app -->
 <script type="text/babel" src="<?= $asset_base ?>/tweaks-panel.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/primitives.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/global-nav.jsx"></script>
-<script type="text/babel" src="<?= $asset_base ?>/global-data.jsx"></script>
+<script type="text/babel" src="<?= $asset_base ?>/global-bridge.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/global-app.jsx"></script>

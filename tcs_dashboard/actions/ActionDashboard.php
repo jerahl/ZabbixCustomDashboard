@@ -134,53 +134,57 @@ class ActionDashboard extends CController {
     }
 
     private function collectItems(string $hostid): array {
-        // Map the React app's logical names to item keys on your templates.
-        // Edit the right-hand side to match your real keys.
+        // Logical metric → matcher. Match modes:
+        //   ['exact',  'system.cpu.util']                — key matches verbatim
+        //   ['prefix', 'xiq.ap.cpu.util[']               — any key starting with prefix
+        //   ['suffix', 'xiq.ap.channel.util[', ',2.4G]'] — prefix AND suffix (band variants)
+        //
+        // Lifted XIQ template (jerahl/ZabbixExtremeIQ) discovers per-AP items
+        // with {#SERIAL} baked into the key — e.g. xiq.ap.cpu.util[ABC123].
+        // We can't filter on the literal LLD-prototype key, so we match by
+        // prefix and pick the (sole) item that resolved on this host.
         $key_map = [
-            'cpu'           => 'system.cpu.util',
-            'memory'        => 'vm.memory.utilization',
-            'temp'          => 'sensor.temp.value[CPU]',
-            'poeDraw'       => 'extreme.ap.poe.draw',
-            'uplinkIn'      => 'net.if.in["eth0"]',
-            'uplinkOut'     => 'net.if.out["eth0"]',
-            'pktLoss'       => 'icmppingloss',
-            'latency'       => 'icmppingsec',
-            'noise24'       => 'extreme.ap.noise[2.4]',
-            'noise5'        => 'extreme.ap.noise[5]',
-            'channelUtil24' => 'extreme.ap.chanutil[2.4]',
-            'channelUtil5'  => 'extreme.ap.chanutil[5]'
+            'cpu'           => ['prefix', 'xiq.ap.cpu.util['],
+            'memory'        => ['prefix', 'xiq.ap.mem.util['],
+            'temp'          => ['prefix', 'xiq.ap.temp['],
+            'poeDraw'       => ['prefix', 'xiq.ap.poe.draw['],
+            'uplinkIn'      => ['prefix', 'net.if.in['],
+            'uplinkOut'     => ['prefix', 'net.if.out['],
+            'pktLoss'       => ['exact',  'icmppingloss'],
+            'latency'       => ['exact',  'icmppingsec'],
+            'noise24'       => ['suffix', 'xiq.ap.noise[',         ',2.4G]'],
+            'noise5'        => ['suffix', 'xiq.ap.noise[',         ',5G]'],
+            'channelUtil24' => ['suffix', 'xiq.ap.channel.util[',  ',2.4G]'],
+            'channelUtil5'  => ['suffix', 'xiq.ap.channel.util[',  ',5G]']
         ];
 
+        // Fetch every item on the host once; match in PHP. Cheaper than one
+        // item.get per logical metric, and the only way to handle the LLD
+        // prefix matches above.
         $items = API::Item()->get([
             'output'   => ['itemid', 'key_', 'lastvalue', 'prevvalue', 'units', 'value_type'],
             'hostids'  => [$hostid],
-            'filter'   => ['key_' => array_values($key_map)],
             'webitems' => true
         ]);
-
-        // Index by key for fast lookup.
-        $by_key = [];
-        foreach ($items as $it) {
-            $by_key[$it['key_']] = $it;
-        }
 
         $now = time();
         $window_from = $now - 24 * 3600; // last 24h for sparklines
         $out = [];
 
-        foreach ($key_map as $logical => $key) {
-            if (!isset($by_key[$key])) {
+        foreach ($key_map as $logical => $matcher) {
+            $found = $this->matchItem($items, $matcher);
+            if (!$found) {
                 $out[$logical] = [
                     'value'   => null,
                     'unit'    => '',
                     'history' => [],
                     'missing' => true,
-                    'key'     => $key
+                    'key'     => is_array($matcher) ? implode('', array_slice($matcher, 1)) : (string) $matcher
                 ];
                 continue;
             }
 
-            $it = $by_key[$key];
+            $it = $found;
             $value_type = (int) $it['value_type'];
 
             // history.get value_type: 0=float, 1=str, 2=log, 3=uint, 4=text.
@@ -205,11 +209,31 @@ class ActionDashboard extends CController {
                 'unit'    => $it['units'],
                 'history' => $history,
                 'missing' => false,
-                'key'     => $key
+                'key'     => $it['key_']
             ];
         }
 
         return $out;
+    }
+
+    /**
+     * Match one item out of a host's item list given a matcher tuple from
+     * the $key_map in collectItems(). Returns the first match, or null.
+     */
+    private function matchItem(array $items, array $matcher): ?array {
+        [$mode, $a] = [$matcher[0], $matcher[1]];
+        $b = $matcher[2] ?? '';
+        foreach ($items as $it) {
+            $k = $it['key_'];
+            $hit = match ($mode) {
+                'exact'  => $k === $a,
+                'prefix' => str_starts_with($k, $a),
+                'suffix' => str_starts_with($k, $a) && str_ends_with($k, $b),
+                default  => false
+            };
+            if ($hit) return $it;
+        }
+        return null;
     }
 
     private function collectSystemInfo(string $hostid): array {
