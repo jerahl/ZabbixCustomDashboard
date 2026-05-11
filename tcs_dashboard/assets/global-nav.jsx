@@ -18,6 +18,8 @@ window.TCS_NAV = window.TCS_NAV || {
   apDetail:      "zabbix.php?action=tcs.dashboard.view",
   switches:      "zabbix.php?action=tcs.switches.view",
   servers:       "zabbix.php?action=tcs.servers.view",
+  problems:      "zabbix.php?action=tcs.problems.view",
+  events:        "zabbix.php?action=tcs.events.view",
   surveillance:  "zabbix.php?action=tcs.surveillance.view",
   cameraDetail:  "zabbix.php?action=tcs.camera.view",
   serverDetail:  "zabbix.php?action=tcs.server.view"
@@ -58,8 +60,8 @@ const GlobalSidebar = ({ active }) => {
         {item("wireless",    NAV.apDetail,      "wifi",     "Wireless APs", "1,184")}
         {item("switches",    NAV.switches,      "ethernet", "Switches",     "312")}
         {item("zbx-servers", NAV.servers,       "ap",       "Servers",      "17")}
-        {item("problems",    NAV.global,        "alert",    "Problems",     "47", "warn")}
-        {item("events",      NAV.global,        "events",   "Events")}
+        {item("problems",    NAV.problems,      "alert",    "Problems")}
+        {item("events",      NAV.events,        "events",   "Events Console")}
       </div>
 
       <div className="nav-section">

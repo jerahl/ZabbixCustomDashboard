@@ -48,6 +48,26 @@
             "layout": "layout.json",
             "view": null
         },
+        "tcs.problems.view": {
+            "class": "ActionProblems",
+            "view": "problems.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.problems.data": {
+            "class": "ActionProblemsData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.events.view": {
+            "class": "ActionEvents",
+            "view": "events.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.events.data": {
+            "class": "ActionEventsData",
+            "layout": "layout.json",
+            "view": null
+        },
         "tcs.camera.view": {
             "class": "ActionCamera",
             "view": "camera.view",
