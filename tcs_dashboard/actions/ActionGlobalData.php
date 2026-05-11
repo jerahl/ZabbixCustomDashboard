@@ -67,20 +67,19 @@ class ActionGlobalData extends CController {
             'preservekeys'          => true
         ]));
 
-        $proxies = $this->safeGet(fn() => API::Proxy()->get(['output' => ['proxyid', 'host']]));
+        // Zabbix 7.0+ renamed proxy.host to proxy.name. Use 'name'.
+        $proxies = $this->safeGet(fn() => API::Proxy()->get(['output' => ['proxyid', 'name']]));
 
-        // Zabbix versions differ on which problem.get params are accepted
-        // (notably 'recent' was relaxed in 7.0). Drop it and rely on the
-        // default "current open problems" behaviour, which is what we want.
+        // Zabbix 7.2 removed selectHosts from problem.get / event.get. We
+        // pull objectid (triggerid) here and resolve the trigger→hosts map
+        // in one trigger.get call below.
         $problems = $this->safeGet(fn() => API::Problem()->get([
-            'output'      => ['eventid', 'objectid', 'name', 'severity', 'clock', 'acknowledged'],
-            'selectHosts' => ['hostid', 'host', 'name'],
-            'sortfield'   => ['clock'],
-            'sortorder'   => 'DESC',
-            'limit'       => 200
+            'output'    => ['eventid', 'objectid', 'name', 'severity', 'clock', 'acknowledged'],
+            'sortfield' => ['clock'],
+            'sortorder' => 'DESC',
+            'limit'     => 200
         ]));
 
-        // 'value' was removed from event.get in 7.0+. Filter client-side.
         $events_24h = $this->safeGet(fn() => API::Event()->get([
             'output'    => ['eventid', 'clock', 'value'],
             'source'    => EVENT_SOURCE_TRIGGERS,
@@ -92,14 +91,25 @@ class ActionGlobalData extends CController {
         ]));
 
         $recent_events = $this->safeGet(fn() => API::Event()->get([
-            'output'     => ['eventid', 'name', 'severity', 'clock', 'value'],
-            'selectHosts'=> ['hostid', 'host', 'name'],
-            'source'     => EVENT_SOURCE_TRIGGERS,
-            'object'     => EVENT_OBJECT_TRIGGER,
-            'sortfield'  => ['clock'],
-            'sortorder'  => 'DESC',
-            'limit'      => 30
+            'output'    => ['eventid', 'objectid', 'name', 'severity', 'clock', 'value'],
+            'source'    => EVENT_SOURCE_TRIGGERS,
+            'object'    => EVENT_OBJECT_TRIGGER,
+            'sortfield' => ['clock'],
+            'sortorder' => 'DESC',
+            'limit'     => 30
         ]));
+
+        // Resolve triggerid → hosts via trigger.get and graft a synthetic
+        // 'hosts' field onto each problem/event row so the rest of this
+        // controller can stay shape-compatible with pre-7.2 expectations.
+        $trigger_ids = array_unique(array_merge(
+            array_column($problems, 'objectid'),
+            array_column($recent_events, 'objectid')
+        ));
+        $trigger_hosts = $this->resolveTriggerHosts($trigger_ids);
+        foreach ($problems as &$p)      { $p['hosts'] = $trigger_hosts[$p['objectid']] ?? []; }
+        foreach ($recent_events as &$e) { $e['hosts'] = $trigger_hosts[$e['objectid']] ?? []; }
+        unset($p, $e);
 
         return [
             'totals'   => $this->buildTotals($hosts, $problems, $proxies),
@@ -110,6 +120,22 @@ class ActionGlobalData extends CController {
             'timeline' => $this->buildTimeline($events_24h),
             'ts'       => time()
         ];
+    }
+
+    /** triggerid → [{hostid, host, name}, ...] using one trigger.get call. */
+    private function resolveTriggerHosts(array $trigger_ids): array {
+        if (!$trigger_ids) return [];
+        $triggers = $this->safeGet(fn() => API::Trigger()->get([
+            'output'      => ['triggerid'],
+            'selectHosts' => ['hostid', 'host', 'name'],
+            'triggerids'  => array_values($trigger_ids),
+            'preservekeys'=> true
+        ]));
+        $out = [];
+        foreach ($triggers as $t) {
+            $out[(string) $t['triggerid']] = $t['hosts'] ?? [];
+        }
+        return $out;
     }
 
     /** Coerce any API::*->get() result to an array, swallowing thrown

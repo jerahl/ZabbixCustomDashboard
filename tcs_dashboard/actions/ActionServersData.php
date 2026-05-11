@@ -138,14 +138,18 @@ class ActionServersData extends CController {
     }
 
     private function collectProblems(array $host_ids): array {
+        // Zabbix 7.2 removed selectHosts from problem.get — resolve hosts
+        // via trigger.get after the fact.
         $problems = $this->safeGet(fn() => API::Problem()->get([
-            'output'      => ['eventid', 'name', 'severity', 'clock', 'acknowledged'],
-            'selectHosts' => ['hostid', 'host', 'name'],
-            'hostids'     => $host_ids,
-            'sortfield'   => ['clock'],
-            'sortorder'   => 'DESC',
-            'limit'       => 50
+            'output'    => ['eventid', 'objectid', 'name', 'severity', 'clock', 'acknowledged'],
+            'hostids'   => $host_ids,
+            'sortfield' => ['clock'],
+            'sortorder' => 'DESC',
+            'limit'     => 50
         ]));
+        $trigger_hosts = $this->resolveTriggerHosts(array_column($problems, 'objectid'));
+        foreach ($problems as &$p) { $p['hosts'] = $trigger_hosts[$p['objectid']] ?? []; }
+        unset($p);
         $sev_label = [0 => 'info', 1 => 'info', 2 => 'warning', 3 => 'warning', 4 => 'high', 5 => 'disaster'];
         $out = [];
         foreach ($problems as $p) {
@@ -169,13 +173,14 @@ class ActionServersData extends CController {
         $problem_count_by_host = [];
         $worst_sev_by_host = [];
         $raw_problems = $this->safeGet(fn() => API::Problem()->get([
-            'output'      => ['severity'],
-            'selectHosts' => ['hostid'],
-            'hostids'     => array_keys($hosts),
-            'limit'       => 1000
+            'output'  => ['objectid', 'severity'],
+            'hostids' => array_keys($hosts),
+            'limit'   => 1000
         ]));
+        $trigger_hosts = $this->resolveTriggerHosts(array_column($raw_problems, 'objectid'));
         foreach ($raw_problems as $p) {
-            foreach ($p['hosts'] ?? [] as $h) {
+            $hosts_for_trigger = $trigger_hosts[$p['objectid']] ?? [];
+            foreach ($hosts_for_trigger as $h) {
                 $hid = $h['hostid'];
                 $problem_count_by_host[$hid] = ($problem_count_by_host[$hid] ?? 0) + 1;
                 $sev = (int) $p['severity'];
@@ -345,6 +350,21 @@ class ActionServersData extends CController {
                 'errs'    => 0,
                 'status'  => (int) ($vals['status'] ?? 1) === 1 ? 'up' : 'down'
             ];
+        }
+        return $out;
+    }
+
+    /** triggerid → [{hostid, host, name}, ...] using one trigger.get call. */
+    private function resolveTriggerHosts(array $trigger_ids): array {
+        if (!$trigger_ids) return [];
+        $triggers = $this->safeGet(fn() => API::Trigger()->get([
+            'output'      => ['triggerid'],
+            'selectHosts' => ['hostid', 'host', 'name'],
+            'triggerids'  => array_values(array_unique($trigger_ids))
+        ]));
+        $out = [];
+        foreach ($triggers as $t) {
+            $out[(string) $t['triggerid']] = $t['hosts'] ?? [];
         }
         return $out;
     }
