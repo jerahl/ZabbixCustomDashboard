@@ -10,17 +10,69 @@ const RANGE_OPTIONS = [
   { key: "7d",  label: "Last 7d"  }
 ];
 
+const RangeMenu = ({ anchorRect, rangeKey, onPick, onClose }) => {
+  if (!anchorRect) return null;
+  const style = {
+    position: "fixed",
+    top: anchorRect.bottom + 6,
+    left: Math.max(8, anchorRect.right - 160),
+    width: 160, zIndex: 1000,
+    background: "var(--bg-1, #0f1620)",
+    border: "1px solid var(--line, #1f2a36)",
+    borderRadius: 8,
+    boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+    padding: 4
+  };
+  return ReactDOM.createPortal(
+    <div style={style} onClick={(e) => e.stopPropagation()}>
+      {RANGE_OPTIONS.map(o => (
+        <div
+          key={o.key}
+          onClick={() => { onPick(o.key); onClose(); }}
+          style={{
+            padding: "8px 12px", cursor: "pointer", borderRadius: 6,
+            background: o.key === rangeKey ? "var(--bg-2, #1a2330)" : "transparent",
+            color: o.key === rangeKey ? "var(--fg, #fff)" : "var(--fg-2, #cbd5e1)",
+            fontSize: 13
+          }}
+          onMouseEnter={e => e.currentTarget.style.background = "var(--bg-2, #1a2330)"}
+          onMouseLeave={e => e.currentTarget.style.background = o.key === rangeKey ? "var(--bg-2, #1a2330)" : "transparent"}
+        >
+          {o.label}
+        </div>
+      ))}
+    </div>,
+    document.body
+  );
+};
+
 const GlobalHeader = ({ now, rangeKey, setRangeKey }) => {
   const [open, setOpen] = React.useState(false);
-  const ref = React.useRef(null);
+  const [anchorRect, setAnchorRect] = React.useState(null);
+  const triggerRef = React.useRef(null);
   const current = RANGE_OPTIONS.find(r => r.key === rangeKey) || RANGE_OPTIONS[2];
 
   React.useEffect(() => {
     if (!open) return;
-    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onDoc = (e) => {
+      if (triggerRef.current && !triggerRef.current.contains(e.target)) setOpen(false);
+    };
+    const onResize = () => setOpen(false);
     document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
+    window.addEventListener("resize", onResize);
+    window.addEventListener("scroll", onResize, true);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("scroll", onResize, true);
+    };
   }, [open]);
+
+  const toggle = () => {
+    if (open) { setOpen(false); return; }
+    if (triggerRef.current) setAnchorRect(triggerRef.current.getBoundingClientRect());
+    setOpen(true);
+  };
 
   return (
     <div className="page-header" style={{ alignItems: "center" }}>
@@ -38,38 +90,20 @@ const GlobalHeader = ({ now, rangeKey, setRangeKey }) => {
         </div>
       </div>
 
-      <div className="timerange" ref={ref} style={{ position: "relative", cursor: "pointer" }} onClick={() => setOpen(o => !o)}>
+      <div className="timerange" ref={triggerRef} onClick={toggle}>
         <Icon name="calendar" />
         <span className="range-val">{current.label}</span>
         <Icon name="chevron" />
-        {open && (
-          <div
-            style={{
-              position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 50,
-              background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8,
-              boxShadow: "0 8px 24px rgba(0,0,0,0.4)", minWidth: 140, padding: 4
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {RANGE_OPTIONS.map(o => (
-              <div
-                key={o.key}
-                onClick={() => { setRangeKey(o.key); setOpen(false); }}
-                style={{
-                  padding: "8px 12px", cursor: "pointer", borderRadius: 6,
-                  background: o.key === rangeKey ? "var(--bg-2)" : "transparent",
-                  color: o.key === rangeKey ? "var(--fg)" : "var(--fg-2)",
-                  fontSize: 13
-                }}
-                onMouseEnter={e => e.currentTarget.style.background = "var(--bg-2)"}
-                onMouseLeave={e => e.currentTarget.style.background = o.key === rangeKey ? "var(--bg-2)" : "transparent"}
-              >
-                {o.label}
-              </div>
-            ))}
-          </div>
-        )}
       </div>
+
+      {open && (
+        <RangeMenu
+          anchorRect={anchorRect}
+          rangeKey={rangeKey}
+          onPick={setRangeKey}
+          onClose={() => setOpen(false)}
+        />
+      )}
     </div>
   );
 };
