@@ -98,16 +98,15 @@ const FilterBar = ({ filters, groups, onChange }) => {
 
 const MetricStrip = ({ metrics }) => {
   const cells = [
-    { label: "Open problems", value: metrics.total,           color: "var(--fg)" },
-    { label: "Disaster",      value: metrics.bySeverity.disaster, color: "var(--err)" },
-    { label: "High",          value: metrics.bySeverity.high,     color: "var(--err)" },
+    { label: "Open problems", value: metrics.total,               color: "var(--fg)"   },
+    { label: "Disaster",      value: metrics.bySeverity.disaster, color: "var(--err)"  },
+    { label: "High",          value: metrics.bySeverity.high,     color: "var(--err)"  },
     { label: "Warning",       value: metrics.bySeverity.warning,  color: "var(--warn)" },
     { label: "Info",          value: metrics.bySeverity.info,     color: "var(--info)" },
-    { label: "Unacked",       value: metrics.unacked,        color: "var(--warn)" },
-    { label: "Mean age",      value: metrics.avgAgeStr,      color: "var(--fg-2)" }
+    { label: "Unacked",       value: metrics.unacked,             color: "var(--warn)" }
   ];
   return (
-    <div className="card sev-strip">
+    <div className="card metric-strip">
       {cells.map(c => (
         <div className="sev-cell" key={c.label}>
           <div className="sev-cell-h"><div className="sev-cell-lbl">{c.label}</div></div>
@@ -236,6 +235,7 @@ const ProblemsApp = () => {
               <span className="pill"><span className="lbl">Last refresh</span> <span className="v">{now}</span></span>
               <span className="pill"><span className="lbl">Auto-refresh</span> <span className="v">30s</span></span>
               <span className="pill"><span className="lbl">Matches</span> <span className="v">{data.metrics.total}</span></span>
+              <span className="pill"><span className="lbl">Mean age</span> <span className="v">{data.metrics.avgAgeStr}</span></span>
             </div>
           </div>
         </div>

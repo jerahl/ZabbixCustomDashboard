@@ -97,16 +97,15 @@ const FilterBarE = ({ filters, groups, onChange }) => {
 
 const MetricStripE = ({ metrics }) => {
   const cells = [
-    { label: "Events", value: metrics.total, color: "var(--fg)" },
-    { label: "Firing", value: metrics.fired, color: "var(--err)" },
-    { label: "Resolved", value: metrics.resolved, color: "var(--ok)" },
-    { label: "Disaster", value: metrics.bySeverity.disaster, color: "var(--err)" },
-    { label: "High", value: metrics.bySeverity.high, color: "var(--err)" },
-    { label: "Warning", value: metrics.bySeverity.warning, color: "var(--warn)" },
-    { label: "Mean TTR", value: metrics.mttrStr, color: "var(--info)" }
+    { label: "Events",   value: metrics.total,               color: "var(--fg)"   },
+    { label: "Firing",   value: metrics.fired,               color: "var(--err)"  },
+    { label: "Resolved", value: metrics.resolved,            color: "var(--ok)"   },
+    { label: "Disaster", value: metrics.bySeverity.disaster, color: "var(--err)"  },
+    { label: "High",     value: metrics.bySeverity.high,     color: "var(--err)"  },
+    { label: "Warning",  value: metrics.bySeverity.warning,  color: "var(--warn)" }
   ];
   return (
-    <div className="card sev-strip">
+    <div className="card metric-strip">
       {cells.map(c => (
         <div className="sev-cell" key={c.label}>
           <div className="sev-cell-h"><div className="sev-cell-lbl">{c.label}</div></div>

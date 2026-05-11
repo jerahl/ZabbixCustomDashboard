@@ -88,3 +88,11 @@
   padding: 24px;
   font-size: 13px;
 }
+
+/* Metric strip — variable cell count, unlike global.css's fixed-6 .sev-strip.
+   Reuses .sev-cell internals so the typography matches the other pages. */
+.metric-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+.metric-strip .sev-cell:last-child { border-right: 0; }
