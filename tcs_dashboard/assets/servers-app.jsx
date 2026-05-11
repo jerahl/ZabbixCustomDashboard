@@ -17,6 +17,13 @@ const ServersApp = () => {
   const [activeId, setActiveId] = useStateSVA(t.selectedServer);
   const [tab, setTab] = useStateSVA(t.tab || "overview");
   const [query, setQuery] = useStateSVA("");
+  // Bump on every bridge refetch so children re-read window.ACTIVE_SERVER_*.
+  const [, setTick] = useStateSVA(0);
+  useEffectSVA(() => {
+    const onData = () => setTick(n => n + 1);
+    window.addEventListener("tcs:servers-data", onData);
+    return () => window.removeEventListener("tcs:servers-data", onData);
+  }, []);
 
   useEffectSVA(() => {
     document.documentElement.style.setProperty("--zbx", t.accent);
@@ -35,9 +42,21 @@ const ServersApp = () => {
     || allHosts[0]
     || PLACEHOLDER_HOST;
 
+  // Whenever the active host changes (initial mount included), tell the
+  // bridge to refetch with the new hostid. That's what populates the
+  // Services / Procs / Network tabs (collectActive on the server).
+  useEffectSVA(() => {
+    if (host && host.hostid && typeof window.tcsServersSetActive === "function") {
+      window.tcsServersSetActive(host.hostid);
+    }
+  }, [host && host.hostid]);
+
   const onSelect = (sv) => {
     setActiveId(sv.id);
     setTweak("selectedServer", sv.id);
+    if (sv.hostid && typeof window.tcsServersSetActive === "function") {
+      window.tcsServersSetActive(sv.hostid);
+    }
   };
 
   const densityVar = t.density === "spacious" ? 1.15 : t.density === "dense" ? 0.85 : 1;

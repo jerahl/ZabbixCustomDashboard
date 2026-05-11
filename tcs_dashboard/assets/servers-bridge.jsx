@@ -89,10 +89,12 @@
     const url = window.TCS_SERVERS_DATA_URL;
     if (!url) return;
 
-    const hostid = window.SERVERS_HOSTID || "";
-    const fullUrl = hostid ? `${url}&hostid=${encodeURIComponent(hostid)}` : url;
+    let activeHostid = window.SERVERS_HOSTID || "";
 
     const tick = async () => {
+        const fullUrl = activeHostid
+            ? `${url}&hostid=${encodeURIComponent(activeHostid)}`
+            : url;
         try {
             const resp = await fetch(fullUrl, {
                 credentials: "same-origin",
@@ -106,5 +108,17 @@
             console.warn("[tcs] servers refresh failed:", e);
         }
     };
+
+    // Imperative API used by servers-app when the user picks a server in
+    // the sidecar — switch active host AND refetch immediately so the
+    // Services/Procs/Network tabs populate without waiting 30s.
+    window.tcsServersRefresh = tick;
+    window.tcsServersSetActive = (hostid) => {
+        const next = String(hostid || "");
+        if (next === activeHostid) return;
+        activeHostid = next;
+        return tick();
+    };
+
     setInterval(tick, REFRESH_MS);
 })();
