@@ -66,6 +66,31 @@
         return out;
     };
 
+    // Build a minimal AP_SITES list when the controller didn't supply one — the
+    // APNavigator (shell.jsx) reads window.AP_SITES directly. With one host
+    // we just put it under an "Active host" group; once collectApSites() is
+    // implemented in ActionDashboard, the real fleet will replace this.
+    const buildApSites = (boot, host) => {
+        if (Array.isArray(boot && boot.apSites) && boot.apSites.length > 0) {
+            return boot.apSites;
+        }
+        if (!host || !host.host) return [];
+        return [{
+            id: "active", name: host.site || "Active host", expanded: true, problems: 0,
+            aps: [{
+                id:       host.host,
+                ip:       host.ip || "",
+                model:    host.model || (Array.isArray(host.templates) && host.templates[0]) || "—",
+                floor:    host.floor || "—",
+                status:   host.available === 2 ? "down" : (host.available === 1 ? "ok" : "warn"),
+                clients:  host.clients ?? 0,
+                since:    host.lastSeen || "—",
+                problems: 0,
+                current:  true
+            }]
+        }];
+    };
+
     function applyBoot(boot) {
         const b = boot || {};
 
@@ -77,6 +102,7 @@
         window.PF_AUTH_FAILS = Array.isArray(b.pfAuthFails) ? b.pfAuthFails : [];
         window.ZBX_EVENTS    = Array.isArray(b.events)      ? b.events      : [];
         window.WIRED_PORTS   = Array.isArray(b.wiredPorts)  ? b.wiredPorts  : [];
+        window.AP_SITES      = buildApSites(b, window.ZBX_HOST);
         window.ALERTS_SUMMARY = b.alerts || {
             associationFailures: 0, authFailures: 0,
             networkIssues: 0, packetLoss: 0,

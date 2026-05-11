@@ -42,6 +42,7 @@ $asset_base = 'modules/tcs_dashboard/assets';
 <!-- Order matters: tweaks → primitives → shared shell → switches data/widgets → app entry -->
 <script type="text/babel" src="<?= $asset_base ?>/tweaks-panel.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/primitives.jsx"></script>
+<script type="text/babel" src="<?= $asset_base ?>/global-nav.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/nvr-shell.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/switches-data.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/switches-widgets.jsx"></script>

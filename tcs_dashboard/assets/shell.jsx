@@ -1,73 +1,17 @@
-// Main app shell
+// Main app shell — sidebar now lives in global-nav.jsx (unified across all pages)
+const Sidebar = ({ tab, setTab }) => <GlobalSidebar active="wireless" />;
 
-// URLs of the sibling module pages and the default Zabbix UI. Centralised
-// here so all sidebars (Sidebar + NVRSidebar) reference the same constants.
-window.TCS_NAV = window.TCS_NAV || {
-  zabbixDefault: "zabbix.php?action=dashboard.view",
-  apDetail:      "zabbix.php?action=tcs.dashboard.view",
-  surveillance:  "zabbix.php?action=tcs.surveillance.view",
-  switches:      "zabbix.php?action=tcs.switches.view"
-};
-
-const Sidebar = ({ tab, setTab, active = "wireless" }) => (
-  <aside className="sidebar">
-    <a className="back-to-zabbix" href={window.TCS_NAV.zabbixDefault} title="Back to default Zabbix UI">
-      <Icon name="back" /> <span>Default Zabbix Dashboard</span>
-    </a>
-
-    <div className="brand">
-      <div className="brand-mark">Z·P</div>
-      <div>
-        <div className="brand-name">Zabbix · TCS</div>
-        <div className="brand-sub">+ PacketFence NAC</div>
-      </div>
-    </div>
-
-    <div className="nav-section">
-      <div className="nav-label">Monitoring</div>
-      <a className="nav-item" href={window.TCS_NAV.zabbixDefault}><Icon name="map" /> Dashboards</a>
-      <a className="nav-item" href={window.TCS_NAV.apDetail}><Icon name="ap" /> Hosts <span className="nav-count">2,418</span></a>
-      <a className={"nav-item" + (active === "wireless"     ? " active" : "")} href={window.TCS_NAV.apDetail}><Icon name="wifi" /> Wireless APs <span className="nav-count">1,184</span></a>
-      <a className={"nav-item" + (active === "switches"     ? " active" : "")} href={window.TCS_NAV.switches}><Icon name="ethernet" /> Switches <span className="nav-count">312</span></a>
-      <a className={"nav-item" + (active === "surveillance" ? " active" : "")} href={window.TCS_NAV.surveillance}><Icon name="events" /> Surveillance <span className="nav-count">1,147</span></a>
-      <a className="nav-item"><Icon name="alert" /> Problems <span className="nav-count warn">23</span></a>
-    </div>
-
-    <div className="nav-section">
-      <div className="nav-label">Identity (PacketFence)</div>
-      <div className="nav-item"><Icon name="clients" /> Connected Devices <span className="nav-count">12,847</span></div>
-      <div className="nav-item"><Icon name="shield" /> NAC Policies</div>
-      <div className="nav-item"><Icon name="user" /> User Sessions</div>
-      <div className="nav-item"><Icon name="lock" /> Quarantine <span className="nav-count warn">2</span></div>
-    </div>
-
-    <div className="nav-section">
-      <div className="nav-label">Sites</div>
-      <div className="nav-item">Bryant High School</div>
-      <div className="nav-item muted">Central High School</div>
-      <div className="nav-item muted">Northridge High School</div>
-      <div className="nav-item muted">+ 23 more sites</div>
-    </div>
-
-    <div className="sidebar-footer">
-      <div className="row"><span>Zabbix Server</span><span className="ok">● 7.0.4</span></div>
-      <div className="row"><span>PacketFence API</span><span className="ok">● v12.3</span></div>
-      <div className="row"><span>Proxy zbx-proxy-tcs-01</span><span className="ok">● online</span></div>
-    </div>
-  </aside>
-);
-
-const Topbar = ({ onCmdK }) => (
+const Topbar = ({ onCmdK, activeAp }) => (
   <div className="topbar">
     <div className="icon-btn" title="Back"><Icon name="back" /></div>
     <div className="crumb">
       <span>Wireless APs</span>
       <span className="sep">/</span>
-      <span>Bryant HS</span>
+      <span>{activeAp ? activeAp.site : "Bryant High School"}</span>
       <span className="sep">/</span>
-      <span>1st Floor</span>
+      <span>{activeAp ? activeAp.floor : "1st Floor"}</span>
       <span className="sep">/</span>
-      <span className="seg">BHS-56-Hallway</span>
+      <span className="seg">{activeAp ? activeAp.id : "BHS-56-Hallway"}</span>
     </div>
     <div className="spacer" />
     <div className="search" onClick={onCmdK}>
@@ -87,14 +31,14 @@ const PageHeader = ({ timeRange, setTimeRange, host }) => (
       <div className="host-title">
         <h1>{host.host}</h1>
         <span className="ip">{host.ip}</span>
-        <span className="role-tag faculty" style={{ fontSize: 10, padding: "1px 8px" }}>AP_305C</span>
+        <span className="role-tag faculty" style={{ fontSize: 10, padding: "1px 8px" }}>{host.model || "AP_305C"}</span>
       </div>
       <div className="host-meta">
-        <span className="pill"><span className="dot" style={{ background: "var(--ok)" }} /> Connected</span>
+        <span className="pill"><span className="dot" style={{ background: host.apStatus === "down" ? "var(--err)" : host.apStatus === "warn" ? "var(--warn)" : "var(--ok)" }} /> {host.apStatus === "down" ? "Unreachable" : host.apStatus === "warn" ? "Degraded" : "Connected"}</span>
         <span className="pill"><span className="lbl">Active since</span> <span className="v">7d 23h 49m</span></span>
-        <span className="pill"><span className="lbl">Site</span> <span>Bryant High School · 1st Floor</span></span>
+        <span className="pill"><span className="lbl">Site</span> <span>{host.site || "Bryant High School"} · {host.floor || "1st Floor"}</span></span>
+        <span className="pill"><span className="lbl">Clients</span> <span className="v">{(host.clients ?? 0).toLocaleString()}</span></span>
         <span className="pill"><span className="lbl">Zabbix Host ID</span> <span className="v">10847</span></span>
-        <span className="pill"><span className="lbl">PF Switch ID</span> <span className="v">{host.ip}</span></span>
         <span className="pill"><span className="lbl">Polled via</span> <span>{host.proxy}</span></span>
       </div>
     </div>
@@ -217,6 +161,100 @@ const DeviceSidecar = ({ host }) => (
   </div>
 );
 
+// ───────── AP Host Navigator (left rail) ─────────
+const APNavigator = ({ activeId, onSelect, query, setQuery }) => {
+  const [sites, setSites] = React.useState(window.AP_SITES);
+  const toggle = (idx) => {
+    setSites(sites.map((s, i) => i === idx ? { ...s, expanded: !s.expanded } : s));
+  };
+  const q = (query || "").trim().toLowerCase();
+  const totalAps = window.AP_SITES.reduce((n, s) => n + s.aps.length, 0);
+  const totalClients = window.AP_SITES.reduce((n, s) => n + s.aps.reduce((m, a) => m + a.clients, 0), 0);
+  const totalProb = window.AP_SITES.reduce((n, s) => n + s.problems, 0);
+
+  return (
+    <div className="card ap-nav-card">
+      <div className="card-h">
+        <h3>AP Navigator</h3>
+        <SourceBadge src="zbx" />
+        <div className="h-spacer" />
+        <span className="h-meta">{totalAps} APs</span>
+      </div>
+      <div className="ap-nav-search">
+        <Icon name="search" size={12} />
+        <input
+          placeholder="Filter by id, ip, site…"
+          value={query || ""}
+          onChange={(e) => setQuery(e.target.value)}
+          spellCheck={false}
+        />
+        {query ? <span className="ap-nav-clear" onClick={() => setQuery("")}>×</span> : null}
+      </div>
+      <div className="ap-nav-summary">
+        <span><b>{totalClients.toLocaleString()}</b> clients</span>
+        <span className="dot-sep">·</span>
+        <span><b style={{color:"var(--ok)"}}>{totalAps - totalProb}</b> healthy</span>
+        <span className="dot-sep">·</span>
+        <span><b style={{color:"var(--warn)"}}>{totalProb}</b> with triggers</span>
+      </div>
+      <div className="ap-nav">
+        {sites.map((site, i) => {
+          const matchedAps = q
+            ? site.aps.filter(a =>
+                a.id.toLowerCase().includes(q) ||
+                a.ip.toLowerCase().includes(q) ||
+                a.floor.toLowerCase().includes(q) ||
+                site.name.toLowerCase().includes(q))
+            : site.aps;
+          if (q && matchedAps.length === 0) return null;
+          const expanded = q ? true : site.expanded;
+          return (
+            <div className="ap-nav-section" key={site.id}>
+              <div
+                className={"ap-nav-site" + (expanded ? "" : " collapsed")}
+                onClick={() => !q && toggle(i)}
+              >
+                <svg className="caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="m4 6 4 4 4-4" />
+                </svg>
+                <span className="site-name">{site.name}</span>
+                <span className="site-count">{matchedAps.length}</span>
+                {site.problems > 0 && <span className="site-prob">{site.problems}</span>}
+              </div>
+              <div className={"ap-nav-children" + (expanded ? "" : " hidden")}>
+                {matchedAps.map(ap => {
+                  const dotColor = ap.status === "ok"   ? "var(--ok)"
+                                 : ap.status === "warn" ? "var(--warn)"
+                                 : "var(--err)";
+                  return (
+                    <div
+                      key={ap.id}
+                      className={"ap-nav-host" + (ap.id === activeId ? " active" : "")}
+                      onClick={() => onSelect(ap)}
+                      title={`${ap.id} · ${ap.ip} · ${ap.model}`}
+                    >
+                      <span className="ap-led" style={{ background: dotColor, boxShadow: ap.status === "ok" ? `0 0 4px ${dotColor}` : "none" }} />
+                      <div className="ap-meta-col">
+                        <div className="ap-id">{ap.id}</div>
+                        <div className="ap-sub">{ap.floor} · {ap.model}</div>
+                      </div>
+                      <div className="ap-cli">
+                        <div className="n">{ap.clients}</div>
+                        <div className="u">cli</div>
+                      </div>
+                      {ap.problems > 0 && <span className="ap-prob">{ap.problems}</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 const CommandPalette = ({ onClose }) => {
   const items = [
     { cat: "Host", label: "BHS-56-Hallway", sub: "172.16.97.59" },
@@ -268,6 +306,8 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "showSourceBadges": true,
   "showFloorplan": true,
   "showSidecar": true,
+  "showApNav": true,
+  "selectedAp": "BHS-56-Hallway",
   "fontMono": "JetBrains Mono"
 }/*EDITMODE-END*/;
 
@@ -279,6 +319,7 @@ const Tweaks = ({ t, setTweak }) => (
         { value: "balanced", label: "Balanced" },
         { value: "dense", label: "Dense" }
       ]} onChange={v => setTweak("density", v)} />
+      <TweakToggle label="Show AP host navigator (left rail)" value={t.showApNav} onChange={v => setTweak("showApNav", v)} />
       <TweakToggle label="Show device sidecar (image, floor plan)" value={t.showSidecar} onChange={v => setTweak("showSidecar", v)} />
       <TweakToggle label="Show floor plan map" value={t.showFloorplan} onChange={v => setTweak("showFloorplan", v)} />
     </TweakSection>
@@ -303,6 +344,7 @@ window.Topbar = Topbar;
 window.PageHeader = PageHeader;
 window.Tabs = Tabs;
 window.DeviceSidecar = DeviceSidecar;
+window.APNavigator = APNavigator;
 window.CommandPalette = CommandPalette;
 window.Tweaks = Tweaks;
 window.TWEAK_DEFAULTS = TWEAK_DEFAULTS;

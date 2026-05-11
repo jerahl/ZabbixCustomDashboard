@@ -69,10 +69,11 @@ $asset_base = 'modules/tcs_dashboard/assets';
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
 
-<!-- Order matters: bridge first (defines the data globals), then primitives, tabs, shell, app. -->
+<!-- Order matters: bridge first (defines the data globals), then primitives, the unified sidebar, tabs, shell, app. -->
 <script type="text/babel" src="<?= $asset_base ?>/data-bridge.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/tweaks-panel.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/primitives.jsx"></script>
+<script type="text/babel" src="<?= $asset_base ?>/global-nav.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/tabs.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/shell.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/app.jsx"></script>

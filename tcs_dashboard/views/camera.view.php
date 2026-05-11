@@ -21,21 +21,11 @@ $asset_base = 'modules/tcs_dashboard/assets';
 <link rel="stylesheet" href="<?= $asset_base ?>/surveillance.css">
 
 <style>
-    html.hide-src-badges .src-badge { display: none !important; }
-    .app[data-density="dense"]    .card-b    { padding: 10px; }
-    .app[data-density="dense"]    .stat-cell { padding: 10px 12px; }
-    .app[data-density="spacious"] .card-b    { padding: 18px; }
-    .app[data-density="spacious"] .stat-cell { padding: 18px 16px; }
-    @media (max-width: 1500px) {
-        .row[style*="1.1fr 1fr 1.4fr"] { grid-template-columns: 1fr 1fr !important; }
-        .row[style*="1.1fr 1fr 1.4fr"] > .card:nth-child(3) { grid-column: 1 / -1; }
-    }
     @media (max-width: 1280px) {
         .app { grid-template-columns: 64px 1fr; }
         .sidebar .nav-label, .sidebar .brand div:not(.brand-mark),
         .sidebar .nav-item span:not(.nav-count), .sidebar-footer { display: none; }
         .sidebar .nav-item { justify-content: center; }
-        .row[style*="1fr 1fr"] { grid-template-columns: 1fr !important; }
     }
 </style>
 
@@ -45,11 +35,10 @@ $asset_base = 'modules/tcs_dashboard/assets';
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
 
-<!-- Order matters: tweaks → primitives → data → shell → page → app entry -->
-<script type="text/babel" src="<?= $asset_base ?>/tweaks-panel.jsx"></script>
+<!-- Order: primitives → nvr-data → unified sidebar → nvr-shell shim → nvr-overview helpers → nvr-camera entry -->
 <script type="text/babel" src="<?= $asset_base ?>/primitives.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/nvr-data.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/global-nav.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/nvr-shell.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/nvr-overview.jsx"></script>
-<script type="text/babel" src="<?= $asset_base ?>/nvr-app.jsx"></script>
+<script type="text/babel" src="<?= $asset_base ?>/nvr-camera.jsx"></script>

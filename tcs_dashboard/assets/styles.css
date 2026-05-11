@@ -586,3 +586,93 @@ body {
   .back-to-zabbix { padding: 8px; justify-content: center; }
   .back-to-zabbix span { display: none; }
 }
+
+/* ───────── AP / Host navigator (left rail, used by AP Detail and Servers) ───────── */
+.zbx-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 1500px) { .zbx-layout { grid-template-columns: 248px 1fr; } }
+@media (max-width: 1180px) { .zbx-layout { grid-template-columns: 1fr; } }
+
+.ap-nav-card { position: sticky; top: 12px; max-height: calc(100vh - 24px); display: flex; flex-direction: column; }
+.ap-nav-search {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-bottom: 1px solid var(--line);
+  color: var(--muted);
+}
+.ap-nav-search input {
+  flex: 1; background: transparent; border: 0; outline: none; color: var(--fg);
+  font-family: var(--sans); font-size: 12px; padding: 2px 0;
+}
+.ap-nav-search input::placeholder { color: var(--muted); }
+.ap-nav-clear {
+  cursor: pointer; color: var(--muted); font-size: 16px; line-height: 1;
+  padding: 0 4px; border-radius: 3px;
+}
+.ap-nav-clear:hover { background: var(--bg-2); color: var(--fg); }
+
+.ap-nav-summary {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 7px 12px; font-size: 11px; color: var(--muted);
+  font-family: var(--mono);
+  border-bottom: 1px solid var(--line);
+  background: rgba(255,255,255,0.015);
+}
+.ap-nav-summary b { color: var(--fg); font-weight: 600; }
+.ap-nav-summary .dot-sep { opacity: 0.5; }
+
+.ap-nav { padding: 4px 0; overflow-y: auto; flex: 1; }
+.ap-nav-section { border-bottom: 1px solid var(--line); }
+.ap-nav-section:last-child { border-bottom: 0; }
+.ap-nav-site {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 14px; font-size: 11.5px; color: var(--fg-2, var(--muted));
+  cursor: pointer; user-select: none;
+}
+.ap-nav-site:hover { background: var(--bg-2); }
+.ap-nav-site .caret {
+  width: 12px; height: 12px; flex-shrink: 0; color: var(--muted);
+  transition: transform 0.15s;
+}
+.ap-nav-site.collapsed .caret { transform: rotate(-90deg); }
+.ap-nav-site .site-name { flex: 1; font-weight: 600; color: var(--fg); font-size: 12px; }
+.ap-nav-site .site-count {
+  font-family: var(--mono); font-size: 10px; color: var(--muted);
+  padding: 1px 6px; border-radius: 8px; background: var(--bg-2);
+}
+.ap-nav-site .site-prob {
+  font-family: var(--mono); font-size: 10px;
+  background: rgba(245,179,0,0.14); color: var(--warn);
+  padding: 1px 6px; border-radius: 8px; font-weight: 600;
+}
+
+.ap-nav-children { display: flex; flex-direction: column; }
+.ap-nav-children.hidden { display: none; }
+.ap-nav-host {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 14px 7px 28px;
+  cursor: pointer; user-select: none;
+  border-left: 2px solid transparent;
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 12px;
+}
+.ap-nav-host:hover { background: var(--bg-2); }
+.ap-nav-host.active {
+  background: rgba(217,41,41,0.10);
+  border-left-color: var(--zbx);
+}
+.ap-nav-host .ap-led { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.ap-nav-host .ap-meta-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ap-nav-host .ap-id { font-family: var(--mono); font-size: 11.5px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ap-nav-host.active .ap-id { color: var(--zbx); font-weight: 600; }
+.ap-nav-host .ap-sub { font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ap-nav-host .ap-cli { flex-shrink: 0; text-align: right; font-family: var(--mono); }
+.ap-nav-host .ap-cli .n { font-size: 11px; color: var(--fg); font-weight: 500; line-height: 1.1; }
+.ap-nav-host .ap-cli .u { font-size: 9px; color: var(--muted); letter-spacing: 0.4px; text-transform: uppercase; }
+.ap-nav-host .ap-prob { font-family: var(--mono); font-size: 9.5px; color: var(--err); font-weight: 700; margin-left: 2px; }
+
+@media (max-width: 1180px) { .ap-nav-card { position: relative; max-height: 360px; } }

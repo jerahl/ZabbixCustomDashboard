@@ -1,46 +1,68 @@
 # TCS Dashboard — Zabbix Frontend Module
 
-Three custom-skinned operations pages that live inside Zabbix:
+Custom-skinned operations pages that live inside Zabbix:
 
-| Page                | URL                                              | Status                       |
-| ------------------- | ------------------------------------------------ | ---------------------------- |
-| AP Detail (Wireless)| `zabbix.php?action=tcs.dashboard.view&hostid=N`  | Wired to live Zabbix data    |
-| Surveillance NOC    | `zabbix.php?action=tcs.surveillance.view`        | Mock data (Milestone wiring) |
-| Switch Port Status  | `zabbix.php?action=tcs.switches.view`            | Mock data (SNMP wiring)      |
+| Page                  | URL                                              | Status                       |
+| --------------------- | ------------------------------------------------ | ---------------------------- |
+| Global Dashboard      | `zabbix.php?action=tcs.global.view`              | Mock data (synthetic)        |
+| AP Detail (Wireless)  | `zabbix.php?action=tcs.dashboard.view&hostid=N`  | Wired to live Zabbix data    |
+| Switch Port Status    | `zabbix.php?action=tcs.switches.view`            | Mock data (SNMP wiring)      |
+| Servers               | `zabbix.php?action=tcs.servers.view`             | Mock data (agent wiring)     |
+| Surveillance NOC      | `zabbix.php?action=tcs.surveillance.view`        | Mock data (Milestone wiring) |
+| Camera Detail         | `zabbix.php?action=tcs.camera.view&id=…`         | Mock data                    |
+| Recording Server      | `zabbix.php?action=tcs.server.view&id=…`         | Mock data                    |
 
-All three share a common sidebar that cross-links between them and back to
-the default Zabbix UI (`zabbix.php?action=dashboard.view`).
+All pages share a unified sidebar (`global-nav.jsx`) that cross-links between
+them and back to the default Zabbix UI (`zabbix.php?action=dashboard.view`).
 
 ```
 ui/modules/tcs_dashboard/
 ├── manifest.json
 ├── Module.php                         menu registration
 ├── actions/
+│   ├── ActionGlobal.php               Global Dashboard controller (mock data)
 │   ├── ActionDashboard.php            AP Detail controller (live data)
 │   ├── ActionDashboardData.php        AP Detail JSON refresh endpoint
+│   ├── ActionSwitches.php             Switches controller (mock data)
+│   ├── ActionServers.php              Servers controller (mock data)
 │   ├── ActionSurveillance.php         Surveillance controller (mock data)
-│   └── ActionSwitches.php             Switches controller (mock data)
+│   ├── ActionCamera.php               Camera Detail controller (mock data)
+│   └── ActionServer.php               Recording Server Detail controller (mock data)
 ├── views/
+│   ├── global.view.php
 │   ├── dashboard.view.php
+│   ├── switches.view.php
+│   ├── servers.view.php
 │   ├── surveillance.view.php
-│   └── switches.view.php
+│   ├── camera.view.php
+│   └── server.view.php
 └── assets/
-    ├── styles.css                     shared design tokens
+    ├── styles.css                     shared design tokens (incl. AP-nav rail)
     ├── primitives.jsx                 shared (Icon, SourceBadge, etc.)
     ├── tweaks-panel.jsx               shared (settings flyout)
+    ├── global-nav.jsx                 unified sidebar + topbar (all pages)
+    ├── nvr-shell.jsx                  back-compat shim for NVRSidebar/NVRTopbar
+    ├── global-data.jsx                Global Dashboard mock data
+    ├── global-app.jsx                 Global Dashboard entry point
+    ├── global.css                     Global Dashboard-specific styles
     ├── tabs.jsx                       AP Detail tabs
-    ├── shell.jsx                      AP Detail sidebar + topbar
+    ├── shell.jsx                      AP Detail page header + sidecar + AP nav
     ├── app.jsx                        AP Detail entry point
     ├── data-bridge.jsx                AP Detail server↔client adapter
-    ├── nvr-shell.jsx                  Surveillance/Switches shared sidebar
-    ├── nvr-data.jsx                   Surveillance mock data
-    ├── nvr-overview.jsx               Surveillance overview view
+    ├── nvr-data.jsx                   Surveillance/Server/Camera mock data
+    ├── nvr-overview.jsx               Surveillance overview widgets
     ├── nvr-app.jsx                    Surveillance entry point
+    ├── nvr-camera.jsx                 Camera Detail entry + widgets
+    ├── nvr-server.jsx                 Recording Server Detail entry + widgets
     ├── surveillance.css               Surveillance-specific styles
     ├── switches-data.jsx              Switches mock data
     ├── switches-widgets.jsx           Switches port-grid widgets
     ├── switches-app.jsx               Switches entry point
-    └── switches.css                   Switches-specific styles
+    ├── switches.css                   Switches-specific styles
+    ├── servers-data.jsx               Servers mock data
+    ├── servers-widgets.jsx            Servers fleet/sidecar widgets
+    ├── servers-app.jsx                Servers entry point
+    └── servers.css                    Servers-specific styles
 ```
 
 ## Install
@@ -71,25 +93,27 @@ ui/modules/tcs_dashboard/
 
 ## Cross-page navigation
 
-Every sidebar has the same top-level structure:
+Every page renders the unified sidebar from `global-nav.jsx`. Top-level
+structure:
 
 - **Default Zabbix Dashboard** (small pill above the brand) — exits the
   custom UI and returns to standard Zabbix.
-- **Wireless APs** — links to `tcs.dashboard.view` (AP Detail).
-- **Switches** — links to `tcs.switches.view`.
-- **Surveillance** — links to `tcs.surveillance.view` (only present in the
-  AP Detail sidebar; the Surveillance/Switches sidebars dedicate their second
-  section to the surveillance subpages: NOC Overview, Cameras, Recording
-  Servers).
+- **Monitoring**: Global Dashboard · Hosts · Wireless APs · Switches ·
+  Servers · Problems · Events.
+- **Identity (PacketFence)**: Connected Devices · NAC Policies · User
+  Sessions · Quarantine.
+- **Surveillance (Milestone)**: NOC Overview · Cameras · Recording Servers ·
+  Evidence Lock · VMS Alarms.
 
-The URLs live in one place — `window.TCS_NAV` at the top of `shell.jsx` and
-mirrored in `nvr-shell.jsx`. If you change a route or rename an action,
-update both.
+URLs live in one place — `window.TCS_NAV` at the top of `global-nav.jsx`. If
+you change a route or rename an action, update that single object.
 
-The "Wireless APs" link from the surveillance/switches pages goes to
-`tcs.dashboard.view` without a `hostid`, which lands on the empty-state
-("Select a host"). If you want it to deep-link to a specific host, change
-`window.TCS_NAV.apDetail` to include the hostid you want.
+The "Wireless APs" link from the other pages goes to `tcs.dashboard.view`
+without a `hostid`, which lands on the empty-state ("Select a host"). If you
+want it to deep-link to a specific host, change `window.TCS_NAV.apDetail` to
+include the hostid you want. Same applies to `cameraDetail` / `serverDetail`
+(both go to a generic detail view today; pass `&id=…` to land on a specific
+camera or recording server once those views are wired to real data).
 
 ## Map your real item keys
 
@@ -142,9 +166,9 @@ from a controller, you'd just emit `text/event-stream` from `doAction()`.
 
 ## Auth and permissions
 
-Both controllers require `USER_TYPE_ZABBIX_USER` or higher. If you want to
+All controllers require `USER_TYPE_ZABBIX_USER` or higher. If you want to
 restrict to a specific user group / role, change `checkPermissions()` in
-both action classes:
+each action class:
 
 ```php
 protected function checkPermissions(): bool {
@@ -196,18 +220,26 @@ Tested patterns: Zabbix **6.0 LTS**, **6.4**, **7.0**.
   problem-suppress / config-push buttons in the UI, add a write-action
   controller (e.g. `tcs.dashboard.action`) with CSRF enabled and a method
   whitelist.
-- **No real data on Surveillance / Switches yet.** Both pages render their
-  mockups (`nvr-data.jsx`, `switches-data.jsx`). The controllers are
-  scaffolded so that wiring real data is a parallel job to what's already
-  done for AP Detail:
-  - **Surveillance:** Milestone XProtect's REST API (`/api/rest/v1/`) for
-    server health and recording state, optionally Zabbix items templated
-    against the recording servers themselves. Build `surveillance-bridge.jsx`
-    parallel to `data-bridge.jsx`, mapping the API response into
-    `window.MILESTONE` / `window.SITES` / etc.
+- **No real data on Global / Switches / Servers / Surveillance yet.** Each
+  page renders its mockup (`global-data.jsx`, `switches-data.jsx`,
+  `servers-data.jsx`, `nvr-data.jsx`). The controllers are scaffolded so
+  that wiring real data is a parallel job to what's already done for AP
+  Detail:
+  - **Global:** aggregate trigger + host counts via `trigger.get` and
+    `host.get`; build `global-bridge.jsx` mapping them into
+    `window.GLOBAL_KPIS` / `window.GLOBAL_SITES` / `window.GLOBAL_TRIGGERS`.
   - **Switches:** Zabbix host.get + item.get against your switch templates.
     Port operational status comes from `ifOperStatus[<index>]` on the
     Generic SNMP template; PoE state from POWER-ETHERNET-MIB
     (`pethPsePortDetectionStatus`). Build `switches-bridge.jsx` mapping
     those into `window.SWITCH_SITES` / `window.ARC_MDF_STACK` /
     `window.makePortDetail`.
+  - **Servers:** Zabbix host.get + item.get against your server templates
+    (Linux/Windows agent, OS Linux SNMP, Dell iDRAC, etc.). Build
+    `servers-bridge.jsx` mapping them into `window.SRV_SITES` /
+    `window.SRV_HOST` / `window.SRV_ITEMS`.
+  - **Surveillance / Camera / Server detail:** Milestone XProtect's REST API
+    (`/api/rest/v1/`) for server health and recording state, optionally
+    Zabbix items templated against the recording servers themselves. Build
+    `surveillance-bridge.jsx` parallel to `data-bridge.jsx`, mapping the API
+    response into `window.MILESTONE` / `window.SITES` / etc.

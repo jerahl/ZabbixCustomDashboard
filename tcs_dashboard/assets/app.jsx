@@ -7,6 +7,28 @@ const App = () => {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [clientFilter, setClientFilter] = useState("all");
   const [t, setTweak] = useTweaks(window.TWEAK_DEFAULTS);
+  const [activeApId, setActiveApId] = useState(t.selectedAp || "BHS-56-Hallway");
+  const [apQuery, setApQuery] = useState("");
+
+  // Resolve the active AP from AP_SITES — fall back to ZBX_HOST defaults
+  const allAps = window.AP_SITES.flatMap(s => s.aps.map(a => ({ ...a, site: s.name })));
+  const activeAp = allAps.find(a => a.id === activeApId) || allAps.find(a => a.id === "BHS-56-Hallway") || allAps[0];
+  const host = {
+    ...window.ZBX_HOST,
+    host: activeAp.id,
+    visible_name: activeAp.id,
+    ip: activeAp.ip,
+    model: activeAp.model,
+    site: activeAp.site,
+    floor: activeAp.floor,
+    clients: activeAp.clients,
+    apProblems: activeAp.problems,
+    apStatus: activeAp.status,
+  };
+  const onSelectAp = (ap) => {
+    setActiveApId(ap.id);
+    setTweak("selectedAp", ap.id);
+  };
 
   // Apply tweaks
   useEffect(() => {
@@ -38,22 +60,37 @@ const App = () => {
   // density
   const densityVar = t.density === "spacious" ? 1.15 : t.density === "dense" ? 0.85 : 1;
   const showSide = t.showSidecar && (tab === "overview");
+  const showApNav = t.showApNav !== false;
+
+  const TabContent = (
+    showSide ? (
+      <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 14 }}>
+        <DeviceSidecar host={host} />
+        <div>{TabView}</div>
+      </div>
+    ) : TabView
+  );
 
   return (
     <div className="app" data-density={t.density} style={{ fontSize: `${13 * densityVar}px` }}>
-      <Sidebar tab={tab} setTab={setTab} active="wireless" />
+      <Sidebar tab={tab} setTab={setTab} />
       <div className="main">
-        <Topbar onCmdK={() => setPaletteOpen(true)} />
-        <PageHeader timeRange={timeRange} setTimeRange={setTimeRange} host={window.ZBX_HOST} />
+        <Topbar onCmdK={() => setPaletteOpen(true)} activeAp={activeAp} />
+        <PageHeader timeRange={timeRange} setTimeRange={setTimeRange} host={host} />
         <Tabs tab={tab} setTab={setTab} />
 
         <div className="body" data-screen-label={`AP Detail · ${tab}`}>
-          {showSide ? (
-            <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 14 }}>
-              <DeviceSidecar host={window.ZBX_HOST} />
-              <div>{TabView}</div>
+          {showApNav ? (
+            <div className="zbx-layout">
+              <APNavigator
+                activeId={activeApId}
+                onSelect={onSelectAp}
+                query={apQuery}
+                setQuery={setApQuery}
+              />
+              <div style={{ minWidth: 0 }}>{TabContent}</div>
             </div>
-          ) : TabView}
+          ) : TabContent}
         </div>
       </div>
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}

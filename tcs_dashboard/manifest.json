@@ -2,12 +2,17 @@
     "manifest_version": 2.0,
     "id": "tcs_dashboard",
     "name": "TCS Dashboard",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "namespace": "TcsDashboard",
     "description": "Custom-skinned operations dashboards for Zabbix (TCS / Extreme / PacketFence / Milestone XProtect).",
     "author": "TCS Networking",
     "url": "",
     "actions": {
+        "tcs.global.view": {
+            "class": "ActionGlobal",
+            "view": "global.view",
+            "layout": "layout.htmlpage"
+        },
         "tcs.dashboard.view": {
             "class": "ActionDashboard",
             "view": "dashboard.view",
@@ -26,6 +31,21 @@
         "tcs.switches.view": {
             "class": "ActionSwitches",
             "view": "switches.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.servers.view": {
+            "class": "ActionServers",
+            "view": "servers.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.camera.view": {
+            "class": "ActionCamera",
+            "view": "camera.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.server.view": {
+            "class": "ActionServer",
+            "view": "server.view",
             "layout": "layout.htmlpage"
         }
     }

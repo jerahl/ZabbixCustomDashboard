@@ -20,7 +20,7 @@ const NVRApp = () => {
 
   return (
     <div className="app" data-density={t.density} style={{ fontSize: `${13 * densityVar}px` }}>
-      <NVRSidebar active="overview" />
+      <NVRSidebar active="nvr-overview" />
       <div className="main">
         <NVRTopbar crumb={["Surveillance", "Milestone XProtect", "NOC Overview"]} />
         <div className="page-header">
