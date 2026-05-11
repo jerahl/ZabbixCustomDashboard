@@ -48,7 +48,9 @@ body {
   display: grid;
   grid-template-columns: 220px 1fr;
   column-gap: 14px;
+  transition: grid-template-columns 0.18s ease;
 }
+.app.sidebar-collapsed { grid-template-columns: 56px 1fr; }
 
 /* ───────── Sidebar ───────── */
 .sidebar {
@@ -60,7 +62,51 @@ body {
   height: 100vh;
   display: flex;
   flex-direction: column;
+  transition: width 0.18s ease;
 }
+
+/* Collapse toggle button — floats at the right edge of the sidebar */
+.sidebar-toggle {
+  position: absolute;
+  top: 10px;
+  right: -12px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  z-index: 6;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+}
+.sidebar-toggle:hover { background: var(--bg-3); color: var(--fg); border-color: var(--line-2); }
+.sidebar-toggle svg { width: 12px; height: 12px; }
+
+/* ───── Collapsed sidebar overrides ───── */
+.sidebar.collapsed { overflow: hidden; }
+.sidebar.collapsed .brand { padding: 0 14px 14px; justify-content: center; }
+.sidebar.collapsed .brand-text { display: none; }
+.sidebar.collapsed .nav-label { display: none; }
+.sidebar.collapsed .nav-section { padding: 10px 8px 4px; }
+.sidebar.collapsed .nav-item {
+  justify-content: center;
+  padding: 8px 6px;
+  gap: 0;
+}
+.sidebar.collapsed .nav-item .nav-label-text { display: none; }
+.sidebar.collapsed .nav-item .nav-count { display: none; }
+.sidebar.collapsed .nav-item.active::before { left: -8px; }
+.sidebar.collapsed .back-to-zabbix {
+  margin: 0 10px 12px;
+  padding: 8px;
+  justify-content: center;
+}
+.sidebar.collapsed .back-to-zabbix span { display: none; }
+.sidebar.collapsed .sidebar-footer { display: none; }
 .brand {
   padding: 0 18px 18px;
   display: flex;
