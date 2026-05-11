@@ -18,7 +18,22 @@ $asset_base = 'modules/tcs_dashboard/assets';
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="<?= $asset_base ?>/styles.css">
+<link rel="stylesheet" href="<?= $asset_base ?>/global.css">
 <link rel="stylesheet" href="<?= $asset_base ?>/problems.css">
+
+<style>
+    html.hide-src-badges .src-badge { display: none !important; }
+    .app[data-density="dense"]    .card-b   { padding: 10px; }
+    .app[data-density="dense"]    .sev-cell { padding: 11px 12px; }
+    .app[data-density="spacious"] .card-b   { padding: 18px; }
+    .app[data-density="spacious"] .sev-cell { padding: 22px 18px; }
+    @media (max-width: 1280px) {
+        .app { grid-template-columns: 64px 1fr; }
+        .sidebar .nav-label, .sidebar .brand div:not(.brand-mark),
+        .sidebar .nav-item span:not(.nav-count), .sidebar-footer { display: none; }
+        .sidebar .nav-item { justify-content: center; }
+    }
+</style>
 
 <div id="root"></div>
 
