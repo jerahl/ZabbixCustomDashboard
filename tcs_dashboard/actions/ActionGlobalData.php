@@ -3,7 +3,6 @@
 namespace Modules\TcsDashboard\Actions;
 
 use API;
-use CController;
 use CControllerResponseData;
 use CControllerResponseFatal;
 
@@ -19,7 +18,7 @@ use CControllerResponseFatal;
  * Everything here uses only Zabbix core APIs: host.get, hostgroup.get,
  * problem.get, event.get, proxy.get, trigger.get. No external systems.
  */
-class ActionGlobalData extends CController {
+class ActionGlobalData extends ActionDataBase {
 
     /** Host-group name prefix that marks a "site" rollup group. */
     private const SITE_GROUP_PREFIX = 'Site/';
@@ -40,10 +39,6 @@ class ActionGlobalData extends CController {
         '7d'  =>  7 * 86400
     ];
 
-    protected function init(): void {
-        $this->disableCsrfValidation();
-    }
-
     protected function checkInput(): bool {
         $ret = $this->validateInput([
             'range' => 'string'
@@ -52,10 +47,6 @@ class ActionGlobalData extends CController {
             $this->setResponse(new CControllerResponseFatal());
         }
         return $ret;
-    }
-
-    protected function checkPermissions(): bool {
-        return $this->getUserType() >= USER_TYPE_ZABBIX_USER;
     }
 
     protected function doAction(): void {

@@ -2,7 +2,6 @@
 
 namespace Modules\TcsDashboard\Actions;
 
-use CController;
 use CControllerResponseData;
 use CControllerResponseFatal;
 
@@ -16,11 +15,7 @@ use CControllerResponseFatal;
  * adapts a server snapshot into window.GLOBAL_KPIS / window.GLOBAL_SITES /
  * window.GLOBAL_TRIGGERS, parallel to data-bridge.jsx for AP Detail.
  */
-class ActionGlobal extends CController {
-
-    protected function init(): void {
-        $this->disableCsrfValidation();
-    }
+class ActionGlobal extends ActionBase {
 
     protected function checkInput(): bool {
         $fields = [];
@@ -32,10 +27,6 @@ class ActionGlobal extends CController {
         }
 
         return $ret;
-    }
-
-    protected function checkPermissions(): bool {
-        return $this->getUserType() >= USER_TYPE_ZABBIX_USER;
     }
 
     protected function doAction(): void {

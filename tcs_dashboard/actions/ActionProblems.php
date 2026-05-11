@@ -2,7 +2,6 @@
 
 namespace Modules\TcsDashboard\Actions;
 
-use CController;
 use CControllerResponseData;
 use CControllerResponseFatal;
 
@@ -13,11 +12,7 @@ use CControllerResponseFatal;
  * Events Console consumes — we boot from ActionEventsData so both pages
  * share the bridge (events-bridge.jsx → window.EV_EVENTS).
  */
-class ActionProblems extends CController {
-
-    protected function init(): void {
-        $this->disableCsrfValidation();
-    }
+class ActionProblems extends ActionBase {
 
     protected function checkInput(): bool {
         $ret = $this->validateInput([]);
@@ -25,10 +20,6 @@ class ActionProblems extends CController {
             $this->setResponse(new CControllerResponseFatal());
         }
         return $ret;
-    }
-
-    protected function checkPermissions(): bool {
-        return $this->getUserType() >= USER_TYPE_ZABBIX_USER;
     }
 
     protected function doAction(): void {

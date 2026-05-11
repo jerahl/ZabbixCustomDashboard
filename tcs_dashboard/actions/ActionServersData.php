@@ -3,7 +3,6 @@
 namespace Modules\TcsDashboard\Actions;
 
 use API;
-use CController;
 use CControllerResponseData;
 use CControllerResponseFatal;
 
@@ -19,7 +18,7 @@ use CControllerResponseFatal;
  * (case-insensitive) as part of the fleet. Site rollup uses the same
  * "Site/<name>" prefix convention as ActionGlobalData.
  */
-class ActionServersData extends CController {
+class ActionServersData extends ActionDataBase {
 
     private const SITE_GROUP_PREFIX = 'Site/';
     private const FLEET_GROUP_NEEDLE = 'Server';
@@ -46,10 +45,6 @@ class ActionServersData extends CController {
         'load1m'   => 'system.cpu.load[,avg1]'
     ];
 
-    protected function init(): void {
-        $this->disableCsrfValidation();
-    }
-
     protected function checkInput(): bool {
         $ret = $this->validateInput([
             'hostid' => 'string'
@@ -58,10 +53,6 @@ class ActionServersData extends CController {
             $this->setResponse(new CControllerResponseFatal());
         }
         return $ret;
-    }
-
-    protected function checkPermissions(): bool {
-        return $this->getUserType() >= USER_TYPE_ZABBIX_USER;
     }
 
     protected function doAction(): void {

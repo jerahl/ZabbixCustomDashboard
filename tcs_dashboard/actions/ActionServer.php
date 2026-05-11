@@ -2,7 +2,6 @@
 
 namespace Modules\TcsDashboard\Actions;
 
-use CController;
 use CControllerResponseData;
 use CControllerResponseFatal;
 
@@ -17,11 +16,7 @@ use CControllerResponseFatal;
  * iDRAC SNMP for hardware health, Windows agent for OS metrics). Mirror the
  * data-bridge pattern from AP Detail.
  */
-class ActionServer extends CController {
-
-    protected function init(): void {
-        $this->disableCsrfValidation();
-    }
+class ActionServer extends ActionBase {
 
     protected function checkInput(): bool {
         $fields = [
@@ -35,10 +30,6 @@ class ActionServer extends CController {
         }
 
         return $ret;
-    }
-
-    protected function checkPermissions(): bool {
-        return $this->getUserType() >= USER_TYPE_ZABBIX_USER;
     }
 
     protected function doAction(): void {

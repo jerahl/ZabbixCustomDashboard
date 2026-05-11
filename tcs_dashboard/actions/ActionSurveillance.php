@@ -2,7 +2,6 @@
 
 namespace Modules\TcsDashboard\Actions;
 
-use CController;
 use CControllerResponseData;
 use CControllerResponseFatal;
 
@@ -19,11 +18,7 @@ use CControllerResponseFatal;
  *   - Or pull camera-up/down state from Zabbix items templated against your
  *     XProtect recording servers, if you've SNMP-monitored them.
  */
-class ActionSurveillance extends CController {
-
-    protected function init(): void {
-        $this->disableCsrfValidation();
-    }
+class ActionSurveillance extends ActionBase {
 
     protected function checkInput(): bool {
         $fields = [
@@ -37,10 +32,6 @@ class ActionSurveillance extends CController {
         }
 
         return $ret;
-    }
-
-    protected function checkPermissions(): bool {
-        return $this->getUserType() >= USER_TYPE_ZABBIX_USER;
     }
 
     protected function doAction(): void {

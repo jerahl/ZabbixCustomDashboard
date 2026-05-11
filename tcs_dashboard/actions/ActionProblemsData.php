@@ -3,7 +3,6 @@
 namespace Modules\TcsDashboard\Actions;
 
 use API;
-use CController;
 use CControllerResponseData;
 use CControllerResponseFatal;
 
@@ -17,7 +16,7 @@ use CControllerResponseFatal;
  *
  * Returns the live snapshot consumed by problems-bridge.jsx.
  */
-class ActionProblemsData extends CController {
+class ActionProblemsData extends ActionDataBase {
 
     private const MAX_AGE = [
         '1h'  =>     3600,
@@ -32,10 +31,6 @@ class ActionProblemsData extends CController {
         3 => 'warning', 4 => 'high', 5 => 'disaster'
     ];
 
-    protected function init(): void {
-        $this->disableCsrfValidation();
-    }
-
     protected function checkInput(): bool {
         $ret = $this->validateInput([
             'severity' => 'string',
@@ -48,10 +43,6 @@ class ActionProblemsData extends CController {
             $this->setResponse(new CControllerResponseFatal());
         }
         return $ret;
-    }
-
-    protected function checkPermissions(): bool {
-        return $this->getUserType() >= USER_TYPE_ZABBIX_USER;
     }
 
     protected function doAction(): void {
