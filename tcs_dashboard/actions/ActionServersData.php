@@ -70,11 +70,11 @@ class ActionServersData extends CController {
     }
 
     public function collect(string $active_hostid = ''): array {
-        $fleet_groups = API::HostGroup()->get([
+        $fleet_groups = $this->safeGet(fn() => API::HostGroup()->get([
             'output' => ['groupid', 'name'],
             'search' => ['name' => self::FLEET_GROUP_NEEDLE],
             'searchByAny' => true
-        ]);
+        ]));
         $group_ids = array_column($fleet_groups, 'groupid');
 
         if (!$group_ids) {
@@ -86,7 +86,7 @@ class ActionServersData extends CController {
             ];
         }
 
-        $hosts = API::Host()->get([
+        $hosts = $this->safeGet(fn() => API::Host()->get([
             'output'           => ['hostid', 'host', 'name', 'status', 'maintenance_status'],
             'selectInterfaces' => ['ip', 'main', 'available'],
             'selectInventory'  => ['os', 'model', 'hardware', 'serialno_a'],
@@ -94,7 +94,7 @@ class ActionServersData extends CController {
             'groupids'         => $group_ids,
             'monitored_hosts'  => true,
             'preservekeys'     => true
-        ]);
+        ]));
 
         if (!$hosts) {
             return [
@@ -120,12 +120,12 @@ class ActionServersData extends CController {
     /* --------------------------------------------------------------------- */
 
     private function collectFleetItems(array $host_ids): array {
-        $items = API::Item()->get([
+        $items = $this->safeGet(fn() => API::Item()->get([
             'output'   => ['itemid', 'hostid', 'key_', 'lastvalue', 'value_type', 'units'],
             'hostids'  => $host_ids,
             'filter'   => ['key_' => array_values(self::FLEET_KEYS)],
             'webitems' => true
-        ]);
+        ]));
         // Index by hostid → logical name.
         $by_host = [];
         $key_to_logical = array_flip(self::FLEET_KEYS);
@@ -138,15 +138,14 @@ class ActionServersData extends CController {
     }
 
     private function collectProblems(array $host_ids): array {
-        $problems = API::Problem()->get([
+        $problems = $this->safeGet(fn() => API::Problem()->get([
             'output'      => ['eventid', 'name', 'severity', 'clock', 'acknowledged'],
             'selectHosts' => ['hostid', 'host', 'name'],
             'hostids'     => $host_ids,
-            'recent'      => true,
             'sortfield'   => ['clock'],
             'sortorder'   => 'DESC',
             'limit'       => 50
-        ]);
+        ]));
         $sev_label = [0 => 'info', 1 => 'info', 2 => 'warning', 3 => 'warning', 4 => 'high', 5 => 'disaster'];
         $out = [];
         foreach ($problems as $p) {
@@ -169,13 +168,12 @@ class ActionServersData extends CController {
         // tiny version of the problem list keyed by hostid for the row badges.
         $problem_count_by_host = [];
         $worst_sev_by_host = [];
-        $raw_problems = API::Problem()->get([
+        $raw_problems = $this->safeGet(fn() => API::Problem()->get([
             'output'      => ['severity'],
             'selectHosts' => ['hostid'],
             'hostids'     => array_keys($hosts),
-            'recent'      => true,
             'limit'       => 1000
-        ]);
+        ]));
         foreach ($raw_problems as $p) {
             foreach ($p['hosts'] ?? [] as $h) {
                 $hid = $h['hostid'];
@@ -245,18 +243,18 @@ class ActionServersData extends CController {
     }
 
     private function collectActive(string $hostid): ?array {
-        $hosts = API::Host()->get([
+        $hosts = $this->safeGet(fn() => API::Host()->get([
             'output'  => ['hostid', 'host', 'name'],
             'hostids' => [$hostid]
-        ]);
+        ]));
         if (!$hosts) return null;
 
-        $items = API::Item()->get([
+        $items = $this->safeGet(fn() => API::Item()->get([
             'output'   => ['itemid', 'key_', 'value_type', 'lastvalue'],
             'hostids'  => [$hostid],
             'filter'   => ['key_' => array_values(self::HISTORY_KEYS)],
             'webitems' => true
-        ]);
+        ]));
         $by_key = [];
         foreach ($items as $it) $by_key[$it['key_']] = $it;
 
@@ -267,7 +265,7 @@ class ActionServersData extends CController {
             $it = $by_key[$key];
             $vt = (int) $it['value_type'];
             if ($vt !== 0 && $vt !== 3) { $history[$logical] = []; continue; }
-            $rows = API::History()->get([
+            $rows = $this->safeGet(fn() => API::History()->get([
                 'output'    => 'extend',
                 'history'   => $vt,
                 'itemids'   => [$it['itemid']],
@@ -275,7 +273,7 @@ class ActionServersData extends CController {
                 'sortfield' => 'clock',
                 'sortorder' => 'ASC',
                 'limit'     => 48
-            ]);
+            ]));
             $history[$logical] = array_map(static fn($r) => (float) $r['value'], $rows);
         }
 
@@ -291,13 +289,13 @@ class ActionServersData extends CController {
     }
 
     private function collectFilesystems(string $hostid): array {
-        $items = API::Item()->get([
+        $items = $this->safeGet(fn() => API::Item()->get([
             'output'   => ['key_', 'lastvalue', 'name'],
             'hostids'  => [$hostid],
             'search'   => ['key_' => 'vfs.fs.size['],
             'startSearch' => true,
             'webitems' => true
-        ]);
+        ]));
         // Group by mount: vfs.fs.size[<mount>,total] / vfs.fs.size[<mount>,pused]
         $by_mount = [];
         foreach ($items as $it) {
@@ -323,13 +321,13 @@ class ActionServersData extends CController {
     }
 
     private function collectInterfaces(string $hostid): array {
-        $items = API::Item()->get([
+        $items = $this->safeGet(fn() => API::Item()->get([
             'output'   => ['key_', 'lastvalue', 'name'],
             'hostids'  => [$hostid],
             'search'   => ['key_' => 'net.if.'],
             'startSearch' => true,
             'webitems' => true
-        ]);
+        ]));
         $by_iface = [];
         foreach ($items as $it) {
             if (!preg_match('/^net\.if\.(in|out|speed|status)\[([^\]]+)\]$/', $it['key_'], $m)) continue;
@@ -349,6 +347,18 @@ class ActionServersData extends CController {
             ];
         }
         return $out;
+    }
+
+    /** Coerce any API::*->get() result to an array, swallowing thrown
+     *  exceptions and false returns. */
+    private function safeGet(callable $fn): array {
+        try {
+            $r = $fn();
+            return is_array($r) ? $r : [];
+        } catch (\Throwable $e) {
+            error_log('[tcs] API call failed: '.$e->getMessage());
+            return [];
+        }
     }
 
     private function numOrNull($v, float $divisor = 1.0) {

@@ -58,38 +58,40 @@ class ActionGlobalData extends CController {
      * the first paint uses the same data shape as the polled refresh.
      */
     public function collect(): array {
-        $hosts = API::Host()->get([
+        $hosts = $this->safeGet(fn() => API::Host()->get([
             'output'                => ['hostid', 'host', 'name', 'status', 'maintenance_status'],
             'selectInterfaces'      => ['available', 'main'],
             'selectGroups'          => ['groupid', 'name'],
             'selectParentTemplates' => ['name'],
             'monitored_hosts'       => true,
             'preservekeys'          => true
-        ]);
+        ]));
 
-        $proxies = API::Proxy()->get(['output' => ['proxyid', 'host']]);
+        $proxies = $this->safeGet(fn() => API::Proxy()->get(['output' => ['proxyid', 'host']]));
 
-        $problems = API::Problem()->get([
-            'output'         => ['eventid', 'objectid', 'name', 'severity', 'clock', 'acknowledged'],
-            'selectHosts'    => ['hostid', 'host', 'name'],
-            'recent'         => true,
-            'sortfield'      => ['clock'],
-            'sortorder'      => 'DESC',
-            'limit'          => 200
-        ]);
+        // Zabbix versions differ on which problem.get params are accepted
+        // (notably 'recent' was relaxed in 7.0). Drop it and rely on the
+        // default "current open problems" behaviour, which is what we want.
+        $problems = $this->safeGet(fn() => API::Problem()->get([
+            'output'      => ['eventid', 'objectid', 'name', 'severity', 'clock', 'acknowledged'],
+            'selectHosts' => ['hostid', 'host', 'name'],
+            'sortfield'   => ['clock'],
+            'sortorder'   => 'DESC',
+            'limit'       => 200
+        ]));
 
-        $events_24h = API::Event()->get([
+        // 'value' was removed from event.get in 7.0+. Filter client-side.
+        $events_24h = $this->safeGet(fn() => API::Event()->get([
             'output'    => ['eventid', 'clock', 'value'],
             'source'    => EVENT_SOURCE_TRIGGERS,
             'object'    => EVENT_OBJECT_TRIGGER,
-            'value'     => TRIGGER_VALUE_TRUE,
             'time_from' => time() - 24 * 3600,
             'sortfield' => ['clock'],
             'sortorder' => 'ASC',
             'limit'     => 10000
-        ]);
+        ]));
 
-        $recent_events = API::Event()->get([
+        $recent_events = $this->safeGet(fn() => API::Event()->get([
             'output'     => ['eventid', 'name', 'severity', 'clock', 'value'],
             'selectHosts'=> ['hostid', 'host', 'name'],
             'source'     => EVENT_SOURCE_TRIGGERS,
@@ -97,7 +99,7 @@ class ActionGlobalData extends CController {
             'sortfield'  => ['clock'],
             'sortorder'  => 'DESC',
             'limit'      => 30
-        ]);
+        ]));
 
         return [
             'totals'   => $this->buildTotals($hosts, $problems, $proxies),
@@ -108,6 +110,19 @@ class ActionGlobalData extends CController {
             'timeline' => $this->buildTimeline($events_24h),
             'ts'       => time()
         ];
+    }
+
+    /** Coerce any API::*->get() result to an array, swallowing thrown
+     *  exceptions and false returns so a single broken call doesn't 500
+     *  the whole dashboard. */
+    private function safeGet(callable $fn): array {
+        try {
+            $r = $fn();
+            return is_array($r) ? $r : [];
+        } catch (\Throwable $e) {
+            error_log('[tcs] API call failed: '.$e->getMessage());
+            return [];
+        }
     }
 
     /* --------------------------------------------------------------------- */
