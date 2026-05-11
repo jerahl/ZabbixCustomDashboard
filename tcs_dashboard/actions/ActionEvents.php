@@ -2,16 +2,11 @@
 
 namespace Modules\TcsDashboard\Actions;
 
-use CController;
 use CControllerResponseData;
 use CControllerResponseFatal;
 
 /** GET zabbix.php?action=tcs.events.view */
-class ActionEvents extends CController {
-
-    protected function init(): void {
-        $this->disableCsrfValidation();
-    }
+class ActionEvents extends ActionBase {
 
     protected function checkInput(): bool {
         $ret = $this->validateInput([]);
@@ -19,10 +14,6 @@ class ActionEvents extends CController {
             $this->setResponse(new CControllerResponseFatal());
         }
         return $ret;
-    }
-
-    protected function checkPermissions(): bool {
-        return $this->getUserType() >= USER_TYPE_ZABBIX_USER;
     }
 
     protected function doAction(): void {

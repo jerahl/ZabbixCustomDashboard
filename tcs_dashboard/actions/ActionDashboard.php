@@ -3,7 +3,6 @@
 namespace Modules\TcsDashboard\Actions;
 
 use API;
-use CController;
 use CControllerResponseData;
 use CControllerResponseFatal;
 
@@ -15,12 +14,7 @@ use CControllerResponseFatal;
  * the React app can render immediately on first paint without a second
  * round-trip. Live updates come from tcs.dashboard.data (JSON).
  */
-class ActionDashboard extends CController {
-
-    protected function init(): void {
-        // GET-only; no CSRF needed for an idempotent view.
-        $this->disableCsrfValidation();
-    }
+class ActionDashboard extends ActionBase {
 
     protected function checkInput(): bool {
         $fields = [
@@ -34,12 +28,6 @@ class ActionDashboard extends CController {
         }
 
         return $ret;
-    }
-
-    protected function checkPermissions(): bool {
-        // Anyone who can log into the Zabbix UI can see the dashboard.
-        // Tighten this if you want to restrict to a user group / role.
-        return $this->getUserType() >= USER_TYPE_ZABBIX_USER;
     }
 
     protected function doAction(): void {

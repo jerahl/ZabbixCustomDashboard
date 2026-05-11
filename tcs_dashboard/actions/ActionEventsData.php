@@ -3,7 +3,6 @@
 namespace Modules\TcsDashboard\Actions;
 
 use API;
-use CController;
 use CControllerResponseData;
 use CControllerResponseFatal;
 
@@ -14,7 +13,7 @@ use CControllerResponseFatal;
  * client-side per the Events Console design (search / sev / status /
  * source / site / group / tags) so this endpoint is range-only.
  */
-class ActionEventsData extends CController {
+class ActionEventsData extends ActionDataBase {
 
     private const RANGES = [
         '1h'  =>     3600,
@@ -30,20 +29,12 @@ class ActionEventsData extends CController {
 
     private const SITE_GROUP_PREFIX = 'Site/';
 
-    protected function init(): void {
-        $this->disableCsrfValidation();
-    }
-
     protected function checkInput(): bool {
         $ret = $this->validateInput(['range' => 'string']);
         if (!$ret) {
             $this->setResponse(new CControllerResponseFatal());
         }
         return $ret;
-    }
-
-    protected function checkPermissions(): bool {
-        return $this->getUserType() >= USER_TYPE_ZABBIX_USER;
     }
 
     protected function doAction(): void {
