@@ -24,7 +24,16 @@ const ServersApp = () => {
   }, [t.accent, t.showSourceBadges]);
 
   const allHosts = window.SERVER_SITES.flatMap(s => s.servers.map(sv => ({ ...sv, site: s.name })));
-  const host = allHosts.find(h => h.id === activeId) || allHosts.find(h => h.id === "arc-sql01") || allHosts[0];
+  const PLACEHOLDER_HOST = {
+    id: "—", hostid: "", fqdn: "No server selected", ip: "", role: "—", os: "—",
+    model: "—", site: "—", cores: 0, ram: 0, diskTb: 0,
+    cpu: 0, mem: 0, diskPct: 0, netMbps: 0, uptimeDays: 0,
+    status: "ok", problems: 0, kind: "phys"
+  };
+  const host = allHosts.find(h => h.id === activeId)
+    || allHosts.find(h => h.selected)
+    || allHosts[0]
+    || PLACEHOLDER_HOST;
 
   const onSelect = (sv) => {
     setActiveId(sv.id);
