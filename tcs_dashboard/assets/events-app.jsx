@@ -584,8 +584,14 @@ const useEventsTick = () => {
 const EventsAppDesigned = () => {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const tick = useEventsTick();
-  const [filters, setFilters] = React.useState({
-    search: "", sev: [], status: [], source: [], site: [], group: [], tags: []
+  const [filters, setFilters] = React.useState(() => {
+    const init = { search: "", sev: [], status: [], source: [], site: [], group: [], tags: [] };
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const site = params.get("site");
+      if (site) init.site = [site];
+    } catch (e) {}
+    return init;
   });
   const [range, setRangeState] = React.useState((window.EV_FILTERS && window.EV_FILTERS.range) || "24h");
   const [activeTile, setActiveTile] = React.useState(null);

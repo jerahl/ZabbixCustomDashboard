@@ -199,7 +199,7 @@ const SitesHeatmap = ({ filter, setFilter }) => {
         <div className="sites-grid">
           {sites.map(s => {
             const c = sevColors[s.sev] || sevColors.ok;
-            const href = (window.TCS_NAV ? window.TCS_NAV.problems : "zabbix.php?action=tcs.problems.view")
+            const href = (window.TCS_NAV ? window.TCS_NAV.events : "zabbix.php?action=tcs.events.view")
               + "&site=" + encodeURIComponent(s.name);
             return (
               <a
@@ -207,7 +207,7 @@ const SitesHeatmap = ({ filter, setFilter }) => {
                 href={href}
                 className={"site-tile" + (s.kind === "outage" ? " pulse" : "")}
                 style={{ background: c.bg, borderColor: c.bd, textDecoration: "none" }}
-                title={`${s.name} · ${s.problems} problems · SLA ${s.sla}% — click to view problems`}
+                title={`${s.name} · ${s.problems} problems · SLA ${s.sla}% — click to view events`}
               >
                 <div className="site-tile-h">
                   {s.problems > 0 ? (
