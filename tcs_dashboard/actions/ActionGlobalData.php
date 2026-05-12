@@ -41,7 +41,8 @@ class ActionGlobalData extends ActionDataBase {
 
     protected function checkInput(): bool {
         $ret = $this->validateInput([
-            'range' => 'string'
+            'range' => 'string',
+            'debug' => 'string'
         ]);
         if (!$ret) {
             $this->setResponse(new CControllerResponseFatal());
@@ -51,8 +52,14 @@ class ActionGlobalData extends ActionDataBase {
 
     protected function doAction(): void {
         $payload = $this->collect($this->getInput('range', '24h'));
+        if ($this->getInput('debug', '') !== '') {
+            $payload['_debug'] = $this->lastDebug;
+        }
         $this->setResponse(new CControllerResponseData(['main_block' => json_encode($payload)]));
     }
+
+    /** Populated by collect() so doAction() can attach it when ?debug=1. */
+    private array $lastDebug = [];
 
     /**
      * Build the full payload. Called by ActionGlobal::doAction() too, so
@@ -239,6 +246,7 @@ class ActionGlobalData extends ActionDataBase {
         // Count each problem once per site it touches. A trigger whose
         // expression spans N hosts in the same site must not inflate that
         // site's tile by N.
+        $debug_unassigned = [];
         foreach ($problems as $p) {
             $sev = (int) $p['severity'];
             // Health map only counts warning+ — info noise (sev 0/1) was
@@ -253,7 +261,30 @@ class ActionGlobalData extends ActionDataBase {
                 $sites[$sid]['problems']++;
                 if ($sev > $sites[$sid]['_sev']) $sites[$sid]['_sev'] = $sev;
             }
+            if (isset($touched['unassigned'])) {
+                $hostnames = [];
+                foreach ($p['hosts'] ?? [] as $h) {
+                    if (($host_to_site[(string) $h['hostid']] ?? null) === 'unassigned') {
+                        $hostnames[] = $h['name'] ?? ($h['host'] ?? $h['hostid']);
+                    }
+                }
+                $debug_unassigned[] = [
+                    'eventid'  => $p['eventid'],
+                    'triggerid'=> $p['objectid'],
+                    'severity' => $sev,
+                    'name'     => $p['name'],
+                    'clock'    => (int) $p['clock'],
+                    'age_h'    => round((time() - (int) $p['clock']) / 3600, 1),
+                    'hosts'    => $hostnames
+                ];
+            }
         }
+        $this->lastDebug = [
+            'unassigned_warning_plus' => [
+                'distinct_problems' => count($debug_unassigned),
+                'rows'              => $debug_unassigned
+            ]
+        ];
 
         $out = [];
         foreach ($sites as $s) {
