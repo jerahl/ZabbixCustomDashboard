@@ -44,14 +44,26 @@ class ActionEventsData extends ActionDataBase {
 
     public function collect(array $filters = []): array {
         $range = $filters['range'] ?? '24h';
-        $window_secs = self::RANGES[$range] ?? self::RANGES['24h'];
         $now = time();
+
+        // "open" — every currently-firing, unsuppressed problem regardless of
+        // age. Sourced from API::Problem so the dashboard's health-map count
+        // and the events console can finally agree on the same denominator.
+        if ($range === 'open') {
+            $payload = $this->collectOpen($now);
+            $payload['range'] = $range;
+            $payload['ts']    = $now;
+            return $payload;
+        }
+
+        $window_secs = self::RANGES[$range] ?? self::RANGES['24h'];
 
         $raw = $this->safeGet(fn() => API::Event()->get([
             'output'      => ['eventid', 'objectid', 'name', 'severity', 'clock', 'value', 'acknowledged', 'r_eventid'],
             'source'      => EVENT_SOURCE_TRIGGERS,
             'object'      => EVENT_OBJECT_TRIGGER,
             'time_from'   => $now - $window_secs,
+            'suppressed'  => false,
             'selectTags'  => ['tag', 'value'],
             'sortfield'   => ['eventid'],
             'sortorder'   => 'DESC',
@@ -150,6 +162,115 @@ class ActionEventsData extends ActionDataBase {
             'range'      => $range,
             'ts'         => $now
         ];
+    }
+
+    /**
+     * "All open" path: walks API::Problem so we don't drop problems older
+     * than the largest event-window range. Only firing rows are emitted —
+     * resolution counterparts have no meaning here. MTTR/MTTA are blanked
+     * because the unresolved set has no duration.
+     */
+    private function collectOpen(int $now): array {
+        $problems = $this->safeGet(fn() => API::Problem()->get([
+            'output'     => ['eventid', 'objectid', 'name', 'severity', 'clock', 'acknowledged', 'r_eventid'],
+            'source'     => EVENT_SOURCE_TRIGGERS,
+            'object'     => EVENT_OBJECT_TRIGGER,
+            'recent'     => false,
+            'suppressed' => false,
+            'selectTags' => ['tag', 'value'],
+            'sortfield'  => ['eventid'],
+            'sortorder'  => 'DESC',
+            'limit'      => 1000
+        ]));
+        $problems = array_values(array_filter(
+            $problems,
+            fn($p) => empty($p['r_eventid']) || (int) $p['r_eventid'] === 0
+        ));
+
+        $trigger_ids   = array_unique(array_column($problems, 'objectid'));
+        $trigger_hosts = $this->resolveTriggerHosts($trigger_ids);
+
+        $rows = [];
+        foreach ($problems as $p) {
+            $sev_int = (int) $p['severity'];
+            $sev = self::SEV_LABEL[$sev_int] ?? 'info';
+            $hosts = $trigger_hosts[$p['objectid']] ?? [];
+            $h     = $hosts[0] ?? [];
+            $host_label = $h['name'] ?? ($h['host'] ?? '—');
+            $groups_all = array_map(fn($g) => $g['name'], $h['hostgroups'] ?? []);
+            [$site, $group] = $this->splitGroups($groups_all);
+            $ack    = (int) $p['acknowledged'] === 1;
+            $clock  = (int) $p['clock'];
+
+            $tags = [];
+            foreach ($p['tags'] ?? [] as $t) {
+                $val = $t['value'] ?? '';
+                $tags[] = $val === '' ? $t['tag'] : ($t['tag'].':'.$val);
+            }
+
+            $rows[] = [
+                'id'       => $p['eventid'],
+                'sev'      => $sev,
+                'rawSev'   => $sev,
+                'status'   => $ack ? 'ack' : 'open',
+                'ts'       => date('H:i', $clock),
+                'tsFull'   => date('Y-m-d H:i:s', $clock),
+                'clock'    => $clock,
+                'age'      => $this->fmtAge(max(0, $now - $clock)),
+                'source'   => 'zbx',
+                'host'     => $host_label,
+                'hostid'   => $h['hostid'] ?? '',
+                'site'     => $site,
+                'group'    => $group,
+                'trigger'  => $p['name'],
+                'tags'     => $tags,
+                'owner'    => '',
+                'count'    => 1,
+                'duration' => $this->fmtAge(max(0, $now - $clock))
+            ];
+        }
+
+        return [
+            'events'     => $rows,
+            // Histogram + saved-view counts still operate on these rows. The
+            // timeline buckets across the oldest-to-newest span so spikes are
+            // visible at any age.
+            'timeline'   => $this->buildOpenTimeline($rows, $now),
+            'sites'      => $this->uniqueSorted(array_column($rows, 'site')),
+            'hostgroups' => $this->uniqueSorted(array_column($rows, 'group')),
+            'tags'       => $this->uniqueSorted(array_merge(...array_map(fn($r) => $r['tags'], $rows ?: [[]]))),
+            'savedViews' => $this->savedViews($rows),
+            'metrics'    => [
+                'open'    => count(array_filter($rows, fn($r) => $r['status'] === 'open')),
+                'ack'     => count(array_filter($rows, fn($r) => $r['status'] === 'ack')),
+                'mttaStr' => '—',
+                'mttrStr' => '—',
+                'mttrSec' => 0
+            ]
+        ];
+    }
+
+    /** Histogram for the "open" view: 24 buckets spanning oldest→now. */
+    private function buildOpenTimeline(array $rows, int $now): array {
+        $buckets = [];
+        for ($i = 0; $i < 24; $i++) $buckets[$i] = [0, 0, 0, 0];
+        if (!$rows) return $buckets;
+        $oldest = min(array_column($rows, 'clock'));
+        $span   = max(1, $now - $oldest);
+        $bucket_secs = max(1, intdiv($span, 24));
+        foreach ($rows as $r) {
+            $b = intdiv($r['clock'] - $oldest, $bucket_secs);
+            if ($b < 0)  $b = 0;
+            if ($b > 23) $b = 23;
+            $idx = match ($r['rawSev']) {
+                'disaster' => 0,
+                'high'     => 1,
+                'warning'  => 2,
+                default    => 3
+            };
+            $buckets[$b][$idx]++;
+        }
+        return array_values($buckets);
     }
 
     /** 24 buckets, each is [disaster, high, warning, info] counts. */

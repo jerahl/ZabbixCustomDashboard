@@ -41,7 +41,8 @@ class ActionGlobalData extends ActionDataBase {
 
     protected function checkInput(): bool {
         $ret = $this->validateInput([
-            'range' => 'string'
+            'range' => 'string',
+            'debug' => 'string'
         ]);
         if (!$ret) {
             $this->setResponse(new CControllerResponseFatal());
@@ -51,8 +52,14 @@ class ActionGlobalData extends ActionDataBase {
 
     protected function doAction(): void {
         $payload = $this->collect($this->getInput('range', '24h'));
+        if ($this->getInput('debug', '') !== '') {
+            $payload['_debug'] = $this->lastDebug;
+        }
         $this->setResponse(new CControllerResponseData(['main_block' => json_encode($payload)]));
     }
+
+    /** Populated by collect() so doAction() can attach it when ?debug=1. */
+    private array $lastDebug = [];
 
     /**
      * Build the full payload. Called by ActionGlobal::doAction() too, so
@@ -74,13 +81,16 @@ class ActionGlobalData extends ActionDataBase {
 
         // Zabbix 7.2 removed selectHosts from problem.get / event.get. We
         // pull objectid (triggerid) here and resolve the trigger→hosts map
-        // in one trigger.get call below.
+        // in one trigger.get call below. suppressed=false drops problems
+        // currently silenced by a maintenance window so they don't inflate
+        // the health-map tiles.
         $problems = $this->safeGet(fn() => API::Problem()->get([
-            'output'    => ['eventid', 'objectid', 'name', 'severity', 'clock', 'acknowledged', 'r_eventid'],
-            'recent'    => false,
-            'sortfield' => ['eventid'],
-            'sortorder' => 'DESC',
-            'limit'     => 200
+            'output'     => ['eventid', 'objectid', 'name', 'severity', 'clock', 'acknowledged', 'r_eventid'],
+            'recent'     => false,
+            'suppressed' => false,
+            'sortfield'  => ['eventid'],
+            'sortorder'  => 'DESC',
+            'limit'      => 200
         ]));
         // Strip resolved rows so totals / sites / domains never double-count
         // recently-recovered problems as still open.
@@ -206,25 +216,9 @@ class ActionGlobalData extends ActionDataBase {
     }
 
     private function buildSites(array $hosts, array $problems): array {
-        // Index problems per host for fast site rollup.
-        $problems_by_host = [];
-        $worst_sev_by_host = [];
-        foreach ($problems as $p) {
-            $sev = (int) $p['severity'];
-            // Health map only counts warning+ — info noise (sev 0/1) was
-            // dwarfing real signal on big unassigned buckets.
-            if ($sev < 2) continue;
-            foreach ($p['hosts'] ?? [] as $h) {
-                $hid = $h['hostid'];
-                $problems_by_host[$hid] = ($problems_by_host[$hid] ?? 0) + 1;
-                if ($sev > ($worst_sev_by_host[$hid] ?? -1)) {
-                    $worst_sev_by_host[$hid] = $sev;
-                }
-            }
-        }
-
         // Bucket hosts by site group. Hosts in zero site-prefix groups go
         // to "Unassigned".
+        $host_to_site = [];
         $sites = [];
         foreach ($hosts as $h) {
             $site_group = null;
@@ -249,10 +243,54 @@ class ActionGlobalData extends ActionDataBase {
                 ];
             }
             $sites[$id]['hosts']++;
-            $sites[$id]['problems'] += $problems_by_host[$h['hostid']] ?? 0;
-            $hsev = $worst_sev_by_host[$h['hostid']] ?? -1;
-            if ($hsev > $sites[$id]['_sev']) $sites[$id]['_sev'] = $hsev;
+            $host_to_site[(string) $h['hostid']] = $id;
         }
+
+        // Count each problem once per site it touches. A trigger whose
+        // expression spans N hosts in the same site must not inflate that
+        // site's tile by N.
+        $debug_by_site = [];
+        foreach ($problems as $p) {
+            $sev = (int) $p['severity'];
+            // Health map only counts warning+ — info noise (sev 0/1) was
+            // dwarfing real signal on big unassigned buckets.
+            if ($sev < 2) continue;
+            $touched = [];
+            foreach ($p['hosts'] ?? [] as $h) {
+                $sid = $host_to_site[(string) $h['hostid']] ?? null;
+                if ($sid !== null) $touched[$sid] = true;
+            }
+            foreach (array_keys($touched) as $sid) {
+                $sites[$sid]['problems']++;
+                if ($sev > $sites[$sid]['_sev']) $sites[$sid]['_sev'] = $sev;
+                $hostnames = [];
+                foreach ($p['hosts'] ?? [] as $h) {
+                    if (($host_to_site[(string) $h['hostid']] ?? null) === $sid) {
+                        $hostnames[] = $h['name'] ?? ($h['host'] ?? $h['hostid']);
+                    }
+                }
+                $debug_by_site[$sid][] = [
+                    'eventid'       => $p['eventid'],
+                    'triggerid'     => $p['objectid'],
+                    'severity'      => $sev,
+                    'name'          => $p['name'],
+                    'r_eventid'     => $p['r_eventid'] ?? null,
+                    'acknowledged'  => $p['acknowledged'] ?? null,
+                    'clock'         => (int) $p['clock'],
+                    'age_h'         => round((time() - (int) $p['clock']) / 3600, 1),
+                    'hosts'         => $hostnames
+                ];
+            }
+        }
+        $this->lastDebug = [
+            'problem_get_args' => [
+                'recent'     => false,
+                'suppressed' => false,
+                'limit'      => 200
+            ],
+            'problem_get_total_rows' => count($problems),
+            'warning_plus_by_site'   => $debug_by_site
+        ];
 
         $out = [];
         foreach ($sites as $s) {

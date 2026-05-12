@@ -199,7 +199,7 @@ const FilterDrop = ({ label, options, selected, onChange, searchable = false, fo
 };
 
 // ───────── Time range dropdown ─────────
-const RANGE_LABELS = { "1h": "Last 1h", "6h": "Last 6h", "24h": "Last 24h", "7d": "Last 7d" };
+const RANGE_LABELS = { "1h": "Last 1h", "6h": "Last 6h", "24h": "Last 24h", "7d": "Last 7d", "open": "All open" };
 const TimeRangeDrop = ({ value, onChange }) => {
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef();
@@ -584,10 +584,22 @@ const useEventsTick = () => {
 const EventsAppDesigned = () => {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const tick = useEventsTick();
-  const [filters, setFilters] = React.useState({
-    search: "", sev: [], status: [], source: [], site: [], group: [], tags: []
+  const [filters, setFilters] = React.useState(() => {
+    const init = { search: "", sev: [], status: [], source: [], site: [], group: [], tags: [] };
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const site = params.get("site");
+      if (site) init.site = [site];
+    } catch (e) {}
+    return init;
   });
-  const [range, setRangeState] = React.useState((window.EV_FILTERS && window.EV_FILTERS.range) || "24h");
+  const [range, setRangeState] = React.useState(() => {
+    try {
+      const r = new URLSearchParams(window.location.search).get("range");
+      if (r && RANGE_LABELS[r]) return r;
+    } catch (e) {}
+    return (window.EV_FILTERS && window.EV_FILTERS.range) || "24h";
+  });
   const [activeTile, setActiveTile] = React.useState(null);
   const [activeView, setActiveView] = React.useState(null);
   const [selected, setSelected] = React.useState(new Set());
@@ -603,6 +615,17 @@ const EventsAppDesigned = () => {
     const onData = () => setRefreshing(false);
     window.addEventListener("tcs:events-data", onData);
     return () => window.removeEventListener("tcs:events-data", onData);
+  }, []);
+
+  // Boot payload is rendered server-side with the default 24h range. If the
+  // URL pinned us to a different range (e.g. tile click → ?range=open), kick
+  // a refetch immediately so the visible data matches the dropdown label.
+  React.useEffect(() => {
+    const bootRange = (window.EV_FILTERS && window.EV_FILTERS.range) || "24h";
+    if (range !== bootRange && typeof window.tcsEventsFetch === "function") {
+      setRefreshing(true);
+      window.tcsEventsFetch({ range });
+    }
   }, []);
 
   const setFilter = (k, v) => setFilters(f => ({ ...f, [k]: v }));
