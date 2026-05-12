@@ -81,13 +81,16 @@ class ActionGlobalData extends ActionDataBase {
 
         // Zabbix 7.2 removed selectHosts from problem.get / event.get. We
         // pull objectid (triggerid) here and resolve the trigger→hosts map
-        // in one trigger.get call below.
+        // in one trigger.get call below. suppressed=false drops problems
+        // currently silenced by a maintenance window so they don't inflate
+        // the health-map tiles.
         $problems = $this->safeGet(fn() => API::Problem()->get([
-            'output'    => ['eventid', 'objectid', 'name', 'severity', 'clock', 'acknowledged', 'r_eventid'],
-            'recent'    => false,
-            'sortfield' => ['eventid'],
-            'sortorder' => 'DESC',
-            'limit'     => 200
+            'output'     => ['eventid', 'objectid', 'name', 'severity', 'clock', 'acknowledged', 'r_eventid'],
+            'recent'     => false,
+            'suppressed' => false,
+            'sortfield'  => ['eventid'],
+            'sortorder'  => 'DESC',
+            'limit'      => 200
         ]));
         // Strip resolved rows so totals / sites / domains never double-count
         // recently-recovered problems as still open.

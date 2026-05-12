@@ -52,6 +52,7 @@ class ActionEventsData extends ActionDataBase {
             'source'      => EVENT_SOURCE_TRIGGERS,
             'object'      => EVENT_OBJECT_TRIGGER,
             'time_from'   => $now - $window_secs,
+            'suppressed'  => false,
             'selectTags'  => ['tag', 'value'],
             'sortfield'   => ['eventid'],
             'sortorder'   => 'DESC',
