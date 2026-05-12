@@ -632,7 +632,12 @@ const ProblemsApp = () => {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const tick = useEventsTick();
   const [sevFilter, setSevFilter] = React.useState([]);
-  const [search, setSearch] = React.useState("");
+  const [search, setSearch] = React.useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("site") || params.get("search") || "";
+    } catch (e) { return ""; }
+  });
   const [focused, setFocused] = React.useState(null);
   const [activeSev, setActiveSev] = React.useState(null);
   const [refreshing, setRefreshing] = React.useState(false);

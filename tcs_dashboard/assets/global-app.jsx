@@ -199,12 +199,15 @@ const SitesHeatmap = ({ filter, setFilter }) => {
         <div className="sites-grid">
           {sites.map(s => {
             const c = sevColors[s.sev] || sevColors.ok;
+            const href = (window.TCS_NAV ? window.TCS_NAV.problems : "zabbix.php?action=tcs.problems.view")
+              + "&site=" + encodeURIComponent(s.name);
             return (
-              <div
+              <a
                 key={s.id}
+                href={href}
                 className={"site-tile" + (s.kind === "outage" ? " pulse" : "")}
-                style={{ background: c.bg, borderColor: c.bd }}
-                title={`${s.name} · ${s.problems} problems · SLA ${s.sla}%`}
+                style={{ background: c.bg, borderColor: c.bd, textDecoration: "none" }}
+                title={`${s.name} · ${s.problems} problems · SLA ${s.sla}% — click to view problems`}
               >
                 <div className="site-tile-h">
                   <span className="site-tile-id" style={{ color: c.fg }}>{s.id}</span>
@@ -219,7 +222,7 @@ const SitesHeatmap = ({ filter, setFilter }) => {
                   <span>{s.hosts} hosts</span>
                   <span className="mono">{s.sla.toFixed(2)}%</span>
                 </div>
-              </div>
+              </a>
             );
           })}
         </div>
