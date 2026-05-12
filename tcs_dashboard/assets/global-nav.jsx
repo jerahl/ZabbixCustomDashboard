@@ -18,19 +18,38 @@ window.TCS_NAV = window.TCS_NAV || {
   apDetail:      "zabbix.php?action=tcs.dashboard.view",
   switches:      "zabbix.php?action=tcs.switches.view",
   servers:       "zabbix.php?action=tcs.servers.view",
+  problems:      "zabbix.php?action=tcs.problems.view",
+  events:        "zabbix.php?action=tcs.events.view",
   surveillance:  "zabbix.php?action=tcs.surveillance.view",
   cameraDetail:  "zabbix.php?action=tcs.camera.view",
   serverDetail:  "zabbix.php?action=tcs.server.view"
 };
 
+const TCS_SIDEBAR_STORAGE_KEY = "tcs.sidebar.collapsed";
+
 const GlobalSidebar = ({ active }) => {
   const NAV = window.TCS_NAV;
+  const [collapsed, setCollapsed] = React.useState(() => {
+    try { return window.localStorage.getItem(TCS_SIDEBAR_STORAGE_KEY) === "1"; }
+    catch (e) { return false; }
+  });
+
+  React.useEffect(() => {
+    const app = document.querySelector(".app");
+    if (app) app.classList.toggle("sidebar-collapsed", collapsed);
+    try { window.localStorage.setItem(TCS_SIDEBAR_STORAGE_KEY, collapsed ? "1" : "0"); }
+    catch (e) { /* storage unavailable — toggle is still in-memory */ }
+  }, [collapsed]);
+
+  const toggle = () => setCollapsed(c => !c);
+
   const item = (key, href, icon, label, count, countClass) => (
     <a
       className={"nav-item" + (active === key ? " active" : "")}
       href={href}
+      title={collapsed ? label : undefined}
     >
-      <Icon name={icon} /> {label}
+      <Icon name={icon} /> <span className="nav-label-text">{label}</span>
       {count !== undefined && (
         <span className={"nav-count" + (countClass ? " " + countClass : "")}>{count}</span>
       )}
@@ -38,14 +57,25 @@ const GlobalSidebar = ({ active }) => {
   );
 
   return (
-    <aside className="sidebar">
+    <aside className={"sidebar" + (collapsed ? " collapsed" : "")}>
+      <button
+        type="button"
+        className="sidebar-toggle"
+        onClick={toggle}
+        title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        aria-expanded={!collapsed}
+      >
+        <Icon name={collapsed ? "sidebar-expand" : "sidebar-collapse"} />
+      </button>
+
       <a className="back-to-zabbix" href={NAV.zabbixDefault} title="Back to default Zabbix UI">
         <Icon name="back" /> <span>Default Zabbix Dashboard</span>
       </a>
 
       <div className="brand">
         <div className="brand-mark">Z·P</div>
-        <div>
+        <div className="brand-text">
           <div className="brand-name">Zabbix · TCS</div>
           <div className="brand-sub">Network operations</div>
         </div>
@@ -58,8 +88,8 @@ const GlobalSidebar = ({ active }) => {
         {item("wireless",    NAV.apDetail,      "wifi",     "Wireless APs", "1,184")}
         {item("switches",    NAV.switches,      "ethernet", "Switches",     "312")}
         {item("zbx-servers", NAV.servers,       "ap",       "Servers",      "17")}
-        {item("problems",    NAV.global,        "alert",    "Problems",     "47", "warn")}
-        {item("events",      NAV.global,        "events",   "Events")}
+        {item("problems",    NAV.problems,      "alert",    "Problems")}
+        {item("events",      NAV.events,        "events",   "Events Console")}
       </div>
 
       <div className="nav-section">
@@ -81,22 +111,22 @@ const GlobalSidebar = ({ active }) => {
 
       <div className="nav-section">
         <div className="nav-label">Sites</div>
-        <a className="nav-item">Bryant High School</a>
-        <a className="nav-item muted">Central High School</a>
-        <a className="nav-item muted">Northridge High School</a>
-        <a className="nav-item muted">+ 23 more sites</a>
+        <a className="nav-item"><span className="nav-label-text">Bryant High School</span></a>
+        <a className="nav-item muted"><span className="nav-label-text">Central High School</span></a>
+        <a className="nav-item muted"><span className="nav-label-text">Northridge High School</span></a>
+        <a className="nav-item muted"><span className="nav-label-text">+ 23 more sites</span></a>
       </div>
 
       <div className="sidebar-footer">
-        <div className="row"><span>Zabbix Server</span><span className="ok">● 7.0.4</span></div>
-        <div className="row"><span>PacketFence API</span><span className="ok">● v12.3</span></div>
-        <div className="row"><span>XProtect Mgmt</span><span className="ok">● 24.2 R2</span></div>
+        <div className="sf-row"><span className="sf-k">Zabbix Server</span><span className="sf-v ok">● 7.0.4</span></div>
+        <div className="sf-row"><span className="sf-k">PacketFence API</span><span className="sf-v ok">● v12.3</span></div>
+        <div className="sf-row"><span className="sf-k">XProtect Mgmt</span><span className="sf-v ok">● 24.2 R2</span></div>
       </div>
     </aside>
   );
 };
 
-const GlobalTopbar = ({ crumb, search = "Find host, MAC, user, IP…" }) => (
+const GlobalTopbar = ({ crumb, search = "Find host, MAC, user, IP…", onRefresh, refreshing }) => (
   <div className="topbar">
     <div className="icon-btn"><Icon name="back" /></div>
     <div className="crumb">
@@ -113,7 +143,17 @@ const GlobalTopbar = ({ crumb, search = "Find host, MAC, user, IP…" }) => (
       <input placeholder={search} readOnly />
       <kbd>⌘K</kbd>
     </div>
-    <div className="icon-btn" title="Refresh"><Icon name="refresh" /></div>
+    <div
+      className="icon-btn"
+      title={refreshing ? "Refreshing…" : "Refresh"}
+      onClick={onRefresh}
+      style={{
+        cursor: onRefresh ? "pointer" : "default",
+        opacity: refreshing ? 0.5 : 1
+      }}
+    >
+      <Icon name="refresh" />
+    </div>
     <div className="icon-btn" title="More"><Icon name="more" /></div>
   </div>
 );

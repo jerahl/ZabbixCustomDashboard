@@ -2,7 +2,6 @@
 
 namespace Modules\TcsDashboard\Actions;
 
-use CController;
 use CControllerResponseData;
 use CControllerResponseFatal;
 
@@ -20,11 +19,7 @@ use CControllerResponseFatal;
  *   - Build a bridge similar to data-bridge.jsx that adapts the server payload
  *     into window.SWITCH_SITES / window.ARC_MDF_STACK / window.makePortDetail.
  */
-class ActionSwitches extends CController {
-
-    protected function init(): void {
-        $this->disableCsrfValidation();
-    }
+class ActionSwitches extends ActionBase {
 
     protected function checkInput(): bool {
         $fields = [
@@ -38,10 +33,6 @@ class ActionSwitches extends CController {
         }
 
         return $ret;
-    }
-
-    protected function checkPermissions(): bool {
-        return $this->getUserType() >= USER_TYPE_ZABBIX_USER;
     }
 
     protected function doAction(): void {

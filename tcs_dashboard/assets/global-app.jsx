@@ -3,28 +3,110 @@
 // domain breakdown in the middle, triggers table + hotspots below, raw event stream
 // at the bottom. Every card is something an operator can scan in <2 seconds.
 
-const GlobalHeader = ({ now, timeRange, setTimeRange }) => (
-  <div className="page-header" style={{ alignItems: "center" }}>
-    <div style={{ flex: 1 }}>
-      <div className="host-title">
-        <h1>Global Dashboard</h1>
-        <span className="role-tag faculty" style={{ fontSize: 10, padding: "1px 8px" }}>OPERATIONS · TIER-1</span>
+const RANGE_OPTIONS = [
+  { key: "1h",  label: "Last 1h"  },
+  { key: "6h",  label: "Last 6h"  },
+  { key: "24h", label: "Last 24h" },
+  { key: "7d",  label: "Last 7d"  }
+];
+
+const RangeMenu = ({ anchorRect, rangeKey, onPick, onClose }) => {
+  if (!anchorRect) return null;
+  const style = {
+    position: "fixed",
+    top: anchorRect.bottom + 6,
+    left: Math.max(8, anchorRect.right - 160),
+    width: 160, zIndex: 1000,
+    background: "var(--bg-1, #0f1620)",
+    border: "1px solid var(--line, #1f2a36)",
+    borderRadius: 8,
+    boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+    padding: 4
+  };
+  return ReactDOM.createPortal(
+    <div style={style} onClick={(e) => e.stopPropagation()}>
+      {RANGE_OPTIONS.map(o => (
+        <div
+          key={o.key}
+          onClick={() => { onPick(o.key); onClose(); }}
+          style={{
+            padding: "8px 12px", cursor: "pointer", borderRadius: 6,
+            background: o.key === rangeKey ? "var(--bg-2, #1a2330)" : "transparent",
+            color: o.key === rangeKey ? "var(--fg, #fff)" : "var(--fg-2, #cbd5e1)",
+            fontSize: 13
+          }}
+          onMouseEnter={e => e.currentTarget.style.background = "var(--bg-2, #1a2330)"}
+          onMouseLeave={e => e.currentTarget.style.background = o.key === rangeKey ? "var(--bg-2, #1a2330)" : "transparent"}
+        >
+          {o.label}
+        </div>
+      ))}
+    </div>,
+    document.body
+  );
+};
+
+const GlobalHeader = ({ now, rangeKey, setRangeKey }) => {
+  const [open, setOpen] = React.useState(false);
+  const [anchorRect, setAnchorRect] = React.useState(null);
+  const triggerRef = React.useRef(null);
+  const current = RANGE_OPTIONS.find(r => r.key === rangeKey) || RANGE_OPTIONS[2];
+
+  React.useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => {
+      if (triggerRef.current && !triggerRef.current.contains(e.target)) setOpen(false);
+    };
+    const onResize = () => setOpen(false);
+    document.addEventListener("mousedown", onDoc);
+    window.addEventListener("resize", onResize);
+    window.addEventListener("scroll", onResize, true);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("scroll", onResize, true);
+    };
+  }, [open]);
+
+  const toggle = () => {
+    if (open) { setOpen(false); return; }
+    if (triggerRef.current) setAnchorRect(triggerRef.current.getBoundingClientRect());
+    setOpen(true);
+  };
+
+  return (
+    <div className="page-header" style={{ alignItems: "center" }}>
+      <div style={{ flex: 1 }}>
+        <div className="host-title">
+          <h1>Global Dashboard</h1>
+          <span className="role-tag faculty" style={{ fontSize: 10, padding: "1px 8px" }}>OPERATIONS · TIER-1</span>
+        </div>
+        <div className="host-meta">
+          <span className="pill"><span className="dot" style={{ background: "var(--ok)" }} /> All proxies polling</span>
+          <span className="pill"><span className="lbl">Last refresh</span> <span className="v">{now}</span></span>
+          <span className="pill"><span className="lbl">Auto-refresh</span> <span className="v">30s</span></span>
+          <span className="pill"><span className="lbl">Polled hosts</span> <span className="v">{GLOBAL_TOTALS.hosts.total.toLocaleString()}</span></span>
+          <span className="pill"><span className="lbl">Templates</span> <span className="v">{GLOBAL_TOTALS.templates.version}</span></span>
+        </div>
       </div>
-      <div className="host-meta">
-        <span className="pill"><span className="dot" style={{ background: "var(--ok)" }} /> All proxies polling</span>
-        <span className="pill"><span className="lbl">Last refresh</span> <span className="v">{now}</span></span>
-        <span className="pill"><span className="lbl">Auto-refresh</span> <span className="v">30s</span></span>
-        <span className="pill"><span className="lbl">Polled hosts</span> <span className="v">{GLOBAL_TOTALS.hosts.total.toLocaleString()}</span></span>
-        <span className="pill"><span className="lbl">Templates</span> <span className="v">{GLOBAL_TOTALS.templates.version}</span></span>
+
+      <div className="timerange" ref={triggerRef} onClick={toggle}>
+        <Icon name="calendar" />
+        <span className="range-val">{current.label}</span>
+        <Icon name="chevron" />
       </div>
+
+      {open && (
+        <RangeMenu
+          anchorRect={anchorRect}
+          rangeKey={rangeKey}
+          onPick={setRangeKey}
+          onClose={() => setOpen(false)}
+        />
+      )}
     </div>
-    <div className="timerange">
-      <Icon name="calendar" />
-      <span className="range-val">{timeRange}</span>
-      <Icon name="chevron" />
-    </div>
-  </div>
-);
+  );
+};
 
 // ───────── Severity strip (Disaster / High / Warning / Info / Acknowledged / Hosts down) ─────────
 const SeverityStrip = () => {
@@ -302,19 +384,49 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 
 const App = () => {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
-  const [timeRange, setTimeRange] = React.useState("Last 24h");
+  const [rangeKey, setRangeKeyState] = React.useState("24h");
   const [now, setNow] = React.useState("just now");
+  const [refreshing, setRefreshing] = React.useState(false);
+  // Bump on every successful refresh so children re-read window.GLOBAL_* globals.
+  const [, setTick] = React.useState(0);
 
   React.useEffect(() => {
     document.documentElement.classList.toggle("hide-src-badges", !t.showSourceBadges);
   }, [t.showSourceBadges]);
 
+  // Listen for bridge-published data updates: refresh timestamp + force re-render.
+  React.useEffect(() => {
+    const onData = (ev) => {
+      setNow(new Date().toLocaleTimeString());
+      setRefreshing(false);
+      setTick(n => n + 1);
+    };
+    window.addEventListener("tcs:global-data", onData);
+    return () => window.removeEventListener("tcs:global-data", onData);
+  }, []);
+
+  const doRefresh = React.useCallback(async () => {
+    if (typeof window.tcsGlobalRefresh !== "function") return;
+    setRefreshing(true);
+    await window.tcsGlobalRefresh();
+    // Failure path: clear spinner after a beat in case no event fires.
+    setTimeout(() => setRefreshing(false), 4000);
+  }, []);
+
+  const setRangeKey = React.useCallback((r) => {
+    setRangeKeyState(r);
+    if (typeof window.tcsGlobalSetRange === "function") {
+      setRefreshing(true);
+      window.tcsGlobalSetRange(r);
+    }
+  }, []);
+
   return (
     <div className="app" data-density={t.density} data-screen-label="Global Dashboard">
       <GlobalSidebar active="global" />
       <div className="main">
-        <GlobalTopbar crumb={["Tuscaloosa City Schools", "Operations", "Global"]} />
-        <GlobalHeader now={now} timeRange={timeRange} setTimeRange={setTimeRange} />
+        <GlobalTopbar crumb={["Tuscaloosa City Schools", "Operations", "Global"]} onRefresh={doRefresh} refreshing={refreshing} />
+        <GlobalHeader now={now} rangeKey={rangeKey} setRangeKey={setRangeKey} />
         <div className="body">
           <SeverityStrip />
           <TrendStrip />
@@ -393,7 +505,7 @@ const App = () => {
           ]} onChange={v => setTweak("sevFilter", v)} />
         </TweakSection>
         <TweakSection title="Quick actions">
-          <TweakButton onClick={() => setNow(new Date().toLocaleTimeString())}>Refresh now</TweakButton>
+          <TweakButton onClick={doRefresh}>Refresh now</TweakButton>
           <TweakButton onClick={() => alert("This would acknowledge all unacknowledged triggers below disaster.")}>Bulk-ack warnings</TweakButton>
         </TweakSection>
       </TweaksPanel>

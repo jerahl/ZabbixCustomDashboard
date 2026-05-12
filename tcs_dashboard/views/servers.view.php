@@ -8,7 +8,7 @@
 $asset_base = 'modules/tcs_dashboard/assets';
 ?>
 <style>
-    body > header, body > nav, body > .menu-main, body > .header-title { display: none !important; }
+    body > header, body > nav, body > aside, body > footer, body > .menu-main, body > .header-title, .wrapper > footer, footer[role="contentinfo"], .msg-global-footer, #page-footer { display: none !important; }
     body { margin: 0 !important; padding: 0 !important; background: #0d1117 !important; }
     main, .wrapper, .article { padding: 0 !important; margin: 0 !important; max-width: none !important; }
     main { all: revert; }
@@ -36,15 +36,21 @@ $asset_base = 'modules/tcs_dashboard/assets';
 
 <div id="root"></div>
 
+<script>
+    window.SERVERS_BOOT         = <?= json_encode($data['boot']   ?? null, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+    window.SERVERS_HOSTID       = <?= json_encode($data['hostid'] ?? '',   JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+    window.TCS_SERVERS_DATA_URL = "zabbix.php?action=tcs.servers.data";
+</script>
+
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
 
-<!-- Order: tweaks → primitives → unified sidebar → nvr-shell shim → servers data/widgets → app -->
+<!-- Order: tweaks → primitives → unified sidebar → nvr-shell shim → live-data bridge → widgets → app -->
 <script type="text/babel" src="<?= $asset_base ?>/tweaks-panel.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/primitives.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/global-nav.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/nvr-shell.jsx"></script>
-<script type="text/babel" src="<?= $asset_base ?>/servers-data.jsx"></script>
+<script type="text/babel" src="<?= $asset_base ?>/servers-bridge.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/servers-widgets.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/servers-app.jsx"></script>

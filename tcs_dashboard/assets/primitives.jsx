@@ -107,6 +107,8 @@ const Icon = ({ name, size = 16 }) => {
     case "x": return <svg {...s}><path d="M3 3l10 10M13 3 3 13" /></svg>;
     case "lock": return <svg {...s}><rect x="3.5" y="7.5" width="9" height="6" rx="1" /><path d="M5.5 7.5V5a2.5 2.5 0 0 1 5 0v2.5" /></svg>;
     case "map": return <svg {...s}><path d="M2 4 6 2.5l4 1.5 4-1.5v9.5L10 13.5 6 12 2 13.5V4Z M6 2.5v9.5 M10 4v9.5" /></svg>;
+    case "sidebar-collapse": return <svg {...s}><rect x="2" y="3" width="12" height="10" rx="1.5" /><path d="M6 3v10" /><path d="M11 6 9 8l2 2" /></svg>;
+    case "sidebar-expand": return <svg {...s}><rect x="2" y="3" width="12" height="10" rx="1.5" /><path d="M6 3v10" /><path d="M9 6l2 2-2 2" /></svg>;
     default: return null;
   }
 };

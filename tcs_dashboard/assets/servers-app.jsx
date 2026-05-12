@@ -17,6 +17,13 @@ const ServersApp = () => {
   const [activeId, setActiveId] = useStateSVA(t.selectedServer);
   const [tab, setTab] = useStateSVA(t.tab || "overview");
   const [query, setQuery] = useStateSVA("");
+  // Bump on every bridge refetch so children re-read window.ACTIVE_SERVER_*.
+  const [, setTick] = useStateSVA(0);
+  useEffectSVA(() => {
+    const onData = () => setTick(n => n + 1);
+    window.addEventListener("tcs:servers-data", onData);
+    return () => window.removeEventListener("tcs:servers-data", onData);
+  }, []);
 
   useEffectSVA(() => {
     document.documentElement.style.setProperty("--zbx", t.accent);
@@ -24,11 +31,32 @@ const ServersApp = () => {
   }, [t.accent, t.showSourceBadges]);
 
   const allHosts = window.SERVER_SITES.flatMap(s => s.servers.map(sv => ({ ...sv, site: s.name })));
-  const host = allHosts.find(h => h.id === activeId) || allHosts.find(h => h.id === "arc-sql01") || allHosts[0];
+  const PLACEHOLDER_HOST = {
+    id: "—", hostid: "", fqdn: "No server selected", ip: "", role: "—", os: "—",
+    model: "—", site: "—", cores: 0, ram: 0, diskTb: 0,
+    cpu: 0, mem: 0, diskPct: 0, netMbps: 0, uptimeDays: 0,
+    status: "ok", problems: 0, kind: "phys"
+  };
+  const host = allHosts.find(h => h.id === activeId)
+    || allHosts.find(h => h.selected)
+    || allHosts[0]
+    || PLACEHOLDER_HOST;
+
+  // Whenever the active host changes (initial mount included), tell the
+  // bridge to refetch with the new hostid. That's what populates the
+  // Services / Procs / Network tabs (collectActive on the server).
+  useEffectSVA(() => {
+    if (host && host.hostid && typeof window.tcsServersSetActive === "function") {
+      window.tcsServersSetActive(host.hostid);
+    }
+  }, [host && host.hostid]);
 
   const onSelect = (sv) => {
     setActiveId(sv.id);
     setTweak("selectedServer", sv.id);
+    if (sv.hostid && typeof window.tcsServersSetActive === "function") {
+      window.tcsServersSetActive(sv.hostid);
+    }
   };
 
   const densityVar = t.density === "spacious" ? 1.15 : t.density === "dense" ? 0.85 : 1;
@@ -77,7 +105,6 @@ const ServersApp = () => {
 
   const Body = (
     <>
-      {t.showFleet && <FleetOverview activeId={activeId} onSelect={onSelect} />}
       {t.showSidecar ? (
         <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 14 }}>
           <ServerSidecar host={host} />
@@ -144,7 +171,6 @@ const ServersApp = () => {
             { value: "balanced", label: "Balanced" },
             { value: "dense",    label: "Dense" }
           ]} onChange={v => setTweak("density", v)} />
-          <TweakToggle label="Show fleet tile grid" value={t.showFleet} onChange={v => setTweak("showFleet", v)} />
           <TweakToggle label="Show device sidecar" value={t.showSidecar} onChange={v => setTweak("showSidecar", v)} />
         </TweakSection>
         <TweakSection title="Visual">

@@ -2,7 +2,6 @@
 
 namespace Modules\TcsDashboard\Actions;
 
-use CController;
 use CControllerResponseData;
 use CControllerResponseFatal;
 
@@ -19,11 +18,7 @@ use CControllerResponseFatal;
  *   - Build a servers-bridge.jsx parallel to data-bridge.jsx that adapts the
  *     server payload into window.SRV_SITES / window.SRV_HOST / window.SRV_ITEMS.
  */
-class ActionServers extends CController {
-
-    protected function init(): void {
-        $this->disableCsrfValidation();
-    }
+class ActionServers extends ActionBase {
 
     protected function checkInput(): bool {
         $fields = [
@@ -39,14 +34,14 @@ class ActionServers extends CController {
         return $ret;
     }
 
-    protected function checkPermissions(): bool {
-        return $this->getUserType() >= USER_TYPE_ZABBIX_USER;
-    }
-
     protected function doAction(): void {
+        $hostid = $this->getInput('hostid', '');
+        $boot = (new ActionServersData())->collect($hostid);
+
         $data = [
             'title'  => _('TCS Servers'),
-            'hostid' => $this->getInput('hostid', '')
+            'hostid' => $hostid,
+            'boot'   => $boot
         ];
 
         $response = new CControllerResponseData($data);

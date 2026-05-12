@@ -13,6 +13,11 @@
             "view": "global.view",
             "layout": "layout.htmlpage"
         },
+        "tcs.global.data": {
+            "class": "ActionGlobalData",
+            "layout": "layout.json",
+            "view": null
+        },
         "tcs.dashboard.view": {
             "class": "ActionDashboard",
             "view": "dashboard.view",
@@ -37,6 +42,31 @@
             "class": "ActionServers",
             "view": "servers.view",
             "layout": "layout.htmlpage"
+        },
+        "tcs.servers.data": {
+            "class": "ActionServersData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.problems.view": {
+            "class": "ActionProblems",
+            "view": "problems.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.problems.data": {
+            "class": "ActionProblemsData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.events.view": {
+            "class": "ActionEvents",
+            "view": "events.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.events.data": {
+            "class": "ActionEventsData",
+            "layout": "layout.json",
+            "view": null
         },
         "tcs.camera.view": {
             "class": "ActionCamera",
