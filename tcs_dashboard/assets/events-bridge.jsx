@@ -86,7 +86,9 @@
 
         const body = new URLSearchParams();
         ids.forEach(id => body.append("eventids[]", id));
-        body.append("action", String(opts.action | 0));
+        // Named `op` server-side because `action` collides with Zabbix's
+        // own routing parameter (which is `tcs.events.update` here).
+        body.append("op", String(opts.action | 0));
         if (opts.message != null)        body.append("message", String(opts.message));
         if (opts.severity != null)       body.append("severity", String(opts.severity | 0));
         if (opts.suppress_until != null) body.append("suppress_until", String(opts.suppress_until | 0));

@@ -18,9 +18,11 @@ use CControllerResponseFatal;
  *
  * Request body (form-encoded or JSON):
  *   eventids[]       — at least one
- *   action           — bitmask (matches Zabbix ZBX_PROBLEM_UPDATE_* flags):
+ *   op               — bitmask (matches Zabbix ZBX_PROBLEM_UPDATE_* flags):
  *                      1=close, 2=ack, 4=message, 8=severity,
  *                      16=unack, 32=suppress, 64=unsuppress
+ *                      (named `op`, not `action`, to avoid colliding with
+ *                       Zabbix's own routing `action` query param)
  *   message          — optional, used when bit 4 is set
  *   severity         — optional 0-5, used when bit 8 is set
  *   suppress_until   — optional unix timestamp, used when bit 32 is set
@@ -30,7 +32,7 @@ class ActionEventsUpdate extends ActionDataBase {
     protected function checkInput(): bool {
         $ret = $this->validateInput([
             'eventids'       => 'array',
-            'action'         => 'int32',
+            'op'             => 'int32',
             'message'        => 'string',
             'severity'       => 'int32',
             'suppress_until' => 'int32'
@@ -44,23 +46,23 @@ class ActionEventsUpdate extends ActionDataBase {
     protected function doAction(): void {
         $eventids = $this->getInput('eventids', []);
         $eventids = array_values(array_filter(array_map('strval', (array) $eventids), fn($v) => $v !== ''));
-        $action   = (int) $this->getInput('action', 0);
+        $op       = (int) $this->getInput('op', 0);
 
         if (!$eventids) {
             $this->respond(['ok' => false, 'error' => 'no eventids']);
             return;
         }
-        if ($action <= 0) {
-            $this->respond(['ok' => false, 'error' => 'no action']);
+        if ($op <= 0) {
+            $this->respond(['ok' => false, 'error' => 'no op']);
             return;
         }
 
         $params = [
             'eventids' => count($eventids) === 1 ? $eventids[0] : $eventids,
-            'action'   => $action
+            'action'   => $op
         ];
 
-        if ($action & 4) {
+        if ($op & 4) {
             $msg = trim((string) $this->getInput('message', ''));
             if ($msg === '') {
                 $this->respond(['ok' => false, 'error' => 'message required']);
@@ -68,7 +70,7 @@ class ActionEventsUpdate extends ActionDataBase {
             }
             $params['message'] = $msg;
         }
-        if ($action & 8) {
+        if ($op & 8) {
             $sev = (int) $this->getInput('severity', -1);
             if ($sev < 0 || $sev > 5) {
                 $this->respond(['ok' => false, 'error' => 'severity must be 0-5']);
@@ -76,7 +78,7 @@ class ActionEventsUpdate extends ActionDataBase {
             }
             $params['severity'] = $sev;
         }
-        if ($action & 32) {
+        if ($op & 32) {
             $until = (int) $this->getInput('suppress_until', 0);
             if ($until <= time()) {
                 $until = time() + 3600;
