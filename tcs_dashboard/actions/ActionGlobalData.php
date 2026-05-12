@@ -249,7 +249,7 @@ class ActionGlobalData extends ActionDataBase {
         // Count each problem once per site it touches. A trigger whose
         // expression spans N hosts in the same site must not inflate that
         // site's tile by N.
-        $debug_unassigned = [];
+        $debug_by_site = [];
         foreach ($problems as $p) {
             $sev = (int) $p['severity'];
             // Health map only counts warning+ — info noise (sev 0/1) was
@@ -263,30 +263,33 @@ class ActionGlobalData extends ActionDataBase {
             foreach (array_keys($touched) as $sid) {
                 $sites[$sid]['problems']++;
                 if ($sev > $sites[$sid]['_sev']) $sites[$sid]['_sev'] = $sev;
-            }
-            if (isset($touched['unassigned'])) {
                 $hostnames = [];
                 foreach ($p['hosts'] ?? [] as $h) {
-                    if (($host_to_site[(string) $h['hostid']] ?? null) === 'unassigned') {
+                    if (($host_to_site[(string) $h['hostid']] ?? null) === $sid) {
                         $hostnames[] = $h['name'] ?? ($h['host'] ?? $h['hostid']);
                     }
                 }
-                $debug_unassigned[] = [
-                    'eventid'  => $p['eventid'],
-                    'triggerid'=> $p['objectid'],
-                    'severity' => $sev,
-                    'name'     => $p['name'],
-                    'clock'    => (int) $p['clock'],
-                    'age_h'    => round((time() - (int) $p['clock']) / 3600, 1),
-                    'hosts'    => $hostnames
+                $debug_by_site[$sid][] = [
+                    'eventid'       => $p['eventid'],
+                    'triggerid'     => $p['objectid'],
+                    'severity'      => $sev,
+                    'name'          => $p['name'],
+                    'r_eventid'     => $p['r_eventid'] ?? null,
+                    'acknowledged'  => $p['acknowledged'] ?? null,
+                    'clock'         => (int) $p['clock'],
+                    'age_h'         => round((time() - (int) $p['clock']) / 3600, 1),
+                    'hosts'         => $hostnames
                 ];
             }
         }
         $this->lastDebug = [
-            'unassigned_warning_plus' => [
-                'distinct_problems' => count($debug_unassigned),
-                'rows'              => $debug_unassigned
-            ]
+            'problem_get_args' => [
+                'recent'     => false,
+                'suppressed' => false,
+                'limit'      => 200
+            ],
+            'problem_get_total_rows' => count($problems),
+            'warning_plus_by_site'   => $debug_by_site
         ];
 
         $out = [];
