@@ -207,7 +207,6 @@ const SitesHeatmap = ({ filter, setFilter }) => {
                 title={`${s.name} · ${s.problems} problems · SLA ${s.sla}%`}
               >
                 <div className="site-tile-h">
-                  <span className="site-tile-id" style={{ color: c.fg }}>{s.id}</span>
                   {s.problems > 0 ? (
                     <span className="site-tile-prob" style={{ color: c.fg }}>{s.problems}</span>
                   ) : (

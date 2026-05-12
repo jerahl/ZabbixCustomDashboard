@@ -76,11 +76,18 @@ class ActionGlobalData extends ActionDataBase {
         // pull objectid (triggerid) here and resolve the trigger→hosts map
         // in one trigger.get call below.
         $problems = $this->safeGet(fn() => API::Problem()->get([
-            'output'    => ['eventid', 'objectid', 'name', 'severity', 'clock', 'acknowledged'],
+            'output'    => ['eventid', 'objectid', 'name', 'severity', 'clock', 'acknowledged', 'r_eventid'],
+            'recent'    => false,
             'sortfield' => ['eventid'],
             'sortorder' => 'DESC',
             'limit'     => 200
         ]));
+        // Strip resolved rows so totals / sites / domains never double-count
+        // recently-recovered problems as still open.
+        $problems = array_values(array_filter(
+            $problems,
+            fn($p) => empty($p['r_eventid']) || (int) $p['r_eventid'] === 0
+        ));
 
         $events_24h = $this->safeGet(fn() => API::Event()->get([
             'output'    => ['eventid', 'clock', 'value'],
@@ -93,7 +100,7 @@ class ActionGlobalData extends ActionDataBase {
         ]));
 
         $recent_events = $this->safeGet(fn() => API::Event()->get([
-            'output'    => ['eventid', 'objectid', 'name', 'severity', 'clock', 'value'],
+            'output'    => ['eventid', 'objectid', 'name', 'severity', 'clock', 'value', 'r_eventid'],
             'source'    => EVENT_SOURCE_TRIGGERS,
             'object'    => EVENT_OBJECT_TRIGGER,
             'sortfield' => ['eventid'],
@@ -203,10 +210,13 @@ class ActionGlobalData extends ActionDataBase {
         $problems_by_host = [];
         $worst_sev_by_host = [];
         foreach ($problems as $p) {
+            $sev = (int) $p['severity'];
+            // Health map only counts warning+ — info noise (sev 0/1) was
+            // dwarfing real signal on big unassigned buckets.
+            if ($sev < 2) continue;
             foreach ($p['hosts'] ?? [] as $h) {
                 $hid = $h['hostid'];
                 $problems_by_host[$hid] = ($problems_by_host[$hid] ?? 0) + 1;
-                $sev = (int) $p['severity'];
                 if ($sev > ($worst_sev_by_host[$hid] ?? -1)) {
                     $worst_sev_by_host[$hid] = $sev;
                 }
@@ -343,13 +353,16 @@ class ActionGlobalData extends ActionDataBase {
         $out = [];
         foreach ($events as $e) {
             $h = ($e['hosts'][0] ?? null);
+            $is_firing    = (int) $e['value'] === TRIGGER_VALUE_TRUE;
+            $has_recovery = !empty($e['r_eventid']) && (int) $e['r_eventid'] !== 0;
+            $still_open   = $is_firing && !$has_recovery;
             $out[] = [
                 'ts'     => date('H:i:s', (int) $e['clock']),
                 'source' => 'zbx',
                 'host'   => $h['name'] ?? ($h['host'] ?? '—'),
-                'msg'    => ((int) $e['value'] === TRIGGER_VALUE_TRUE) ? 'Trigger:' : 'Resolved:',
+                'msg'    => $still_open ? 'Trigger:' : 'Resolved:',
                 'obj'    => $e['name'],
-                'sev'    => (int) $e['value'] === TRIGGER_VALUE_FALSE ? 'ok' : ($sev_label[(int) $e['severity']] ?? 'info')
+                'sev'    => $still_open ? ($sev_label[(int) $e['severity']] ?? 'info') : 'ok'
             ];
         }
         return $out;

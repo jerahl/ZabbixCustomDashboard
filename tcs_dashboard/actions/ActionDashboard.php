@@ -300,10 +300,14 @@ class ActionDashboard extends ActionBase {
 
     private function collectAlertsSummary(string $hostid): array {
         $problems = API::Problem()->get([
-            'output'  => ['eventid', 'name', 'severity'],
+            'output'  => ['eventid', 'name', 'severity', 'r_eventid'],
             'hostids' => [$hostid],
-            'recent'  => true
-        ]);
+            'recent'  => false
+        ]) ?: [];
+        $problems = array_filter(
+            $problems,
+            fn($p) => empty($p['r_eventid']) || (int) $p['r_eventid'] === 0
+        );
 
         return [
             'associationFailures' => 0,

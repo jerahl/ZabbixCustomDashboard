@@ -69,7 +69,8 @@ class ActionProblemsData extends ActionDataBase {
         $ack_filter   = $filters['ack'];
 
         $params = [
-            'output'    => ['eventid', 'objectid', 'name', 'severity', 'clock', 'acknowledged'],
+            'output'    => ['eventid', 'objectid', 'name', 'severity', 'clock', 'acknowledged', 'r_eventid'],
+            'recent'    => false,
             'sortfield' => ['eventid'],
             'sortorder' => 'DESC',
             'limit'     => 500
@@ -78,6 +79,12 @@ class ActionProblemsData extends ActionDataBase {
             $params['groupids'] = $group_filter;
         }
         $problems = $this->safeGet(fn() => API::Problem()->get($params));
+        // Drop anything with a recovery event — problem.get can include
+        // recently-resolved rows within the OK-display window.
+        $problems = array_values(array_filter(
+            $problems,
+            fn($p) => empty($p['r_eventid']) || (int) $p['r_eventid'] === 0
+        ));
 
         // Resolve triggerid → hosts (Zabbix 7.2 removed selectHosts on problem.get).
         $trigger_ids = array_unique(array_column($problems, 'objectid'));

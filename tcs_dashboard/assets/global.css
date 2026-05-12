@@ -104,11 +104,8 @@
   50%      { box-shadow: 0 0 0 4px rgba(242,95,92,0.0); }
 }
 .site-tile-h {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; justify-content: flex-end;
   gap: 6px;
-}
-.site-tile-id {
-  font-family: var(--mono); font-size: 12px; font-weight: 700; letter-spacing: 0.5px;
 }
 .site-tile-prob {
   font-family: var(--mono); font-size: 14px; font-weight: 700; line-height: 1;

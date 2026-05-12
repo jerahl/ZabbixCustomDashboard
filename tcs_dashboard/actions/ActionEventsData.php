@@ -93,9 +93,14 @@ class ActionEventsData extends ActionDataBase {
             $host_label = $h['name'] ?? ($h['host'] ?? '—');
             $groups_all = array_map(fn($g) => $g['name'], $h['hostgroups'] ?? []);
             [$site, $group] = $this->splitGroups($groups_all);
-            $is_firing = (int) $e['value'] === TRIGGER_VALUE_TRUE;
-            $ack       = (int) $e['acknowledged'] === 1;
-            $status    = !$is_firing ? 'resolved' : ($ack ? 'ack' : 'open');
+            $is_firing    = (int) $e['value'] === TRIGGER_VALUE_TRUE;
+            // A problem-start event (value=1) is still "open" only when no
+            // recovery event has been recorded against it (r_eventid is 0).
+            $has_recovery = !empty($e['r_eventid']) && (int) $e['r_eventid'] !== 0;
+            $ack          = (int) $e['acknowledged'] === 1;
+            $status       = (!$is_firing || $has_recovery)
+                ? 'resolved'
+                : ($ack ? 'ack' : 'open');
             $clock     = (int) $e['clock'];
 
             $tags = [];

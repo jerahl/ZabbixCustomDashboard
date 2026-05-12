@@ -132,12 +132,17 @@ class ActionServersData extends ActionDataBase {
         // Zabbix 7.2 removed selectHosts from problem.get — resolve hosts
         // via trigger.get after the fact.
         $problems = $this->safeGet(fn() => API::Problem()->get([
-            'output'    => ['eventid', 'objectid', 'name', 'severity', 'clock', 'acknowledged'],
+            'output'    => ['eventid', 'objectid', 'name', 'severity', 'clock', 'acknowledged', 'r_eventid'],
+            'recent'    => false,
             'hostids'   => $host_ids,
             'sortfield' => ['eventid'],
             'sortorder' => 'DESC',
             'limit'     => 50
         ]));
+        $problems = array_values(array_filter(
+            $problems,
+            fn($p) => empty($p['r_eventid']) || (int) $p['r_eventid'] === 0
+        ));
         $trigger_hosts = $this->resolveTriggerHosts(array_column($problems, 'objectid'));
         foreach ($problems as &$p) { $p['hosts'] = $trigger_hosts[$p['objectid']] ?? []; }
         unset($p);
@@ -164,10 +169,15 @@ class ActionServersData extends ActionDataBase {
         $problem_count_by_host = [];
         $worst_sev_by_host = [];
         $raw_problems = $this->safeGet(fn() => API::Problem()->get([
-            'output'  => ['objectid', 'severity'],
+            'output'  => ['objectid', 'severity', 'r_eventid'],
+            'recent'  => false,
             'hostids' => array_keys($hosts),
             'limit'   => 1000
         ]));
+        $raw_problems = array_filter(
+            $raw_problems,
+            fn($p) => empty($p['r_eventid']) || (int) $p['r_eventid'] === 0
+        );
         $trigger_hosts = $this->resolveTriggerHosts(array_column($raw_problems, 'objectid'));
         foreach ($raw_problems as $p) {
             $hosts_for_trigger = $trigger_hosts[$p['objectid']] ?? [];
