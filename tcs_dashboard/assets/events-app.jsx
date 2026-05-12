@@ -15,10 +15,13 @@
 // Zabbix Event.acknowledge action bitmask.
 const ACT_CLOSE = 1, ACT_ACK = 2, ACT_MSG = 4, ACT_SEV = 8, ACT_UNACK = 16, ACT_SUPPRESS = 32, ACT_UNSUPPRESS = 64;
 
+// host.view's filter form rewrites the URL on first render and drops
+// `filter_hostids`, so the deep-link never sticks. host.dashboard.view
+// takes a plain `hostid` query param and lands on the per-host dashboard.
 const hostUrl = (hostid) => {
-  const base = window.TCS_HOST_VIEW_URL || "zabbix.php?action=host.view";
   if (!hostid) return null;
-  return `${base}&filter_set=1&filter_hostids%5B%5D=${encodeURIComponent(hostid)}`;
+  const base = window.TCS_HOST_VIEW_URL || "zabbix.php?action=host.dashboard.view";
+  return `${base}&hostid=${encodeURIComponent(hostid)}`;
 };
 
 const callUpdate = async (eventids, opts) => {
