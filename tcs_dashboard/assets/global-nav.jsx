@@ -109,15 +109,7 @@ const GlobalSidebar = ({ active }) => {
         {item("nvr-alarms",   NAV.surveillance,  "alert",    "VMS Alarms",         "12", "warn")}
       </div>
 
-      <div className="nav-section">
-        <div className="nav-label">Sites</div>
-        <a className="nav-item"><span className="nav-label-text">Bryant High School</span></a>
-        <a className="nav-item muted"><span className="nav-label-text">Central High School</span></a>
-        <a className="nav-item muted"><span className="nav-label-text">Northridge High School</span></a>
-        <a className="nav-item muted"><span className="nav-label-text">+ 23 more sites</span></a>
-      </div>
-
-      <div className="sidebar-footer">
+<div className="sidebar-footer">
         <div className="sf-row"><span className="sf-k">Zabbix Server</span><span className="sf-v ok">● 7.0.4</span></div>
         <div className="sf-row"><span className="sf-k">PacketFence API</span><span className="sf-v ok">● v12.3</span></div>
         <div className="sf-row"><span className="sf-k">XProtect Mgmt</span><span className="sf-v ok">● 24.2 R2</span></div>
