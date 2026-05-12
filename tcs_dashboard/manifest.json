@@ -68,6 +68,11 @@
             "layout": "layout.json",
             "view": null
         },
+        "tcs.events.update": {
+            "class": "ActionEventsUpdate",
+            "layout": "layout.json",
+            "view": null
+        },
         "tcs.camera.view": {
             "class": "ActionCamera",
             "view": "camera.view",

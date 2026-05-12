@@ -39,7 +39,9 @@ $asset_base = 'modules/tcs_dashboard/assets';
 
 <script>
     window.EVENTS_BOOT          = <?= json_encode($data['boot'] ?? null, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
-    window.TCS_EVENTS_DATA_URL  = "zabbix.php?action=tcs.events.data";
+    window.TCS_EVENTS_DATA_URL   = "zabbix.php?action=tcs.events.data";
+    window.TCS_EVENTS_UPDATE_URL = "zabbix.php?action=tcs.events.update";
+    window.TCS_HOST_VIEW_URL     = "zabbix.php?action=host.view";
 </script>
 
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>

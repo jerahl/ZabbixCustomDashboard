@@ -12,6 +12,28 @@
 //   6. Events table (sortable, multi-select, bulk actions, group-by)
 //   7. Slide-out detail drawer
 
+// Zabbix Event.acknowledge action bitmask.
+const ACT_CLOSE = 1, ACT_ACK = 2, ACT_MSG = 4, ACT_SEV = 8, ACT_UNACK = 16, ACT_SUPPRESS = 32, ACT_UNSUPPRESS = 64;
+
+const hostUrl = (hostid) => {
+  const base = window.TCS_HOST_VIEW_URL || "zabbix.php?action=host.view";
+  if (!hostid) return null;
+  return `${base}&filter_set=1&filter_hostids%5B%5D=${encodeURIComponent(hostid)}`;
+};
+
+const callUpdate = async (eventids, opts) => {
+  if (typeof window.tcsEventsUpdate !== "function") {
+    alert("Update endpoint unavailable.");
+    return false;
+  }
+  const res = await window.tcsEventsUpdate(eventids, opts);
+  if (!res || !res.ok) {
+    alert("Update failed: " + ((res && res.error) || "unknown error"));
+    return false;
+  }
+  return true;
+};
+
 const SEV_ORDER = { disaster: 5, high: 4, warning: 3, info: 2, ok: 1 };
 const SEV_LABEL = { disaster: "Disaster", high: "High", warning: "Warning", info: "Info", ok: "Resolved" };
 const STATUS_LABEL = { open: "Open", ack: "Acknowledged", resolved: "Resolved", suppressed: "Suppressed" };
@@ -337,7 +359,12 @@ const COLUMNS = [
   { id: "actions", label: "",        width: 90,  sortable: false }
 ];
 
-const EventRow = ({ e, selected, onSelect, onFocus }) => {
+const EventRow = ({ e, selected, onSelect, onFocus, onUpdate, busy }) => {
+  const stop = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+  const ack = (ev) => { stop(ev); callUpdate([e.id], { action: ACT_ACK }); };
+  const suppress = (ev) => { stop(ev); callUpdate([e.id], { action: ACT_SUPPRESS, suppress_until: Math.floor(Date.now()/1000) + 3600 }); };
+  const openHost = (ev) => { stop(ev); const u = hostUrl(e.hostid); if (u) window.open(u, "_blank", "noopener"); };
+  const update = (ev) => { stop(ev); onUpdate(e); };
   const sevColor = e.sev === "disaster" ? "var(--err)" :
                    e.sev === "high"     ? "var(--err)" :
                    e.sev === "warning"  ? "var(--warn)" :
@@ -376,16 +403,17 @@ const EventRow = ({ e, selected, onSelect, onFocus }) => {
       </td>
       <td className="col-actions">
         <div className="ev-actions">
-          {e.status === "open" && <span className="ev-action-btn" title="Acknowledge"><Icon name="check" size={12} /></span>}
-          <span className="ev-action-btn" title="Open host"><Icon name="external" size={12} /></span>
-          <span className="ev-action-btn" title="More"><Icon name="more" size={12} /></span>
+          {e.status === "open" && <span className="ev-action-btn" title="Acknowledge" onClick={ack}><Icon name="check" size={12} /></span>}
+          <span className="ev-action-btn" title="Suppress 1h" onClick={suppress}><Icon name="lock" size={12} /></span>
+          <span className="ev-action-btn" title="Open host" onClick={openHost} style={{ opacity: e.hostid ? 1 : 0.4, cursor: e.hostid ? "pointer" : "not-allowed" }}><Icon name="external" size={12} /></span>
+          <span className="ev-action-btn" title="Update problem…" onClick={update}><Icon name="more" size={12} /></span>
         </div>
       </td>
     </tr>
   );
 };
 
-const EventsTable = ({ events, selected, setSelected, focused, setFocused, sort, setSort, groupBy }) => {
+const EventsTable = ({ events, selected, setSelected, focused, setFocused, sort, setSort, groupBy, onUpdate }) => {
   const allChecked = events.length > 0 && events.every(e => selected.has(e.id));
   const toggleAll = () => {
     if (allChecked) setSelected(new Set());
@@ -424,8 +452,15 @@ const EventsTable = ({ events, selected, setSelected, focused, setFocused, sort,
       {selected.size > 0 && (
         <div className="bulk-bar">
           <span className="bb-cnt">{selected.size}</span> selected
-          <button className="btn sm"><Icon name="check" size={11} /> Acknowledge</button>
-          <button className="btn sm"><Icon name="lock" size={11} /> Suppress 1h</button>
+          <button className="btn sm" onClick={async () => {
+            const ok = await callUpdate(Array.from(selected), { action: ACT_ACK });
+            if (ok) setSelected(new Set());
+          }}><Icon name="check" size={11} /> Acknowledge</button>
+          <button className="btn sm" onClick={async () => {
+            const ok = await callUpdate(Array.from(selected), { action: ACT_SUPPRESS, suppress_until: Math.floor(Date.now()/1000) + 3600 });
+            if (ok) setSelected(new Set());
+          }}><Icon name="lock" size={11} /> Suppress 1h</button>
+          <button className="btn sm" onClick={() => onUpdate({ bulk: Array.from(selected) })}><Icon name="more" size={11} /> Update…</button>
           <div className="bb-spacer" />
           <button className="btn sm ghost" onClick={() => setSelected(new Set())}>Clear selection</button>
         </div>
@@ -462,11 +497,11 @@ const EventsTable = ({ events, selected, setSelected, focused, setFocused, sort,
                   </td>
                 </tr>
                 {gEvents.map(e => (
-                  <EventRow key={e.id} e={e} selected={selected.has(e.id)} onSelect={toggleOne} onFocus={setFocused} />
+                  <EventRow key={e.id} e={e} selected={selected.has(e.id)} onSelect={toggleOne} onFocus={setFocused} onUpdate={onUpdate} />
                 ))}
               </React.Fragment>
             )) : events.map(e => (
-              <EventRow key={e.id} e={e} selected={selected.has(e.id)} onSelect={toggleOne} onFocus={setFocused} />
+              <EventRow key={e.id} e={e} selected={selected.has(e.id)} onSelect={toggleOne} onFocus={setFocused} onUpdate={onUpdate} />
             ))}
             {events.length === 0 && (
               <tr><td colSpan={COLUMNS.length + 1} style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 13 }}>
@@ -490,7 +525,7 @@ const EventsTable = ({ events, selected, setSelected, focused, setFocused, sort,
 };
 
 // ───────── Detail drawer ─────────
-const Drawer = ({ event, onClose }) => {
+const Drawer = ({ event, onClose, onUpdate }) => {
   if (!event) return null;
   const timeline = [
     { t: event.ts, msg: `Event opened by ${(event.source || "zbx").toUpperCase()}`, who: "system" },
@@ -551,11 +586,149 @@ const Drawer = ({ event, onClose }) => {
         </div>
       </div>
       <div className="drawer-actions">
-        {event.status === "open" && <button className="btn primary"><Icon name="check" size={12} /> Acknowledge</button>}
-        {event.status === "ack"  && <button className="btn"><Icon name="check" size={12} /> Resolve</button>}
-        <button className="btn"><Icon name="lock" size={12} /> Suppress 1h</button>
+        {event.status === "open" && (
+          <button className="btn primary" onClick={() => callUpdate([event.id], { action: ACT_ACK })}>
+            <Icon name="check" size={12} /> Acknowledge
+          </button>
+        )}
+        {event.status === "ack" && (
+          <button className="btn" onClick={() => callUpdate([event.id], { action: ACT_CLOSE })}>
+            <Icon name="check" size={12} /> Resolve
+          </button>
+        )}
+        <button className="btn" onClick={() => callUpdate([event.id], { action: ACT_SUPPRESS, suppress_until: Math.floor(Date.now()/1000) + 3600 })}>
+          <Icon name="lock" size={12} /> Suppress 1h
+        </button>
+        <button className="btn" onClick={() => onUpdate(event)}>
+          <Icon name="more" size={12} /> Update…
+        </button>
         <div className="h-spacer" style={{ flex: 1 }} />
-        <button className="btn ghost"><Icon name="external" size={12} /> Open host</button>
+        <button
+          className="btn ghost"
+          onClick={() => { const u = hostUrl(event.hostid); if (u) window.open(u, "_blank", "noopener"); }}
+          disabled={!event.hostid}
+        >
+          <Icon name="external" size={12} /> Open host
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// ───────── Update modal ─────────
+// `target` is either a single event object, or { bulk: [eventid, ...] } for
+// multi-select. Mirrors Zabbix's native "Update problem" dialog (ack, close,
+// suppress, change severity, add message) but with the bare minimum surface.
+const UpdateModal = ({ target, onClose }) => {
+  const isBulk = target && Array.isArray(target.bulk);
+  const eventids = isBulk ? target.bulk : [target.id];
+  const single = !isBulk ? target : null;
+
+  const [message, setMessage]   = React.useState("");
+  const [doAck, setDoAck]       = React.useState(false);
+  const [doClose, setDoClose]   = React.useState(false);
+  const [doSuppress, setDoSupp] = React.useState(false);
+  const [suppressMins, setSuppressMins] = React.useState(60);
+  const [chgSev, setChgSev]     = React.useState(false);
+  const [severity, setSeverity] = React.useState(single ? (SEV_ORDER[single.rawSev] - 1) : 2);
+  const [submitting, setSubmitting] = React.useState(false);
+
+  const submit = async () => {
+    let action = 0;
+    if (doAck)      action |= ACT_ACK;
+    if (doClose)    action |= ACT_CLOSE;
+    if (doSuppress) action |= ACT_SUPPRESS;
+    if (chgSev)     action |= ACT_SEV;
+    if (message.trim()) action |= ACT_MSG;
+    if (action === 0) { alert("Choose at least one action or add a message."); return; }
+
+    const opts = { action };
+    if (message.trim()) opts.message = message.trim();
+    if (chgSev)     opts.severity = severity | 0;
+    if (doSuppress) opts.suppress_until = Math.floor(Date.now()/1000) + Math.max(1, suppressMins | 0) * 60;
+
+    setSubmitting(true);
+    const ok = await callUpdate(eventids, opts);
+    setSubmitting(false);
+    if (ok) onClose();
+  };
+
+  const sevOpts = [
+    { v: 0, l: "Not classified" }, { v: 1, l: "Information" }, { v: 2, l: "Warning" },
+    { v: 3, l: "Average" },        { v: 4, l: "High" },        { v: 5, l: "Disaster" }
+  ];
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 200,
+      display: "flex", alignItems: "center", justifyContent: "center"
+    }}>
+      <div onClick={ev => ev.stopPropagation()} style={{
+        background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: 8,
+        width: 480, maxWidth: "92vw", maxHeight: "90vh", overflow: "auto",
+        boxShadow: "0 20px 60px rgba(0,0,0,0.5)"
+      }}>
+        <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 10 }}>
+          <h3 style={{ margin: 0, flex: 1, fontSize: 14 }}>
+            Update {isBulk ? `${eventids.length} events` : `event ${single.id}`}
+          </h3>
+          <span className="icon-btn" onClick={onClose}><Icon name="close" /></span>
+        </div>
+        <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 12 }}>
+          {single && (
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>
+              <div><b style={{ color: "var(--fg-1)" }}>{single.host}</b> · {single.site}</div>
+              <div style={{ marginTop: 2 }}>{single.trigger}</div>
+            </div>
+          )}
+
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+            <span style={{ color: "var(--muted)" }}>Message</span>
+            <textarea
+              value={message}
+              onChange={ev => setMessage(ev.target.value)}
+              rows={3}
+              placeholder="Optional note (added to event history)"
+              style={{ background: "var(--bg-2)", color: "var(--fg-1)", border: "1px solid var(--line)", borderRadius: 4, padding: 8, fontFamily: "inherit", fontSize: 12, resize: "vertical" }}
+            />
+          </label>
+
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+            <input type="checkbox" checked={doAck}   onChange={ev => setDoAck(ev.target.checked)} />
+            <span>Acknowledge</span>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+            <input type="checkbox" checked={doClose} onChange={ev => setDoClose(ev.target.checked)} />
+            <span>Close problem</span>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+            <input type="checkbox" checked={doSuppress} onChange={ev => setDoSupp(ev.target.checked)} />
+            <span>Suppress for</span>
+            <input
+              type="number" min="1" max="10080" value={suppressMins} disabled={!doSuppress}
+              onChange={ev => setSuppressMins(parseInt(ev.target.value, 10) || 1)}
+              style={{ width: 70, background: "var(--bg-2)", color: "var(--fg-1)", border: "1px solid var(--line)", borderRadius: 4, padding: "3px 6px", fontSize: 12 }}
+            />
+            <span>minutes</span>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+            <input type="checkbox" checked={chgSev} onChange={ev => setChgSev(ev.target.checked)} />
+            <span>Change severity</span>
+            <select
+              value={severity} disabled={!chgSev}
+              onChange={ev => setSeverity(parseInt(ev.target.value, 10))}
+              style={{ background: "var(--bg-2)", color: "var(--fg-1)", border: "1px solid var(--line)", borderRadius: 4, padding: "3px 6px", fontSize: 12 }}
+            >
+              {sevOpts.map(s => <option key={s.v} value={s.v}>{s.l}</option>)}
+            </select>
+          </label>
+        </div>
+        <div style={{ padding: "12px 18px", borderTop: "1px solid var(--line)", display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button className="btn ghost" onClick={onClose} disabled={submitting}>Cancel</button>
+          <button className="btn primary" onClick={submit} disabled={submitting}>
+            {submitting ? "Updating…" : "Update"}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -606,6 +779,7 @@ const EventsAppDesigned = () => {
   const [focused, setFocused] = React.useState(null);
   const [sort, setSort] = React.useState({ key: "ts", dir: "desc" });
   const [refreshing, setRefreshing] = React.useState(false);
+  const [updateTarget, setUpdateTarget] = React.useState(null);
 
   React.useEffect(() => {
     document.documentElement.classList.toggle("hide-src-badges", !t.showSourceBadges);
@@ -772,11 +946,13 @@ const EventsAppDesigned = () => {
             sort={sort}
             setSort={setSort}
             groupBy={t.groupBy}
+            onUpdate={setUpdateTarget}
           />
         </div>
       </div>
 
-      {focused && <Drawer event={focused} onClose={() => setFocused(null)} />}
+      {focused && <Drawer event={focused} onClose={() => setFocused(null)} onUpdate={setUpdateTarget} />}
+      {updateTarget && <UpdateModal target={updateTarget} onClose={() => setUpdateTarget(null)} />}
 
       <TweaksPanel title="Tweaks">
         <TweakSection title="Layout">
