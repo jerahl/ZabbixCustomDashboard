@@ -61,6 +61,9 @@ $asset_base = 'modules/tcs_dashboard/assets';
     window.SWITCH_BOOT = <?= json_encode($data['boot'] ?? new stdClass(), JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) ?>;
     // POST target for the CYCLE PoE button (admin-only on the server side).
     window.TCS_SWITCH_CYCLEPOE_URL = "zabbix.php?action=tcs.switch.cyclepoe";
+    // Async data endpoints — switches-bridge.jsx fetches these after first paint.
+    window.TCS_SWITCH_FLEET_URL    = "zabbix.php?action=tcs.switches.fleet.data";
+    window.TCS_SWITCH_SNAPSHOT_URL = "zabbix.php?action=tcs.switches.snapshot.data";
 
     // Disable Zabbix's standard whole-page refresh on this view. The user
     // profile "Refresh time" setting drives PageRefresh / location.reload

@@ -42,6 +42,11 @@ class ActionSwitches extends ActionBase {
     protected function doAction(): void {
         $switchid = $this->getInput('switchid', '');
 
+        // Page load is intentionally minimal — fleet, snapshot, and problems
+        // are fetched asynchronously by switches-bridge.jsx after first paint
+        // (see tcs.switches.fleet.data + tcs.switches.snapshot.data). Only
+        // the host's identity is loaded here so the page header pills render
+        // immediately with the right hostname.
         $boot = [
             'host'     => null,
             'members'  => [],
@@ -52,33 +57,12 @@ class ActionSwitches extends ActionBase {
             'history'  => new \stdClass(),
             'uplinks'  => [],
             'problems' => [],
-            'fleet'    => []
+            'fleet'    => [],
+            'async'    => true
         ];
-
-        // Fleet discovery powers the Host navigator. Cheap enough (3 item.get
-        // calls regardless of fleet size) to run on every page load.
-        try {
-            $boot['fleet'] = $this->collectFleet();
-        }
-        catch (\Throwable $e) {
-            error_log('[tcs_dashboard] collectFleet: '.$e->getMessage());
-        }
 
         if ($switchid !== '') {
             $boot['host'] = $this->collectHost($switchid);
-            try {
-                $snap = (new SwitchClient())->snapshot($switchid);
-                $boot = array_merge($boot, $snap);
-            }
-            catch (\Throwable $e) {
-                error_log('[tcs_dashboard] SwitchClient: '.$e->getMessage());
-            }
-            try {
-                $boot['problems'] = $this->collectProblems($switchid);
-            }
-            catch (\Throwable $e) {
-                error_log('[tcs_dashboard] collectProblems: '.$e->getMessage());
-            }
         }
 
         $data = [

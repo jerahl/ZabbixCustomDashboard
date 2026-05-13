@@ -38,6 +38,16 @@
             "view": "switches.view",
             "layout": "layout.htmlpage"
         },
+        "tcs.switches.fleet.data": {
+            "class": "ActionSwitchesFleetData",
+            "layout": "layout.json",
+            "view": null
+        },
+        "tcs.switches.snapshot.data": {
+            "class": "ActionSwitchesSnapshotData",
+            "layout": "layout.json",
+            "view": null
+        },
         "tcs.servers.view": {
             "class": "ActionServers",
             "view": "servers.view",

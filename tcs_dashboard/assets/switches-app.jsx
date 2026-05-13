@@ -19,13 +19,11 @@ const SwitchesApp = () => {
   const initialId = liveHost ? (liveHost.host || liveHost.visible_name || t.selectedSwitch) : t.selectedSwitch;
   const [activeId, setActiveId] = useStateSWA(initialId);
   const [activeTab, setActiveTab] = useStateSWA(t.activeTab || "ports");
-  const [selectedPort, setSelectedPort] = useStateSWA(() => {
-    const m1 = window.ARC_MDF_STACK[0];
-    const p = m1.ports.find(pp => pp.n === 18);
-    return { member: 1, port: 18, detail: window.makePortDetail(1, p) };
-  });
+  // Selected port: starts null and gets seeded once the snapshot arrives,
+  // since on first paint window.ARC_MDF_STACK is just the empty-member stub.
+  const [selectedPort, setSelectedPort] = useStateSWA(null);
   const onSelectPort = (memberIdx, port) => {
-    if (port.state === "absent") return;
+    if (!port || port.state === "absent") return;
     const detail = window.makePortDetail(memberIdx, port);
     setSelectedPort({ member: memberIdx, port: port.n, detail });
   };
@@ -35,11 +33,45 @@ const SwitchesApp = () => {
     document.documentElement.classList.toggle("hide-src-badges", !t.showSourceBadges);
   }, [t.accent, t.showSourceBadges]);
 
+  // The bridge fetches fleet + snapshot async after first paint and updates
+  // window globals in-place. Bump a version state on each tcs:switch-data
+  // event so widgets that read those globals re-render.
+  const [, setDataVersion] = useStateSWA(0);
+  useEffectSWA(() => {
+    const onData = () => setDataVersion(v => v + 1);
+    window.addEventListener("tcs:switch-data", onData);
+    return () => window.removeEventListener("tcs:switch-data", onData);
+  }, []);
+
   const densityVar = t.density === "spacious" ? 1.15 : t.density === "dense" ? 0.85 : 1;
 
-  // Find selected host across all sites
-  const allHosts = window.SWITCH_SITES.flatMap(s => s.switches);
-  const host = allHosts.find(h => h.id === activeId) || allHosts.find(h => h.id === "ARC-MDF") || allHosts[0];
+  // Find selected host across all sites. Fleet may not have loaded yet —
+  // synthesize a minimal host from SWITCH_BOOT.host so the page header pills
+  // render immediately with the right hostname / counters wait for snapshot.
+  const allHosts = (window.SWITCH_SITES || []).flatMap(s => s.switches || []);
+  const synth = liveHost ? {
+    id:       liveHost.host || liveHost.visible_name || String(liveHost.hostid || "—"),
+    hostid:   String(liveHost.hostid || ""),
+    ip:       liveHost.ip || "",
+    model:    "—",
+    members:  1,
+    ports:    0,
+    up:       0,
+    down:     0,
+    poe:      0,
+    cpu:      0,
+    mem:      0,
+    temp:     0,
+    problems: 0
+  } : {
+    id: "—", hostid: "", ip: "", model: "—",
+    members: 1, ports: 0, up: 0, down: 0, poe: 0,
+    cpu: 0, mem: 0, temp: 0, problems: 0
+  };
+  const host =
+    allHosts.find(h => h.id === activeId)
+    || allHosts.find(h => h.hostid && h.hostid === String(liveHost && liveHost.hostid))
+    || synth;
 
   return (
     <div className="app" data-density={t.density} style={{ fontSize: `${13 * densityVar}px` }}>
