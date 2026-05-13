@@ -9,6 +9,7 @@ const { useState: useStateSW } = React;
 // to onSelect() for in-page selection (mock mode).
 const HostNavigator = ({ activeId, onSelect }) => {
   const [sites, setSites] = useStateSW(window.SWITCH_SITES);
+  const [loading, setLoading] = useStateSW(() => !!(window.SWITCH_LOADING && window.SWITCH_LOADING.fleet));
   // The bridge updates window.SWITCH_SITES in-place after the fleet fetch
   // resolves. Re-sync our local state on each tcs:switch-data event,
   // preserving expand/collapse choices by id so user toggles don't get
@@ -25,6 +26,7 @@ const HostNavigator = ({ activeId, onSelect }) => {
           expanded: (s.id in expandedById) ? expandedById[s.id] : s.expanded
         }));
       });
+      setLoading(!!(window.SWITCH_LOADING && window.SWITCH_LOADING.fleet));
     };
     window.addEventListener("tcs:switch-data", sync);
     return () => window.removeEventListener("tcs:switch-data", sync);
@@ -46,15 +48,26 @@ const HostNavigator = ({ activeId, onSelect }) => {
       window.tcsNavigateSwitch(sw.hostid);
     }
   };
+  const totalHosts = sites.reduce((n, s) => n + (s.switches || []).length, 0);
   return (
     <div className="card">
       <div className="card-h">
         <h3>Host navigator</h3>
         <SourceBadge src="zbx" />
         <div className="h-spacer" />
-        <span className="h-meta">{sites.reduce((n, s) => n + s.switches.length, 0)} switches</span>
+        <span className="h-meta">
+          {loading && totalHosts === 0
+            ? <span className="hn-loading-inline"><span className="hn-spinner" /> loading…</span>
+            : `${totalHosts} switches`}
+        </span>
       </div>
       <div className="host-nav">
+        {loading && sites.length === 0 && (
+          <div className="hn-loading">
+            <span className="hn-spinner" />
+            <span className="hn-loading-lbl">Loading fleet…</span>
+          </div>
+        )}
         {sites.map((site, i) => (
           <div className="host-nav-section" key={site.id}>
             <div
