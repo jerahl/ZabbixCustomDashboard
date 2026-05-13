@@ -31,10 +31,17 @@ use Modules\TcsDashboard\Lib\RConfigClient;
  *   { ok: true,  message: "...", http_status: 200 }
  *   { ok: false, error: "..."[, http_status: N] }
  *
- * Permissions: ZABBIX_ADMIN minimum. CSRF token is required by the harness
- * (init() leaves disableCsrfValidation() OFF).
+ * Permissions: ZABBIX_ADMIN minimum. CSRF is disabled because the endpoint
+ * is invoked from same-origin fetch() with Content-Type: application/json
+ * (the harness rejects cross-site form submissions and JSON bodies require
+ * a preflight under CORS, so form-style CSRF doesn't apply). Authentication
+ * still goes through CWebUser::isLoggedIn() + the admin gate below.
  */
 class ActionSwitchCyclePoe extends CController {
+
+    protected function init(): void {
+        $this->disableCsrfValidation();
+    }
 
     protected function checkInput(): bool {
         $ret = $this->validateInput([

@@ -197,6 +197,23 @@ const formatRate = (kbps) => {
 };
 
 const PortDetailPane = ({ detail, onClose }) => {
+  const [cycleState, setCycleState] = React.useState({ busy: false, msg: "" });
+  const onCycle = React.useCallback(async () => {
+    if (cycleState.busy || !detail || typeof window.tcsCyclePoe !== "function") return;
+    // detail.label is "<member>:<port>" — parse to get the args.
+    const [m, p] = String(detail.label || "").split(":").map(s => parseInt(s, 10));
+    if (!m || !p) {
+      setCycleState({ busy: false, msg: "bad port" });
+      return;
+    }
+    setCycleState({ busy: true, msg: "queuing…" });
+    const r = await window.tcsCyclePoe(m, p);
+    setCycleState({
+      busy: false,
+      msg: r && r.ok ? (r.message || "queued") : (r && (r.error || r.message)) || "failed"
+    });
+    setTimeout(() => setCycleState({ busy: false, msg: "" }), 4000);
+  }, [detail, cycleState.busy]);
   if (!detail) {
     return (
       <div className="pd-pane">
@@ -242,7 +259,21 @@ const PortDetailPane = ({ detail, onClose }) => {
               {detail.poe ? (
                 <div className="pd-poe-btns">
                   <span className="pd-btn delivering">Delivering Power</span>
-                  <span className="pd-btn cycle"><Icon name="refresh" size={11}/> CYCLE</span>
+                  <button
+                    type="button"
+                    className="pd-btn cycle"
+                    onClick={onCycle}
+                    disabled={cycleState.busy}
+                    title="Cycle PoE on this port via rConfig"
+                    style={{ cursor: cycleState.busy ? "wait" : "pointer", border: 0, font: "inherit" }}
+                  >
+                    <Icon name="refresh" size={11}/> {cycleState.busy ? "CYCLING…" : "CYCLE"}
+                  </button>
+                  {cycleState.msg && (
+                    <span style={{ fontSize: 10.5, color: "var(--muted)", marginLeft: 6 }}>
+                      {cycleState.msg}
+                    </span>
+                  )}
                 </div>
               ) : (
                 <span style={{fontSize: 11, color: "var(--muted)"}}>—</span>

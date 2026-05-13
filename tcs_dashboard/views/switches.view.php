@@ -36,11 +36,11 @@ $asset_base = 'modules/tcs_dashboard/assets';
 <div id="root"></div>
 
 <script>
-    // Server-side snapshot from ActionSwitches::collectSwitchBoot(). A later
-    // switches-bridge.jsx will adapt this into window.SWITCH_SITES /
-    // window.ARC_MDF_STACK / window.makePortDetail. Until then, switches-data.jsx
-    // continues to populate those globals from its mock fixtures.
+    // Server-side snapshot from ActionSwitches; switches-bridge.jsx adapts
+    // this into window.SWITCH_SITES / window.ARC_MDF_STACK / makePortDetail.
     window.SWITCH_BOOT = <?= json_encode($data['boot'] ?? new stdClass(), JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) ?>;
+    // POST target for the CYCLE PoE button (admin-only on the server side).
+    window.TCS_SWITCH_CYCLEPOE_URL = "zabbix.php?action=tcs.switch.cyclepoe";
 </script>
 
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
@@ -53,5 +53,6 @@ $asset_base = 'modules/tcs_dashboard/assets';
 <script type="text/babel" src="<?= $asset_base ?>/global-nav.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/nvr-shell.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/switches-data.jsx"></script>
+<script type="text/babel" src="<?= $asset_base ?>/switches-bridge.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/switches-widgets.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/switches-app.jsx"></script>
