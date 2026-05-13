@@ -40,21 +40,18 @@
         window.location.search = "?" + params.toString();
     };
 
-    // Initial empty/safe defaults so the widgets render skeletons instead of
-    // crashing while fetches are in flight. `tcs:switch-data` updates these
-    // in-place.
-    window.SWITCH_KPIS      = window.SWITCH_KPIS      || { cpu: null, mem: null, temp: null, poeWatts: null, poeBudget: null };
-    window.SWITCH_PROBLEMS  = window.SWITCH_PROBLEMS  || [];
-    window.ARC_MDF_LINKS    = Array.isArray(window.ARC_MDF_LINKS)   ? window.ARC_MDF_LINKS   : [];
-    window.ARC_MDF_HISTORY  = window.ARC_MDF_HISTORY  || { cpu: [], mem: [], temp: [], poeWatts: [], uplinkRx: [], uplinkTx: [] };
-    window.SWITCH_SITES     = Array.isArray(window.SWITCH_SITES)    ? window.SWITCH_SITES    : [];
-    // ARC_MDF_STACK is required by the port grid; start with a single empty
-    // member so the layout renders rather than throwing on undefined.
-    if (!Array.isArray(window.ARC_MDF_STACK) || !window.ARC_MDF_STACK.length) {
-        window.ARC_MDF_STACK = [{ idx: 1, ports: [], sfp: [], upCount: 0, downCount: 0, poeCount: 0 }];
-    }
-    // Loading flags so widgets can show subtle "loading…" affordances.
-    window.SWITCH_LOADING = { fleet: true, snapshot: true };
+    // Initial empty defaults. Critical: these UNCONDITIONALLY overwrite the
+    // mock-data globals populated by switches-data.jsx so the page starts in
+    // a skeleton state (empty navigator, empty grid, no fake KPIs). The
+    // applyFleet/applySnapshot calls below fill them in when fetches resolve.
+    window.SWITCH_KPIS      = { cpu: null, mem: null, temp: null, poeWatts: null, poeBudget: null };
+    window.SWITCH_PROBLEMS  = [];
+    window.ARC_MDF_LINKS    = [];
+    window.ARC_MDF_HISTORY  = { cpu: [], mem: [], temp: [], poeWatts: [], uplinkRx: [], uplinkTx: [] };
+    window.SWITCH_SITES     = [];
+    window.ARC_MDF_STACK    = [{ idx: 1, ports: [], sfp: [], upCount: 0, downCount: 0, poeCount: 0 }];
+    // Loading flags so widgets / future skeletons can show "loading…" affordances.
+    window.SWITCH_LOADING   = { fleet: true, snapshot: true };
 
     /* --------------------------------------------------------------------- */
     /* Adapters: payload sections → window globals                           */
@@ -215,12 +212,13 @@
     }
 
     // Fire both in parallel so they don't queue behind each other.
+    console.info("[tcs] fetching switch fleet + snapshot…");
     fetchJson(URL_FLEET)
         .then(j => {
             const fleet = Array.isArray(j && j.fleet) ? j.fleet : [];
             applyFleet(fleet);
         })
-        .catch(e => console.warn("[tcs] fleet fetch failed:", e))
+        .catch(e => console.error("[tcs] fleet fetch failed:", e, "url:", URL_FLEET))
         .finally(() => {
             window.SWITCH_LOADING.fleet = false;
             notify("fleet");
@@ -228,9 +226,13 @@
 
     const switchid = host ? String(host.hostid || "") : "";
     if (switchid) {
-        fetchJson(`${URL_SNAPSHOT}&switchid=${encodeURIComponent(switchid)}`)
-            .then(j => applySnapshot(j || {}))
-            .catch(e => console.warn("[tcs] snapshot fetch failed:", e))
+        const snapUrl = `${URL_SNAPSHOT}&switchid=${encodeURIComponent(switchid)}`;
+        fetchJson(snapUrl)
+            .then(j => {
+                applySnapshot(j || {});
+                console.info("[tcs] snapshot loaded for hostid", switchid);
+            })
+            .catch(e => console.error("[tcs] snapshot fetch failed:", e, "url:", snapUrl))
             .finally(() => {
                 window.SWITCH_LOADING.snapshot = false;
                 notify("snapshot");
@@ -239,6 +241,7 @@
         // No host selected — nothing to snapshot. Clear the flag so the UI
         // doesn't sit in "loading" forever.
         window.SWITCH_LOADING.snapshot = false;
+        console.info("[tcs] no switchid in URL — skipping snapshot fetch");
     }
 
     /* --------------------------------------------------------------------- */
