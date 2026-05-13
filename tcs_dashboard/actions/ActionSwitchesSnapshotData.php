@@ -2,8 +2,10 @@
 
 namespace Modules\TcsDashboard\Actions;
 
+use API;
 use CControllerResponseData;
 use CControllerResponseFatal;
+use Modules\TcsDashboard\Lib\PFClient;
 use Modules\TcsDashboard\Lib\SwitchClient;
 
 /**
@@ -69,8 +71,100 @@ class ActionSwitchesSnapshotData extends ActionDataBase {
             error_log('[tcs_dashboard] snapshot.data problems: '.$e->getMessage());
         }
 
+        try {
+            $payload['pfNodes'] = $this->collectPfNodes($hostid, $payload['host'] ?? null);
+        } catch (\Throwable $e) {
+            error_log('[tcs_dashboard] snapshot.data pfNodes: '.$e->getMessage());
+            $payload['pfNodes'] = new \stdClass();
+        }
+
         $this->setResponse(new CControllerResponseData([
             'main_block' => json_encode($payload, JSON_UNESCAPED_SLASHES)
         ]));
+    }
+
+    /**
+     * Pull PacketFence nodes currently associated with this switch and bucket
+     * them by "member.port" so the React port-detail can light up the
+     * PacketFence tile from a snapshot read.
+     *
+     * Returns a map { "m.p" => [device, ...] }. Multiple devices per port are
+     * common (uplinks, hubs); the first row is treated as primary, additional
+     * rows feed the "N MACS" badge.
+     *
+     * @return array<string, array<int, array<string, mixed>>>|\stdClass
+     */
+    private function collectPfNodes(string $hostid, ?array $host) {
+        $macros = $this->resolvePfMacros($hostid);
+        if ($macros === null) return new \stdClass();
+        $deviceId = (string) ($host['host'] ?? '');
+        if ($deviceId === '') return new \stdClass();
+
+        $pf = PFClient::fromMacros($macros);
+        $devices = $pf->devicesOnSwitch($deviceId);
+
+        $bag = [];
+        foreach ($devices as $d) {
+            $idx = self::parseIfIndex((string) ($d['port'] ?? ''));
+            if ($idx === null) continue;
+            $key = $idx[0].'.'.$idx[1];
+            $bag[$key] ??= [];
+            $bag[$key][] = $d;
+        }
+        return $bag ?: new \stdClass();
+    }
+
+    /**
+     * Decode PF's `locationlog.port` (SNMP ifIndex string) into [member, port]
+     * using the Extreme EXOS encoding (idx = 1000 * member + port). Mirrors
+     * SwitchClient::parseMemberPort's ifIndex branch.
+     *
+     * @return array{0:int,1:int}|null
+     */
+    private static function parseIfIndex(string $port): ?array {
+        $port = trim($port);
+        if ($port === '') return null;
+        if (preg_match('/^(\d+)\.(\d+)$/', $port, $m)) {
+            return [(int) $m[1], (int) $m[2]];
+        }
+        if (!preg_match('/^\d+$/', $port)) return null;
+        $idx = (int) $port;
+        if ($idx <= 0) return null;
+        if ($idx < 1000) return [1, $idx];
+        $member = intdiv($idx, 1000);
+        $p      = $idx % 1000;
+        if ($member < 1 || $member > 8 || $p <= 0) return null;
+        return [$member, $p];
+    }
+
+    /**
+     * Read {$PF.*} macros for this hostid. Mirrors ActionDashboard's resolver
+     * (kept local so the snapshot action doesn't reach across action classes).
+     *
+     * @return array{url:string,user:string,pass:string,verify_ssl:bool}|null
+     */
+    private function resolvePfMacros(string $hostid): ?array {
+        $rows = API::UserMacro()->get([
+            'output'  => ['macro', 'value'],
+            'hostids' => [$hostid],
+            'filter'  => ['macro' => ['{$PF.URL}', '{$PF.USER}', '{$PF.PASSWORD}', '{$PF.VERIFY.SSL}']]
+        ]) ?: [];
+
+        $bag = [];
+        foreach ($rows as $r) {
+            $bag[$r['macro']] = (string) $r['value'];
+        }
+
+        $url  = $bag['{$PF.URL}']  ?? '';
+        $user = $bag['{$PF.USER}'] ?? '';
+        $pass = $bag['{$PF.PASSWORD}'] ?? '';
+        if ($url === '' || $user === '' || $pass === '') return null;
+
+        return [
+            'url'        => $url,
+            'user'       => $user,
+            'pass'       => $pass,
+            'verify_ssl' => ($bag['{$PF.VERIFY.SSL}'] ?? '1') !== '0'
+        ];
     }
 }

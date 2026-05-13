@@ -78,13 +78,53 @@
     const FLAT60 = Array.from({ length: 60 }, () => 0);
     const _fdbByKey     = Object.create(null);
     const _trafficByKey = Object.create(null);
+    const _pfByKey      = Object.create(null);
     window._tcsFdbByKey     = _fdbByKey;
     window._tcsTrafficByKey = _trafficByKey;
+    window._tcsPfByKey      = _pfByKey;
+
+    // Role tags in the design system: faculty/student/guest/av/byod/quarantine/unknown.
+    // PF category names rarely match these 1:1 — coerce unknown values to "unknown"
+    // so the CSS still renders a sensible chip.
+    const _PF_ROLE_CLASSES = new Set(["faculty","student","guest","av","byod","quarantine","unknown"]);
+    const pfRoleClass = (raw) => {
+        const s = String(raw || "").toLowerCase().trim();
+        if (!s) return "unknown";
+        if (_PF_ROLE_CLASSES.has(s)) return s;
+        // Look for a known token inside e.g. "BYOD-Wifi" → "byod"
+        for (const c of _PF_ROLE_CLASSES) if (s.includes(c)) return c;
+        return "unknown";
+    };
+
+    const pfAgeMin = (lastSeen) => {
+        if (!lastSeen) return 0;
+        // PF returns "YYYY-MM-DD HH:MM:SS" in server-local time. Replacing the
+        // space with "T" lets Date.parse handle it as a local timestamp.
+        const t = Date.parse(String(lastSeen).replace(" ", "T"));
+        if (!isFinite(t)) return 0;
+        return Math.max(0, Math.round((Date.now() - t) / 60000));
+    };
 
     window.makePortDetail = function (memberIdx, port) {
         const k = `${memberIdx}.${port.n}`;
         const macs = _fdbByKey[k] || [];
         const tr   = _trafficByKey[k] || null;
+        const pfRows = _pfByKey[k] || [];
+        const pfPrimary = pfRows[0] || null;
+        const device = pfPrimary ? {
+            mac:      pfPrimary.mac,
+            reg:      pfPrimary.reg,
+            ip:       pfPrimary.ip,
+            host:     pfPrimary.host || "—",
+            vendor:   pfPrimary.vendor || "—",
+            os:       pfPrimary.os || "—",
+            owner:    pfPrimary.owner || "—",
+            dhcpFp:   pfPrimary.dhcpFp || "—",
+            lastSeen: pfPrimary.lastSeen || "—",
+            lastArp:  pfPrimary.lastArp || "—",
+            lastDhcp: pfPrimary.lastDhcp || "—",
+            role:     pfRoleClass(pfPrimary.role)
+        } : null;
 
         // Server gives us bytes/sec on each side. Convert to kbps for the
         // detail panel, then derive a coarse utilization % off the port's
@@ -117,11 +157,13 @@
             discards1h: discIn + discOut,
             discIn,
             discOut,
-            device:     null,    // PacketFenceDevicePane shows empty-state on null
-            extraMacs:  macs.length > 1 ? macs.length - 1 : 0,
+            device,
+            extraMacs:  device
+                ? Math.max(pfRows.length - 1, macs.length > 1 ? macs.length - 1 : 0)
+                : (macs.length > 1 ? macs.length - 1 : 0),
             macs,
-            ifIndex:    1000 + (Number(port.n) || 0),
-            ageMin:     0
+            ifIndex:    (Number(memberIdx) || 1) * 1000 + (Number(port.n) || 0),
+            ageMin:     device ? pfAgeMin(pfPrimary.lastSeen) : 0
         };
     };
 
@@ -306,6 +348,15 @@
         for (const row of fdb) {
             const k = `${row.member}.${row.port}`;
             (bag[k] = bag[k] || []).push(row.mac);
+        }
+
+        // PacketFence-resolved devices per port. Server pre-buckets by m.p.
+        const pfBag = window._tcsPfByKey;
+        for (const k of Object.keys(pfBag)) delete pfBag[k];
+        const pfNodes = (snap.pfNodes && typeof snap.pfNodes === "object") ? snap.pfNodes : {};
+        for (const k of Object.keys(pfNodes)) {
+            const rows = pfNodes[k];
+            if (Array.isArray(rows) && rows.length) pfBag[k] = rows;
         }
     }
 

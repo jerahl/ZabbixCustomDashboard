@@ -105,6 +105,48 @@ class PFClient {
     }
 
     /**
+     * Rich per-node detail for every device PF currently associates with a
+     * switch. Returns the full field set the Port Detail card consumes — IP,
+     * hostname, vendor/OS fingerprint, owner, role, last-seen / arp / dhcp
+     * timestamps, and the SNMP ifIndex (locationlog.port) needed to bucket
+     * the row to a member.port.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function devicesOnSwitch(string $deviceId, int $limit = 500): array {
+        $rows = $this->get('/api/v1/nodes', [
+            'fields' => 'mac,pid,computername,status,category_id,'
+                       .'device_class,device_type,device_manufacturer,'
+                       .'dhcp_fingerprint,dhcp_vendor,'
+                       .'last_seen,last_arp,last_dhcp,'
+                       .'ip4log.ip,locationlog.switch,locationlog.port',
+            'limit'  => $limit,
+            'sort'   => 'last_seen DESC',
+            'locationlog.switch' => $deviceId
+        ]);
+
+        $out = [];
+        foreach (($rows['items'] ?? []) as $r) {
+            $out[] = [
+                'mac'      => (string) ($r['mac'] ?? ''),
+                'host'     => (string) ($r['computername'] ?? ''),
+                'ip'       => (string) ($r['ip4log.ip'] ?? ''),
+                'port'     => (string) ($r['locationlog.port'] ?? ''),
+                'reg'      => strtolower((string) ($r['status'] ?? '')) === 'reg' ? 'REG' : 'UNREG',
+                'role'     => (string) ($r['category_id'] ?? ''),
+                'vendor'   => (string) ($r['device_manufacturer'] ?? $r['device_class'] ?? ''),
+                'os'       => (string) ($r['device_type'] ?? ''),
+                'owner'    => (string) ($r['pid'] ?? ''),
+                'dhcpFp'   => (string) ($r['dhcp_fingerprint'] ?? $r['dhcp_vendor'] ?? ''),
+                'lastSeen' => (string) ($r['last_seen'] ?? ''),
+                'lastArp'  => (string) ($r['last_arp'] ?? ''),
+                'lastDhcp' => (string) ($r['last_dhcp'] ?? '')
+            ];
+        }
+        return $out;
+    }
+
+    /**
      * Recent 802.1X auth failures (radius_audit_logs filtered to reject).
      *
      * @return array<int, array<string, mixed>>
