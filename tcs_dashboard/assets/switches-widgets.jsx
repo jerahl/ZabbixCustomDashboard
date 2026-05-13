@@ -233,7 +233,7 @@ const PacketFenceDevicePane = ({ host, detail }) => {
           </div>
           <div>
             <div className="k">Role</div>
-            <div className="v sans"><span className={`role-tag ${d.role}`}>{d.role}</span></div>
+            <div className="v sans"><span className={`role-tag ${d.roleClass || "unknown"}`}>{d.role || "—"}</span></div>
           </div>
           <div>
             <div className="k">Switch</div>

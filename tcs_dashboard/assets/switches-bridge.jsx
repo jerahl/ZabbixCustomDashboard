@@ -112,18 +112,20 @@
         const pfRows = _pfByKey[k] || [];
         const pfPrimary = pfRows[0] || null;
         const device = pfPrimary ? {
-            mac:      pfPrimary.mac,
-            reg:      pfPrimary.reg,
-            ip:       pfPrimary.ip,
-            host:     pfPrimary.host || "—",
-            vendor:   pfPrimary.vendor || "—",
-            os:       pfPrimary.os || "—",
-            owner:    pfPrimary.owner || "—",
-            dhcpFp:   pfPrimary.dhcpFp || "—",
-            lastSeen: pfPrimary.lastSeen || "—",
-            lastArp:  pfPrimary.lastArp || "—",
-            lastDhcp: pfPrimary.lastDhcp || "—",
-            role:     pfRoleClass(pfPrimary.role)
+            mac:       pfPrimary.mac,
+            reg:       pfPrimary.reg,
+            ip:        pfPrimary.ip,
+            host:      pfPrimary.host || "—",
+            vendor:    pfPrimary.vendor || "—",
+            os:        pfPrimary.os || "—",
+            owner:     pfPrimary.owner || "—",
+            dhcpFp:    pfPrimary.dhcpFp || "—",
+            lastSeen:  pfPrimary.lastSeen || "—",
+            lastArp:   pfPrimary.lastArp || "—",
+            lastDhcp:  pfPrimary.lastDhcp || "—",
+            // Raw label for display, normalized class for the chip's color.
+            role:      pfPrimary.role || "",
+            roleClass: pfRoleClass(pfPrimary.role)
         } : null;
 
         // Server gives us bytes/sec on each side. Convert to kbps for the
