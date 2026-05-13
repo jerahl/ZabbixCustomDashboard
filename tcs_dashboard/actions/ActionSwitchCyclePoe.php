@@ -3,6 +3,7 @@
 namespace Modules\TcsDashboard\Actions;
 
 use API;
+use CController;
 use CControllerResponseData;
 use CControllerResponseFatal;
 use CWebUser;
