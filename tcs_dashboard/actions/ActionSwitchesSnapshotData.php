@@ -205,6 +205,50 @@ class ActionSwitchesSnapshotData extends ActionDataBase {
     }
 
     /**
+     * Walk full template ancestry (parents + parents-of-parents).
+     * Zabbix's selectParentTemplates is one hop only.
+     *
+     * @return array<int, string>
+     */
+    private static function collectTemplateAncestry(string $hostid): array {
+        $hosts = API::Host()->get([
+            'output'                => ['hostid'],
+            'hostids'               => [$hostid],
+            'selectParentTemplates' => ['templateid']
+        ]) ?: [];
+        $seen  = [];
+        $queue = [];
+        if ($hosts) {
+            foreach (($hosts[0]['parentTemplates'] ?? []) as $t) {
+                $queue[] = (string) $t['templateid'];
+            }
+        }
+        while ($queue) {
+            $batch = [];
+            foreach ($queue as $tid) {
+                if (!isset($seen[$tid])) {
+                    $seen[$tid] = true;
+                    $batch[] = $tid;
+                }
+            }
+            $queue = [];
+            if (!$batch) break;
+            $rows = API::Template()->get([
+                'output'                => ['templateid'],
+                'templateids'           => $batch,
+                'selectParentTemplates' => ['templateid']
+            ]) ?: [];
+            foreach ($rows as $t) {
+                foreach (($t['parentTemplates'] ?? []) as $p) {
+                    $pid = (string) $p['templateid'];
+                    if (!isset($seen[$pid])) $queue[] = $pid;
+                }
+            }
+        }
+        return array_keys($seen);
+    }
+
+    /**
      * Generic version of resolvePfMacros — pull any macro names through
      * the host → templates → globals chain. Host wins.
      *
@@ -221,17 +265,7 @@ class ActionSwitchesSnapshotData extends ActionDataBase {
         ]) ?: [];
         foreach ($globals as $r) $bag[$r['macro']] = (string) $r['value'];
 
-        $hosts = API::Host()->get([
-            'output'                => ['hostid'],
-            'hostids'               => [$hostid],
-            'selectParentTemplates' => ['templateid']
-        ]) ?: [];
-        $templateIds = [];
-        if ($hosts) {
-            foreach (($hosts[0]['parentTemplates'] ?? []) as $t) {
-                $templateIds[] = $t['templateid'];
-            }
-        }
+        $templateIds = self::collectTemplateAncestry($hostid);
         if ($templateIds) {
             $tplMacros = API::UserMacro()->get([
                 'output'  => ['macro', 'value'],
@@ -269,19 +303,8 @@ class ActionSwitchesSnapshotData extends ActionDataBase {
             $bag[$r['macro']] = (string) $r['value'];
         }
 
-        // 2. Template-inherited macros on this host.
-        $hosts = API::Host()->get([
-            'output'          => ['hostid'],
-            'hostids'         => [$hostid],
-            'selectMacros'    => ['macro', 'value'],
-            'selectParentTemplates' => ['templateid']
-        ]) ?: [];
-        $templateIds = [];
-        if ($hosts) {
-            foreach (($hosts[0]['parentTemplates'] ?? []) as $t) {
-                $templateIds[] = $t['templateid'];
-            }
-        }
+        // 2. Template-inherited macros — recursive ancestry walk.
+        $templateIds = self::collectTemplateAncestry($hostid);
         if ($templateIds) {
             $tplMacros = API::UserMacro()->get([
                 'output'      => ['macro', 'value'],

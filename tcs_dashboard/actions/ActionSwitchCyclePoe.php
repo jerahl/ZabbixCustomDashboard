@@ -117,6 +117,51 @@ class ActionSwitchCyclePoe extends CController {
         }
     }
 
+    /**
+     * Walk the full template ancestry of a host (direct parents + their
+     * parents, etc.) so macro lookups catch inheritance through nested
+     * templates. Returns a deduped list of template ids.
+     *
+     * @return array<int, string>
+     */
+    private function collectTemplateAncestry(string $hostid): array {
+        $hosts = API::Host()->get([
+            'output'                => ['hostid'],
+            'hostids'               => [$hostid],
+            'selectParentTemplates' => ['templateid']
+        ]) ?: [];
+        $seen  = [];
+        $queue = [];
+        if ($hosts) {
+            foreach (($hosts[0]['parentTemplates'] ?? []) as $t) {
+                $queue[] = (string) $t['templateid'];
+            }
+        }
+        while ($queue) {
+            $batch = [];
+            foreach ($queue as $tid) {
+                if (!isset($seen[$tid])) {
+                    $seen[$tid] = true;
+                    $batch[] = $tid;
+                }
+            }
+            $queue = [];
+            if (!$batch) break;
+            $rows = API::Template()->get([
+                'output'                => ['templateid'],
+                'templateids'           => $batch,
+                'selectParentTemplates' => ['templateid']
+            ]) ?: [];
+            foreach ($rows as $t) {
+                foreach (($t['parentTemplates'] ?? []) as $p) {
+                    $pid = (string) $p['templateid'];
+                    if (!isset($seen[$pid])) $queue[] = $pid;
+                }
+            }
+        }
+        return array_keys($seen);
+    }
+
     /** @return array{host:string, ip:?string}|null */
     private function loadHost(string $hostid): ?array {
         $hosts = API::Host()->get([
@@ -165,18 +210,11 @@ class ActionSwitchCyclePoe extends CController {
         ]) ?: [];
         foreach ($globals as $r) $bag[$r['macro']] = (string) $r['value'];
 
-        // 2. Template-inherited macros.
-        $hosts = API::Host()->get([
-            'output'                => ['hostid'],
-            'hostids'               => [$hostid],
-            'selectParentTemplates' => ['templateid']
-        ]) ?: [];
-        $templateIds = [];
-        if ($hosts) {
-            foreach (($hosts[0]['parentTemplates'] ?? []) as $t) {
-                $templateIds[] = $t['templateid'];
-            }
-        }
+        // 2. Template-inherited macros — walk the full ancestry, not just
+        // the direct parents. selectParentTemplates is one hop only, so a
+        // macro on a base template that a mid-tier template inherits from
+        // gets missed without recursion.
+        $templateIds = $this->collectTemplateAncestry($hostid);
         if ($templateIds) {
             $tpl = API::UserMacro()->get([
                 'output'  => ['macro', 'value'],
