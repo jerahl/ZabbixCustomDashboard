@@ -244,6 +244,14 @@
   border-color: var(--warn);
   z-index: 1;
 }
+.port.err {
+  outline: 2px solid var(--err);
+  outline-offset: -1px;
+  border-color: var(--err);
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.55);
+  z-index: 2;
+}
+.port.err.selected { outline-color: var(--err); }
 
 @keyframes led-pulse {
   0%, 100% { opacity: 0.35; }

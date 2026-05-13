@@ -99,7 +99,7 @@ const Port = ({ p, selected, onClick }) => {
     );
   }
   const speedClass = p.state === "up" ? `spd-${p.speed}` : "";
-  const cls = ["port", p.state, speedClass, p.poe ? "poe" : "", p.alert ? "alert" : "", p.state === "down" ? "searching" : "", selected ? "selected" : ""].filter(Boolean).join(" ");
+  const cls = ["port", p.state, speedClass, p.poe ? "poe" : "", p.err ? "err" : "", p.alert ? "alert" : "", p.state === "down" ? "searching" : "", selected ? "selected" : ""].filter(Boolean).join(" ");
   const speedLbl = p.speed === 10000 ? "10G" : p.speed === 1000 ? "1G" : p.speed === 100 ? "100M" : "10M";
   return (
     <div className={cls} onClick={onClick} title={`Port ${p.n} · ${p.state}${p.state === "up" ? " · " + speedLbl : ""}${p.poe ? " · PoE" : ""}`}>
@@ -336,14 +336,14 @@ const PortDetailPane = ({ detail, onClose }) => {
             <div className="pd-lbl">Errors 1H <Icon name="events" size={11} /></div>
             <div className="pd-mid" />
             <div className={"pd-val " + (detail.errors1h > 0 ? "warn" : "muted")} style={{fontSize: 11}}>
-              {detail.errors1h} <span style={{color:"var(--muted)"}}>(in 0 / out {detail.errors1h}), stable</span>
+              {detail.errors1h} <span style={{color:"var(--muted)"}}>(in {detail.errIn || 0} / out {detail.errOut || 0})</span>
             </div>
           </div>
           <div className="pd-row">
             <div className="pd-lbl">Discards 1H <Icon name="events" size={11} /></div>
             <div className="pd-mid" />
             <div className={"pd-val " + (detail.discards1h > 0 ? "warn" : "muted")} style={{fontSize: 11}}>
-              {detail.discards1h} <span style={{color:"var(--muted)"}}>(in 0 / out {detail.discards1h}), stable</span>
+              {detail.discards1h} <span style={{color:"var(--muted)"}}>(in {detail.discIn || 0} / out {detail.discOut || 0})</span>
             </div>
           </div>
           <div className="pd-row">

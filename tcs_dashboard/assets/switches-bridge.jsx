@@ -93,6 +93,11 @@
         const lineKbps = (port.speed || 1000) * 1000;
         const utilPct  = lineKbps > 0 ? Math.min(100, Math.round((Math.max(inKbps, outKbps) / lineKbps) * 100)) : 0;
 
+        const errIn   = tr ? (tr.errIn   || 0) : 0;
+        const errOut  = tr ? (tr.errOut  || 0) : 0;
+        const discIn  = tr ? (tr.discIn  || 0) : 0;
+        const discOut = tr ? (tr.discOut || 0) : 0;
+
         return {
             label:      `${memberIdx}:${port.n}`,
             state:      port.state,
@@ -105,8 +110,12 @@
             inHist:     FLAT60,
             outHist:    FLAT60,
             onlineHist: FLAT60.map(() => port.state === "up" ? "ok" : "off"),
-            errors1h:   tr ? (tr.err || 0) : 0,
-            discards1h: 0,
+            errors1h:   errIn + errOut,
+            errIn,
+            errOut,
+            discards1h: discIn + discOut,
+            discIn,
+            discOut,
             device:     null,    // PacketFenceDevicePane shows empty-state on null
             extraMacs:  macs.length > 1 ? macs.length - 1 : 0,
             macs,
@@ -178,6 +187,11 @@
             const maxPoe = maxPoePortByMember.get(m) || 0;
             const isSfp = maxPoe > 0 && portNum > maxPoe;
 
+            // Flag the cell red when the port has *any* in/out errors so the
+            // user can spot bad ports at a glance.
+            const tr = (window._tcsTrafficByKey || {})[key] || null;
+            const errCount = tr ? ((tr.errIn || 0) + (tr.errOut || 0)) : 0;
+
             if (!byMember.has(m)) byMember.set(m, []);
             byMember.get(m).push({
                 n: portNum,
@@ -185,6 +199,7 @@
                 speed,
                 poe: isDelivering,
                 alert: false,
+                err: errCount > 0,
                 sfp: isSfp
             });
         }

@@ -202,10 +202,14 @@ class SwitchClient {
     }
 
     /**
-     * Per-port link speed in Mbps, keyed by "m.p". Template item:
-     *   net.if.speed[ifHighSpeed.{#SNMPINDEX}]    (Mbps)
-     * Older templates ship the same data as ifSpeed in bps via
-     *   net.if.speed[ifSpeed.{#SNMPINDEX}]        — convert bps → Mbps.
+     * Per-port link speed in Mbps, keyed by "m.p". Template items:
+     *   net.if.speed[ifHighSpeed.<idx>]   — nominally Mbps, but the Extreme
+     *                                       EXOS template ships a × 1,000,000
+     *                                       preprocessor + units=bps, so the
+     *                                       stored value is bps. We have to
+     *                                       check the item's units field
+     *                                       rather than guess from the key.
+     *   net.if.speed[ifSpeed.<idx>]       — bps (per IF-MIB).
      *
      * @param array<int,array<string,mixed>> $items
      * @return array<string, int>
@@ -214,16 +218,24 @@ class SwitchClient {
         $out = [];
         foreach ($items as $it) {
             $k = (string) $it['key_'];
-            $idx = null; $unitDivisor = 1;
             $idx = self::parseMemberPort($k, 'net.if.speed[ifHighSpeed.');
-            if ($idx === null) {
-                $idx = self::parseMemberPort($k, 'net.if.speed[ifSpeed.');
-                if ($idx !== null) $unitDivisor = 1_000_000;  // bps → Mbps
-            }
+            if ($idx === null) $idx = self::parseMemberPort($k, 'net.if.speed[ifSpeed.');
             if ($idx === null) continue;
 
             [$member, $port] = $idx;
-            $mbps = (int) round(((float) $it['lastvalue']) / $unitDivisor);
+            $val   = (float) $it['lastvalue'];
+            $units = strtolower(trim((string) ($it['units'] ?? '')));
+
+            // Decide the stored unit.
+            //   - units explicitly "bps" → divide by 1e6 to get Mbps.
+            //   - units explicitly "mbps"/"" with a small value → already Mbps.
+            //   - heuristic fallback: anything > 100,000 must be bps (no
+            //     realistic interface speed is 100 Tbps in Mbps).
+            if ($units === 'bps' || $val > 100_000) {
+                $mbps = (int) round($val / 1_000_000);
+            } else {
+                $mbps = (int) round($val);
+            }
             if ($mbps <= 0) continue;
             $out[$member.'.'.$port] = $mbps;
         }
@@ -418,15 +430,18 @@ class SwitchClient {
      * @return array<string, array{in:float, out:float, err:int}>
      */
     private function extractTraffic(array $items): array {
-        // Template variants (Extreme EXOS by SNMP w POE uses the first two):
-        //   net.if.in[ifHCInOctets.<idx>]       net.if.out[ifHCOutOctets.<idx>]
-        //   net.if.in.errors[ifInErrors.<idx>]  net.if.out.errors[ifOutErrors.<idx>]
-        //   net.if.errors[<m>.<p>]              (older generic-SNMP templates)
+        // Per-port rate + error + discard items. Extreme EXOS by SNMP w POE
+        // ships in/out variants for each — we keep them separate so the UI
+        // can show "in X / out Y" honestly.
+        //
         // parseMemberPort handles both single-ifIndex and "m.p" suffixes.
         $prefixes = [
-            'in'  => ['net.if.in[ifHCInOctets.',  'net.if.in['],
-            'out' => ['net.if.out[ifHCOutOctets.', 'net.if.out['],
-            'err' => ['net.if.in.errors[ifInErrors.', 'net.if.out.errors[ifOutErrors.', 'net.if.errors[']
+            'in'      => ['net.if.in[ifHCInOctets.',           'net.if.in['],
+            'out'     => ['net.if.out[ifHCOutOctets.',         'net.if.out['],
+            'errIn'   => ['net.if.in.errors[ifInErrors.',      'net.if.in.errors['],
+            'errOut'  => ['net.if.out.errors[ifOutErrors.',    'net.if.out.errors['],
+            'discIn'  => ['net.if.in.discards[ifInDiscards.',  'net.if.in.discards['],
+            'discOut' => ['net.if.out.discards[ifOutDiscards.','net.if.out.discards[']
         ];
 
         $by = [];
@@ -441,16 +456,22 @@ class SwitchClient {
             }
             if ($hit === null) continue;
             $idx = $hit[0].'.'.$hit[1];
-            $by[$idx] ??= ['in' => 0.0, 'out' => 0.0, 'err' => 0];
+            $by[$idx] ??= [
+                'in' => 0.0, 'out' => 0.0,
+                'errIn' => 0, 'errOut' => 0,
+                'discIn' => 0, 'discOut' => 0
+            ];
             $val = (float) $it['lastvalue'];
-            // Two error items per port (in + out); sum into one bucket.
-            if ($hitKind === 'err') $by[$idx]['err'] += (int) $val;
-            else                    $by[$idx][$hitKind] = $val;
+            if ($hitKind === 'in' || $hitKind === 'out') {
+                $by[$idx][$hitKind] = $val;
+            } else {
+                $by[$idx][$hitKind] = (int) $val;
+            }
         }
         return $by;
     }
 
-    /** @param array<string, array{in:float, out:float, err:int}> $traffic */
+    /** @param array<string, array<string, int|float>> $traffic */
     private function uplinksFromTraffic(array $traffic, int $limit = 4): array {
         $rows = [];
         foreach ($traffic as $idx => $v) {
@@ -458,10 +479,10 @@ class SwitchClient {
                 'name'   => str_replace('.', ':', (string) $idx),
                 'type'   => '—',
                 'peer'   => '—',
-                'rxMbps' => round(($v['in']  * 8) / 1_000_000, 1),
-                'txMbps' => round(($v['out'] * 8) / 1_000_000, 1),
+                'rxMbps' => round((((float) $v['in'])  * 8) / 1_000_000, 1),
+                'txMbps' => round((((float) $v['out']) * 8) / 1_000_000, 1),
                 'util'   => 0,
-                'errors' => (int) $v['err']
+                'errors' => (int) ($v['errIn'] ?? 0) + (int) ($v['errOut'] ?? 0)
             ];
         }
         usort($rows, fn($a, $b) => ($b['rxMbps'] + $b['txMbps']) <=> ($a['rxMbps'] + $a['txMbps']));
