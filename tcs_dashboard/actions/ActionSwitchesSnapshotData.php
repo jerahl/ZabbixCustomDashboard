@@ -78,13 +78,11 @@ class ActionSwitchesSnapshotData extends ActionDataBase {
             $payload['pfNodes'] = new \stdClass();
         }
 
-        // PF admin base URL for the "View in PacketFence" link. Strips the
-        // /api/v1[...] suffix if the operator's macro points at the API
-        // path (the admin UI is served from the bare host).
-        $pfMacros = $this->resolvePfMacros($hostid);
-        $payload['pfBase'] = $pfMacros
-            ? preg_replace('#/api/v1.*$#', '', (string) $pfMacros['url'])
-            : '';
+        // PF admin base URL for the "View in PacketFence" link. The PF
+        // admin UI and API typically live on different ports (e.g. API on
+        // :9999, admin on :1443), so we use a dedicated {$PF.ADMIN_URL}
+        // macro rather than deriving from {$PF.URL}.
+        $payload['pfBase'] = $this->resolvePfAdminUrl($hostid);
 
         $this->setResponse(new CControllerResponseData([
             'main_block' => json_encode($payload, JSON_UNESCAPED_SLASHES)
@@ -197,6 +195,62 @@ class ActionSwitchesSnapshotData extends ActionDataBase {
      *
      * @return array{url:string,user:string,pass:string,verify_ssl:bool}|null
      */
+    /**
+     * Resolve {$PF.ADMIN_URL} through the same host → templates → globals
+     * chain. Returns '' if unset.
+     */
+    private function resolvePfAdminUrl(string $hostid): string {
+        $bag = $this->macroChain($hostid, ['{$PF.ADMIN_URL}']);
+        return rtrim((string) ($bag['{$PF.ADMIN_URL}'] ?? ''), '/');
+    }
+
+    /**
+     * Generic version of resolvePfMacros — pull any macro names through
+     * the host → templates → globals chain. Host wins.
+     *
+     * @param array<int, string> $names
+     * @return array<string, string>
+     */
+    private function macroChain(string $hostid, array $names): array {
+        $bag = [];
+
+        $globals = API::UserMacro()->get([
+            'output'      => ['macro', 'value'],
+            'globalmacro' => true,
+            'filter'      => ['macro' => $names]
+        ]) ?: [];
+        foreach ($globals as $r) $bag[$r['macro']] = (string) $r['value'];
+
+        $hosts = API::Host()->get([
+            'output'                => ['hostid'],
+            'hostids'               => [$hostid],
+            'selectParentTemplates' => ['templateid']
+        ]) ?: [];
+        $templateIds = [];
+        if ($hosts) {
+            foreach (($hosts[0]['parentTemplates'] ?? []) as $t) {
+                $templateIds[] = $t['templateid'];
+            }
+        }
+        if ($templateIds) {
+            $tplMacros = API::UserMacro()->get([
+                'output'  => ['macro', 'value'],
+                'hostids' => $templateIds,
+                'filter'  => ['macro' => $names]
+            ]) ?: [];
+            foreach ($tplMacros as $r) $bag[$r['macro']] = (string) $r['value'];
+        }
+
+        $hostMacros = API::UserMacro()->get([
+            'output'  => ['macro', 'value'],
+            'hostids' => [$hostid],
+            'filter'  => ['macro' => $names]
+        ]) ?: [];
+        foreach ($hostMacros as $r) $bag[$r['macro']] = (string) $r['value'];
+
+        return $bag;
+    }
+
     private function resolvePfMacros(string $hostid): ?array {
         $names = ['{$PF.URL}', '{$PF.USER}', '{$PF.PASSWORD}', '{$PF.VERIFY.SSL}'];
 

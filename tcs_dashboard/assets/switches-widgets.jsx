@@ -166,8 +166,10 @@ const PfActionRow = ({ mac }) => {
   const [busy, setBusy] = React.useState(null);    // "reevaluate_access" | "restart_switchport" | null
   const [msg, setMsg]   = React.useState({ kind: "", text: "" });
   const adminBase = (window.PF_ADMIN_BASE || "").replace(/\/+$/, "");
+  // PF admin UI route is /admin/#/node/<mac> (singular) — matches the
+  // pf_device reference widget. Trailing /info is invalid in PF 11+.
   const viewHref = adminBase && mac
-    ? `${adminBase}/admin/#/nodes/${encodeURIComponent(mac)}/info`
+    ? `${adminBase}/admin/#/node/${encodeURIComponent(mac)}`
     : null;
 
   const run = React.useCallback(async (op, label) => {
