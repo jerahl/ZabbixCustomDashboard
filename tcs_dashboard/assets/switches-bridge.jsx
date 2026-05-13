@@ -477,18 +477,19 @@
             return { ok: false, error: "endpoint not configured" };
         }
         try {
+            const form = new URLSearchParams({
+                hostid,
+                member: String(Number(member) || 1),
+                port:   String(Number(port)   || 0)
+            });
             const resp = await fetch(url, {
                 method: "POST",
                 credentials: "same-origin",
                 headers: {
                     "Accept": "application/json",
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
                 },
-                body: JSON.stringify({
-                    hostid,
-                    member: Number(member) || 1,
-                    port:   Number(port)   || 0
-                })
+                body: form.toString()
             });
             const body = await resp.json().catch(() => ({}));
             if (!resp.ok) {
@@ -509,14 +510,19 @@
         if (!url || !hostid) return { ok: false, error: "endpoint not configured" };
         if (!mac || !op)     return { ok: false, error: "mac and op required" };
         try {
+            // Zabbix's CController::validateInput reads $_REQUEST, which is
+            // populated from form-encoded bodies — JSON bodies don't reach
+            // it. Form-encode the payload so the server-side mandatory-field
+            // check finds hostid / mac / op.
+            const form = new URLSearchParams({ hostid, mac: String(mac), op: String(op) });
             const resp = await fetch(url, {
                 method: "POST",
                 credentials: "same-origin",
                 headers: {
                     "Accept": "application/json",
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
                 },
-                body: JSON.stringify({ hostid, mac: String(mac), op: String(op) })
+                body: form.toString()
             });
             const body = await resp.json().catch(() => ({}));
             if (!resp.ok) {
