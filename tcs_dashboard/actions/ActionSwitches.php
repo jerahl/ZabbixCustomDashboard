@@ -137,7 +137,10 @@ class ActionSwitches extends ActionBase {
 
         $groupids = array_column($siteGroups, 'groupid');
 
-        // Step 2: hosts in those groups, tag target=exos.
+        // Step 2: hosts in those groups, tag target=exos. inheritedTags=true
+        // is critical — operators typically put the tag on the EXOS template
+        // rather than every host individually, and the default host.get tag
+        // filter only inspects host-level tags.
         $taggedHosts = API::Host()->get([
             'output'           => ['hostid', 'host', 'name', 'status'],
             'selectInterfaces' => ['ip', 'main'],
@@ -147,6 +150,7 @@ class ActionSwitches extends ActionBase {
             'groupids'         => $groupids,
             'tags'             => [['tag' => 'target', 'value' => 'exos', 'operator' => 1]],
             'evaltype'         => 0,
+            'inheritedTags'    => true,
             'preservekeys'     => true
         ]) ?: [];
         if (!$taggedHosts) return [];

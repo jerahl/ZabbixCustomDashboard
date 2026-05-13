@@ -26,6 +26,10 @@
     const members = Array.isArray(boot.members) ? boot.members : [];
     const fdb     = Array.isArray(boot.fdb)     ? boot.fdb     : [];
     const fleet   = Array.isArray(boot.fleet)   ? boot.fleet   : [];
+    // boot.fleet being defined (even as []) means the server attempted
+    // discovery. In that case we ALWAYS replace SWITCH_SITES so the mock
+    // demo data can't shadow a real-but-empty fleet.
+    const liveMode = Object.prototype.hasOwnProperty.call(boot, "fleet");
 
     // Expose the bound hostid so the CYCLE button can POST without prop-drilling.
     window.TCS_SWITCH_HOSTID = host ? String(host.hostid || "") : "";
@@ -116,11 +120,10 @@
     /* Fleet listing                                                         */
     /* --------------------------------------------------------------------- */
 
-    // When the server discovered a fleet, replace the mock SWITCH_SITES
-    // entirely. Mark the currently-bound switch as selected so the navigator
-    // highlights it. If no fleet came back (e.g. EXOS template not yet
-    // imported), keep the mock data so the page still demos.
-    if (fleet.length) {
+    // When the server attempted fleet discovery, replace SWITCH_SITES with
+    // whatever it returned — including an empty array. Mock data is only
+    // kept if the server didn't ship a fleet field at all (older builds).
+    if (liveMode) {
         const activeHostid = host ? String(host.hostid || "") : "";
         const activeHost   = host ? String(host.host || "")   : "";
         window.SWITCH_SITES = fleet.map(site => ({
@@ -132,6 +135,11 @@
                     : sw.id === activeHost
             }))
         }));
+        const total = fleet.reduce((n, s) => n + (s.switches || []).length, 0);
+        console.info(`[tcs] switch fleet: ${fleet.length} site(s), ${total} host(s)`);
+        if (total === 0) {
+            console.warn("[tcs] switch fleet empty — verify Site/* host groups exist and EXOS hosts carry tag target=exos (template-inherited tags are now matched).");
+        }
     } else if (host && Array.isArray(window.SWITCH_SITES)) {
         // Fallback: no fleet from server but we do have a bound host —
         // splice it in so users see real counters for the selected switch.
