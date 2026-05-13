@@ -82,6 +82,11 @@
             "class": "ActionServer",
             "view": "server.view",
             "layout": "layout.htmlpage"
+        },
+        "tcs.switch.cyclepoe": {
+            "class": "ActionSwitchCyclePoe",
+            "layout": "layout.json",
+            "view": null
         }
     }
 }

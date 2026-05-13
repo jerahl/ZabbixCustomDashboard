@@ -3,23 +3,24 @@
 namespace Modules\TcsDashboard\Lib;
 
 /**
- * Thin PacketFence v15 REST client.
+ * PacketFence v15 REST client.
  *
- * Slot for the verbatim 984-line lift of
- * jerahl/ZabbixExtremeIQ/apdetail/includes/PFClient.php (see
- * notes/lift-manifest.md §C). Until that lift lands, this stub exposes the
- * same constructor + the small subset of methods consumed by
- * ActionDashboard::collectPacketFence() — recent clients on a node, and
- * recent auth failures — so the dashboard pipeline can be wired end-to-end
- * without source-repo access during M0.
+ * Modeled on the apdetail/includes/PFClient.php surface documented in
+ * notes/lift-manifest.md §C — same constructor signature, same factory
+ * (fromMacros), same call-sites in ActionDashboard. When the verbatim
+ * 984-line lift lands, drop this file and keep the same public methods.
  *
- * Replacement plan: when the apdetail PFClient.php is lifted, drop this file
- * and keep the same public surface (`fromMacros()`, `clientsForNode()`,
- * `authFailuresForNode()`); call-sites in ActionDashboard won't change.
+ * Features:
+ *   - Token login + auto-refresh on 401 (retries once)
+ *   - APCu cache for the bearer token with a filesystem fallback so the
+ *     same token is shared across PHP requests (configurable TTL)
+ *   - Per-call connect/total timeouts and explicit User-Agent
+ *   - TLS verification on by default; opt-out via constructor flag
+ *   - Helpers for the dashboard surfaces consumed by the React tabs pane:
+ *     nodes, locationlog, radius audit, fingerbank category lookup
  *
- * Auth: token endpoint (`/api/v1/login`) returns a bearer used on subsequent
- * `/api/v1/...` calls. Tokens are cached on disk for the lifetime of the
- * PHP request only — no APCu dependency.
+ * PHP 8.0 carry-forward: include array_is_list polyfill (AP G21) so the
+ * file is drop-in compatible with the apdetail lift target.
  */
 class PFClient {
 
@@ -27,11 +28,20 @@ class PFClient {
     private string $user;
     private string $pass;
     private bool   $verifySsl;
+
     private ?string $token = null;
+    private int     $tokenExpiry = 0;
+
+    /** Seconds. Tokens are re-used until either expiry or a 401 forces refresh. */
+    private const TOKEN_TTL_DEFAULT = 1800;
 
     private const TIMEOUT_CONNECT = 10;
     private const TIMEOUT_TOTAL   = 30;
     private const UA              = 'TcsDashboard/1.0 (+PFClient)';
+
+    /** Cache namespace for APCu / filesystem fallback. */
+    private const CACHE_PREFIX = 'tcs_pf_token::';
+    private const CACHE_DIR    = '/tmp/tcs_dashboard_cache';
 
     public function __construct(
         string $url,
@@ -39,6 +49,8 @@ class PFClient {
         #[\SensitiveParameter] string $pass,
         bool $verifySsl = true
     ) {
+        self::ensureArrayIsListPolyfill();
+
         $this->url       = rtrim($url, '/');
         $this->user      = $user;
         $this->pass      = $pass;
@@ -46,9 +58,6 @@ class PFClient {
     }
 
     /**
-     * Convenience constructor from a resolved macro bag — mirrors the shape
-     * Config::pf() will return once lib/Config.php lands (integration-plan §4).
-     *
      * @param array{url:string,user:string,pass:string,verify_ssl?:bool} $cfg
      */
     public static function fromMacros(array $cfg): self {
@@ -60,30 +69,35 @@ class PFClient {
         );
     }
 
+    /* ------------------------------------------------------------------ */
+    /* Public surface — what ActionDashboard / the tabs UI consumes       */
+    /* ------------------------------------------------------------------ */
+
     /**
-     * Recent clients associated to a switch / AP, keyed by MAC. Shape matches
-     * the `pfClients` row the React tabs pane expects
-     * (assets/tabs.jsx → window.PF_CLIENTS).
+     * Recent clients on a switch / AP. Result shape matches the rows
+     * window.PF_CLIENTS expects (assets/tabs.jsx).
      *
      * @return array<int, array<string, mixed>>
      */
     public function clientsForNode(string $deviceId, int $limit = 200): array {
         $rows = $this->get('/api/v1/nodes', [
-            'fields'         => 'mac,computername,ip4log.ip,last_seen,status,category_id,locationlog.switch,locationlog.port',
-            'limit'          => $limit,
-            'sort'           => 'last_seen DESC',
+            'fields' => 'mac,computername,ip4log.ip,last_seen,status,category_id,'
+                       .'locationlog.switch,locationlog.port,locationlog.ssid',
+            'limit'  => $limit,
+            'sort'   => 'last_seen DESC',
             'locationlog.switch' => $deviceId
         ]);
 
-        $items = $rows['items'] ?? [];
         $out = [];
-        foreach ($items as $r) {
+        foreach (($rows['items'] ?? []) as $r) {
             $out[] = [
                 'mac'      => (string) ($r['mac'] ?? ''),
                 'name'     => (string) ($r['computername'] ?? ''),
                 'ip'       => (string) ($r['ip4log.ip'] ?? ''),
                 'port'     => (string) ($r['locationlog.port'] ?? ''),
+                'ssid'     => (string) ($r['locationlog.ssid'] ?? ''),
                 'status'   => (string) ($r['status'] ?? ''),
+                'category' => (string) ($r['category_id'] ?? ''),
                 'lastSeen' => (string) ($r['last_seen'] ?? '')
             ];
         }
@@ -91,22 +105,21 @@ class PFClient {
     }
 
     /**
-     * Recent 802.1X / auth failures for a device, newest-first.
+     * Recent 802.1X auth failures (radius_audit_logs filtered to reject).
      *
      * @return array<int, array<string, mixed>>
      */
     public function authFailuresForNode(string $deviceId, int $limit = 50): array {
         $rows = $this->get('/api/v1/radius_audit_logs', [
-            'fields'    => 'mac,user_name,switch,port,auth_status,reason,created_at',
-            'limit'     => $limit,
-            'sort'      => 'created_at DESC',
-            'switch'    => $deviceId,
+            'fields'      => 'mac,user_name,switch,port,auth_status,reason,created_at',
+            'limit'       => $limit,
+            'sort'        => 'created_at DESC',
+            'switch'      => $deviceId,
             'auth_status' => 'reject'
         ]);
 
-        $items = $rows['items'] ?? [];
         $out = [];
-        foreach ($items as $r) {
+        foreach (($rows['items'] ?? []) as $r) {
             $out[] = [
                 'mac'    => (string) ($r['mac'] ?? ''),
                 'user'   => (string) ($r['user_name'] ?? ''),
@@ -118,40 +131,131 @@ class PFClient {
         return $out;
     }
 
+    /**
+     * Lookup a single node by MAC. Returns null when the node isn't known.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function node(string $mac): ?array {
+        $rows = $this->get('/api/v1/nodes/'.rawurlencode($mac), []);
+        $item = $rows['item'] ?? $rows;
+        return is_array($item) && !empty($item) ? $item : null;
+    }
+
+    /**
+     * Current location for a MAC (which switch + port it's seen on).
+     *
+     * @return array<string, mixed>|null
+     */
+    public function locationFor(string $mac): ?array {
+        $rows = $this->get('/api/v1/locationlogs', [
+            'mac'   => $mac,
+            'limit' => 1,
+            'sort'  => 'start_time DESC'
+        ]);
+        $items = $rows['items'] ?? [];
+        return $items ? $items[0] : null;
+    }
+
+    /**
+     * Fingerbank device-class label for a MAC, if PF has fingerprinted it.
+     */
+    public function fingerbankCategory(string $mac): ?string {
+        try {
+            $row = $this->get('/api/v1/fingerbank/local/device/'.rawurlencode($mac), []);
+            $name = $row['item']['name'] ?? ($row['name'] ?? null);
+            return is_string($name) && $name !== '' ? $name : null;
+        }
+        catch (\Throwable) {
+            return null;
+        }
+    }
+
     /* ------------------------------------------------------------------ */
-    /* Internals                                                          */
+    /* HTTP plumbing                                                      */
     /* ------------------------------------------------------------------ */
 
-    /** @param array<string, mixed> $query */
-    private function get(string $path, array $query = []): array {
+    /**
+     * @param array<string, mixed> $query
+     * @return array<string, mixed>
+     */
+    private function get(string $path, array $query): array {
+        return $this->call('GET', $path, $query, null);
+    }
+
+    /**
+     * Run the call. Refreshes the token once on 401 and retries.
+     *
+     * @param array<string, mixed> $query
+     * @param array<string, mixed>|null $body
+     * @return array<string, mixed>
+     */
+    private function call(string $method, string $path, array $query, ?array $body): array {
         $this->ensureToken();
+
+        [$status, $payload] = $this->raw($method, $path, $query, $body, [
+            'Authorization: Bearer '.($this->token ?? '')
+        ]);
+
+        if ($status === 401) {
+            // Token may have been revoked / expired server-side. Force one refresh.
+            $this->token = null;
+            $this->tokenExpiry = 0;
+            $this->forgetCachedToken();
+            $this->ensureToken();
+
+            [$status, $payload] = $this->raw($method, $path, $query, $body, [
+                'Authorization: Bearer '.($this->token ?? '')
+            ]);
+        }
+
+        if ($status >= 400) {
+            throw new \RuntimeException("PFClient: HTTP $status for $method $path");
+        }
+        return $payload;
+    }
+
+    private function ensureToken(): void {
+        if ($this->token !== null && $this->tokenExpiry > time()) return;
+
+        $cached = $this->readCachedToken();
+        if ($cached !== null) {
+            $this->token       = $cached['token'];
+            $this->tokenExpiry = $cached['expires'];
+            return;
+        }
+
+        [$status, $payload] = $this->raw('POST', '/api/v1/login', [], [
+            'username' => $this->user,
+            'password' => $this->pass
+        ], []);
+
+        if ($status >= 400) {
+            throw new \RuntimeException("PFClient: login failed (HTTP $status)");
+        }
+
+        $token = (string) ($payload['token'] ?? '');
+        if ($token === '') {
+            throw new \RuntimeException('PFClient: login returned no token');
+        }
+
+        $this->token       = $token;
+        $this->tokenExpiry = time() + self::TOKEN_TTL_DEFAULT;
+        $this->writeCachedToken($token, $this->tokenExpiry);
+    }
+
+    /**
+     * @param array<string, mixed> $query
+     * @param array<string, mixed>|null $body
+     * @param array<int, string> $extraHeaders
+     * @return array{0:int, 1:array<string,mixed>}
+     */
+    private function raw(string $method, string $path, array $query, ?array $body, array $extraHeaders): array {
         $url = $this->url . $path;
         if ($query) {
             $url .= (str_contains($path, '?') ? '&' : '?') . http_build_query($query);
         }
-        return $this->request('GET', $url, null, [
-            'Authorization: Bearer ' . ($this->token ?? '')
-        ]);
-    }
 
-    private function ensureToken(): void {
-        if ($this->token !== null) return;
-        $resp = $this->request('POST', $this->url . '/api/v1/login', [
-            'username' => $this->user,
-            'password' => $this->pass
-        ]);
-        $this->token = (string) ($resp['token'] ?? '');
-        if ($this->token === '') {
-            throw new \RuntimeException('PFClient: login returned no token');
-        }
-    }
-
-    /**
-     * @param array<string, mixed>|null $body
-     * @param array<int, string> $extraHeaders
-     * @return array<string, mixed>
-     */
-    private function request(string $method, string $url, ?array $body = null, array $extraHeaders = []): array {
         $ch = curl_init($url);
         if ($ch === false) {
             throw new \RuntimeException('PFClient: curl_init failed');
@@ -185,11 +289,77 @@ class PFClient {
         if ($raw === false) {
             throw new \RuntimeException("PFClient: transport error: $err");
         }
-        if ($code >= 400) {
-            throw new \RuntimeException("PFClient: HTTP $code for $method $url");
-        }
 
         $decoded = json_decode((string) $raw, true);
-        return is_array($decoded) ? $decoded : [];
+        return [$code, is_array($decoded) ? $decoded : []];
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Token caching: APCu when available, /tmp fallback otherwise        */
+    /* ------------------------------------------------------------------ */
+
+    private function cacheKey(): string {
+        return self::CACHE_PREFIX . sha1($this->url.'|'.$this->user);
+    }
+
+    /** @return array{token:string, expires:int}|null */
+    private function readCachedToken(): ?array {
+        $key = $this->cacheKey();
+
+        if (function_exists('apcu_fetch')) {
+            $ok = false;
+            /** @var mixed $hit */
+            $hit = apcu_fetch($key, $ok);
+            if ($ok && is_array($hit) && isset($hit['token'], $hit['expires']) && $hit['expires'] > time()) {
+                return ['token' => (string) $hit['token'], 'expires' => (int) $hit['expires']];
+            }
+        }
+
+        $path = self::CACHE_DIR . '/' . $key;
+        if (!is_file($path)) return null;
+        $raw = @file_get_contents($path);
+        if ($raw === false) return null;
+        $row = json_decode($raw, true);
+        if (!is_array($row) || !isset($row['token'], $row['expires'])) return null;
+        if ((int) $row['expires'] <= time()) return null;
+        return ['token' => (string) $row['token'], 'expires' => (int) $row['expires']];
+    }
+
+    private function writeCachedToken(string $token, int $expires): void {
+        $key = $this->cacheKey();
+        $payload = ['token' => $token, 'expires' => $expires];
+
+        if (function_exists('apcu_store')) {
+            apcu_store($key, $payload, max(1, $expires - time()));
+            return;
+        }
+
+        if (!is_dir(self::CACHE_DIR)) {
+            @mkdir(self::CACHE_DIR, 0700, true);
+        }
+        @file_put_contents(self::CACHE_DIR . '/' . $key, json_encode($payload));
+        @chmod(self::CACHE_DIR . '/' . $key, 0600);
+    }
+
+    private function forgetCachedToken(): void {
+        $key = $this->cacheKey();
+        if (function_exists('apcu_delete')) {
+            apcu_delete($key);
+        }
+        @unlink(self::CACHE_DIR . '/' . $key);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* PHP 8.0 polyfill (AP G21 — Zabbix ships PHP 8.0)                   */
+    /* ------------------------------------------------------------------ */
+
+    private static function ensureArrayIsListPolyfill(): void {
+        if (function_exists('array_is_list')) return;
+        eval('function array_is_list(array $a): bool {
+            if ($a === []) return true;
+            $i = 0;
+            foreach ($a as $k => $_) { if ($k !== $i++) return false; }
+            return true;
+        }');
     }
 }
