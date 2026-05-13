@@ -576,6 +576,39 @@
 }
 .pd-btn.cycle:hover { background: rgba(245,179,0,0.08); }
 
+/* PacketFence device-card action row */
+.pf-actions {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-2);
+}
+.pf-btn {
+  font-family: var(--sans); font-size: 11px; font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 3px;
+  display: inline-flex; align-items: center; gap: 5px;
+  text-decoration: none;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--line-2);
+  cursor: pointer; user-select: none;
+}
+.pf-btn:hover { background: rgba(255,255,255,0.04); }
+.pf-btn[disabled] { opacity: 0.5; cursor: wait; }
+.pf-btn.primary {
+  color: var(--pf);
+  border-color: rgba(91, 140, 255, 0.4);
+}
+.pf-btn.primary:hover { background: rgba(91, 140, 255, 0.08); }
+.pf-btn.warn {
+  color: var(--warn);
+  border-color: rgba(245,179,0,0.4);
+}
+.pf-btn.warn:hover { background: rgba(245,179,0,0.08); }
+.pf-msg { font-size: 10.5px; color: var(--muted); margin-left: 6px; align-self: center; }
+.pf-msg.err { color: var(--warn); }
+
 /* 1h online heatmap (60 cells = 1 per minute) */
 .pd-heatmap {
   display: grid;

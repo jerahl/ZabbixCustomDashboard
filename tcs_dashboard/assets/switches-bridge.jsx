@@ -64,6 +64,7 @@
     window.ARC_MDF_HISTORY  = { cpu: [], mem: [], temp: [], poeWatts: [], uplinkRx: [], uplinkTx: [] };
     window.SWITCH_SITES     = [];
     window.SWITCH_INFO      = {};
+    window.PF_ADMIN_BASE    = "";
     // Single empty stack member keeps the port grid renderable until the
     // snapshot arrives (the grid expects at least one member to map over).
     window.ARC_MDF_STACK    = [{ idx: 1, ports: [], sfp: [], upCount: 0, downCount: 0, poeCount: 0 }];
@@ -352,6 +353,9 @@
             (bag[k] = bag[k] || []).push(row.mac);
         }
 
+        // PF admin base URL (for the "View in PacketFence" link).
+        if (typeof snap.pfBase === "string") window.PF_ADMIN_BASE = snap.pfBase;
+
         // PacketFence-resolved devices per port. Server pre-buckets by m.p.
         const pfBag = window._tcsPfByKey;
         for (const k of Object.keys(pfBag)) delete pfBag[k];
@@ -485,6 +489,34 @@
                     member: Number(member) || 1,
                     port:   Number(port)   || 0
                 })
+            });
+            const body = await resp.json().catch(() => ({}));
+            if (!resp.ok) {
+                return { ok: false, error: body.error || `HTTP ${resp.status}` };
+            }
+            return body;
+        } catch (e) {
+            return { ok: false, error: String(e && e.message ? e.message : e) };
+        }
+    };
+
+    // PacketFence per-device write-actions (reevaluate access / restart
+    // switchport). Same envelope as tcsCyclePoe: returns { ok, message? }
+    // on success, { ok:false, error } otherwise. Backend is admin-gated.
+    window.tcsPfDeviceAction = async function (mac, op) {
+        const url = window.TCS_PF_DEVICE_URL;
+        const hostid = window.TCS_SWITCH_HOSTID;
+        if (!url || !hostid) return { ok: false, error: "endpoint not configured" };
+        if (!mac || !op)     return { ok: false, error: "mac and op required" };
+        try {
+            const resp = await fetch(url, {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ hostid, mac: String(mac), op: String(op) })
             });
             const body = await resp.json().catch(() => ({}));
             if (!resp.ok) {

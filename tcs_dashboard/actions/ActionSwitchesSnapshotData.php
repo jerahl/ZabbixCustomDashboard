@@ -78,6 +78,14 @@ class ActionSwitchesSnapshotData extends ActionDataBase {
             $payload['pfNodes'] = new \stdClass();
         }
 
+        // PF admin base URL for the "View in PacketFence" link. Strips the
+        // /api/v1[...] suffix if the operator's macro points at the API
+        // path (the admin UI is served from the bare host).
+        $pfMacros = $this->resolvePfMacros($hostid);
+        $payload['pfBase'] = $pfMacros
+            ? preg_replace('#/api/v1.*$#', '', (string) $pfMacros['url'])
+            : '';
+
         $this->setResponse(new CControllerResponseData([
             'main_block' => json_encode($payload, JSON_UNESCAPED_SLASHES)
         ]));

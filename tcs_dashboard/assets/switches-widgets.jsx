@@ -162,6 +162,64 @@ const MemberGrid = ({ member, selected, onSelect }) => {
 };
 
 // ───────── Port detail panes ─────────
+const PfActionRow = ({ mac }) => {
+  const [busy, setBusy] = React.useState(null);    // "reevaluate_access" | "restart_switchport" | null
+  const [msg, setMsg]   = React.useState({ kind: "", text: "" });
+  const adminBase = (window.PF_ADMIN_BASE || "").replace(/\/+$/, "");
+  const viewHref = adminBase && mac
+    ? `${adminBase}/admin/#/nodes/${encodeURIComponent(mac)}/info`
+    : null;
+
+  const run = React.useCallback(async (op, label) => {
+    if (!mac || busy) return;
+    if (typeof window.tcsPfDeviceAction !== "function") {
+      setMsg({ kind: "err", text: "endpoint missing" });
+      return;
+    }
+    setBusy(op);
+    setMsg({ kind: "", text: `${label}…` });
+    const r = await window.tcsPfDeviceAction(mac, op);
+    setBusy(null);
+    setMsg(r && r.ok
+      ? { kind: "", text: r.message || "ok" }
+      : { kind: "err", text: (r && (r.error || r.message)) || "failed" });
+    setTimeout(() => setMsg({ kind: "", text: "" }), 6000);
+  }, [mac, busy]);
+
+  return (
+    <div className="pf-actions">
+      {viewHref ? (
+        <a className="pf-btn primary" href={viewHref} target="_blank" rel="noopener noreferrer">
+          <Icon name="external" size={11}/> View in PacketFence
+        </a>
+      ) : (
+        <span className="pf-btn primary" style={{ opacity: 0.4, cursor: "not-allowed" }} title="PF admin URL not configured">
+          View in PacketFence
+        </span>
+      )}
+      <button
+        type="button"
+        className="pf-btn"
+        onClick={() => run("reevaluate_access", "reevaluating")}
+        disabled={!!busy}
+        title="Re-run PF role / access evaluation for this device"
+      >
+        <Icon name="refresh" size={11}/> {busy === "reevaluate_access" ? "REEVALUATING…" : "Reevaluate access"}
+      </button>
+      <button
+        type="button"
+        className="pf-btn warn"
+        onClick={() => run("restart_switchport", "restarting")}
+        disabled={!!busy}
+        title="Bounce the switch port via PF's SNMP integration"
+      >
+        <Icon name="refresh" size={11}/> {busy === "restart_switchport" ? "RESTARTING…" : "Restart switchport"}
+      </button>
+      {msg.text && <span className={"pf-msg" + (msg.kind === "err" ? " err" : "")}>{msg.text}</span>}
+    </div>
+  );
+};
+
 const PacketFenceDevicePane = ({ host, detail }) => {
   if (!detail || !detail.device) {
     return (
@@ -244,6 +302,7 @@ const PacketFenceDevicePane = ({ host, detail }) => {
             <div className="v">{detail.label}</div>
           </div>
         </div>
+        <PfActionRow mac={d.mac} />
       </div>
     </div>
   );

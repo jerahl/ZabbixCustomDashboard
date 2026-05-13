@@ -175,6 +175,60 @@ class PFClient {
         return $out;
     }
 
+    /* ------------------------------------------------------------------ */
+    /* Write actions                                                      */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Re-evaluate access (role / vlan / acls) for a node. PF re-runs its
+     * registration / role-mapping rules and triggers a CoA so the switch
+     * sees the new role without the operator having to bounce the port.
+     *
+     * @return array{ok:bool, message:string}
+     */
+    public function reevaluateAccess(string $mac): array {
+        return $this->nodeAction($mac, 'reevaluate_access');
+    }
+
+    /**
+     * Restart the switch port the node is currently learned on. PF uses
+     * its switches.conf SNMP credentials to shutdown / no-shutdown the
+     * port, which forces the supplicant to re-auth.
+     *
+     * @return array{ok:bool, message:string}
+     */
+    public function restartSwitchport(string $mac): array {
+        return $this->nodeAction($mac, 'restart_switchport');
+    }
+
+    /**
+     * Shared plumbing for the per-node POST actions. PF returns a JSON
+     * body with a `message` field on success; on failure the message
+     * comes back in `message` or `errors[]`.
+     *
+     * @return array{ok:bool, message:string}
+     */
+    private function nodeAction(string $mac, string $op): array {
+        $mac = strtolower(trim($mac));
+        if ($mac === '') {
+            return ['ok' => false, 'message' => 'mac required'];
+        }
+        // PF v11+ exposes per-node actions under both /api/v1/node/<mac>/<op>
+        // and /api/v1/nodes/<mac>/<op>. The singular `node` form is the
+        // documented action endpoint.
+        try {
+            $resp = $this->call('POST', '/api/v1/node/'.rawurlencode($mac).'/'.$op, [], null);
+        }
+        catch (\Throwable $e) {
+            return ['ok' => false, 'message' => $e->getMessage()];
+        }
+        $msg = (string) ($resp['message'] ?? $resp['status_msg'] ?? '');
+        if ($msg === '' && isset($resp['errors']) && is_array($resp['errors'])) {
+            $msg = (string) ($resp['errors'][0]['message'] ?? '');
+        }
+        return ['ok' => true, 'message' => $msg !== '' ? $msg : 'ok'];
+    }
+
     /**
      * Map of node category id (string) → human role name. PF stores roles
      * on /nodes as `category_id` (numeric) and only sometimes surfaces the

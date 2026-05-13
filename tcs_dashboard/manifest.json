@@ -102,6 +102,11 @@
             "class": "ActionSwitchCyclePoe",
             "layout": "layout.json",
             "view": null
+        },
+        "tcs.pf.device": {
+            "class": "ActionPfDevice",
+            "layout": "layout.json",
+            "view": null
         }
     }
 }
