@@ -3,6 +3,7 @@
 namespace Modules\TcsDashboard\Actions;
 
 use API;
+use CController;
 use CControllerResponseData;
 use CControllerResponseFatal;
 use CWebUser;
@@ -95,13 +96,16 @@ class ActionSwitchCyclePoe extends CController {
             $client = new RConfigClient($macros['url'], $macros['token'], $macros['verify_ssl']);
             $deviceId = $client->resolveDeviceId(
                 $hostid,
-                (string) ($host['host'] ?? ''),
-                $host['ip'] ?? null,
+                $host['host'],
+                $host['visible_name'],
+                $host['snmp_ips'],
+                $host['any_ips'],
                 $macros['device_id']
             );
+            // Snippet placeholder is `interface_name` (e.g. "1:7"); matches
+            // the reference rConfig snippet shipped with the pf_device widget.
             $result = $client->deploySnippet($deviceId, $macros['snippet_id'], [
-                'port'   => $port,
-                'member' => $member
+                'interface_name' => $member.':'.$port
             ]);
 
             $this->respond([
@@ -116,51 +120,176 @@ class ActionSwitchCyclePoe extends CController {
         }
     }
 
+    /**
+     * Walk the full template ancestry of a host (direct parents + their
+     * parents, etc.) so macro lookups catch inheritance through nested
+     * templates. Returns a deduped list of template ids.
+     *
+     * @return array<int, string>
+     */
+    private function collectTemplateAncestry(string $hostid): array {
+        $hosts = API::Host()->get([
+            'output'                => ['hostid'],
+            'hostids'               => [$hostid],
+            'selectParentTemplates' => ['templateid']
+        ]) ?: [];
+        $seen  = [];
+        $queue = [];
+        if ($hosts) {
+            foreach (($hosts[0]['parentTemplates'] ?? []) as $t) {
+                $queue[] = (string) $t['templateid'];
+            }
+        }
+        while ($queue) {
+            $batch = [];
+            foreach ($queue as $tid) {
+                if (!isset($seen[$tid])) {
+                    $seen[$tid] = true;
+                    $batch[] = $tid;
+                }
+            }
+            $queue = [];
+            if (!$batch) break;
+            $rows = API::Template()->get([
+                'output'                => ['templateid'],
+                'templateids'           => $batch,
+                'selectParentTemplates' => ['templateid']
+            ]) ?: [];
+            foreach ($rows as $t) {
+                foreach (($t['parentTemplates'] ?? []) as $p) {
+                    $pid = (string) $p['templateid'];
+                    if (!isset($seen[$pid])) $queue[] = $pid;
+                }
+            }
+        }
+        return array_keys($seen);
+    }
+
     /** @return array{host:string, ip:?string}|null */
+    /** @return array{host:string, visible_name:string, snmp_ips:array<int,string>, any_ips:array<int,string>}|null */
     private function loadHost(string $hostid): ?array {
         $hosts = API::Host()->get([
-            'output'           => ['hostid', 'host'],
-            'selectInterfaces' => ['ip', 'main'],
+            'output'           => ['hostid', 'host', 'name'],
+            'selectInterfaces' => ['ip', 'main', 'type'],
             'hostids'          => [$hostid]
         ]);
         if (!$hosts) return null;
 
-        $h  = $hosts[0];
-        $ip = null;
+        $h = $hosts[0];
+        $snmpIps = [];
+        $anyIps  = [];
         foreach ($h['interfaces'] ?? [] as $iface) {
-            if ((int) ($iface['main'] ?? 0) === 1) {
-                $ip = $iface['ip'];
-                break;
-            }
+            $ip = trim((string) ($iface['ip'] ?? ''));
+            if ($ip === '' || $ip === '0.0.0.0') continue;
+            $anyIps[] = $ip;
+            // INTERFACE_TYPE_SNMP == 2 — preferred match key for switches.
+            if ((int) ($iface['type'] ?? 0) === 2) $snmpIps[] = $ip;
         }
-        return ['host' => (string) $h['host'], 'ip' => $ip];
+        return [
+            'host'         => (string) $h['host'],
+            'visible_name' => (string) ($h['name'] ?? ''),
+            'snmp_ips'     => $snmpIps,
+            'any_ips'      => $anyIps
+        ];
     }
 
     /**
+     * Resolve {$RCONFIG.*} macros through the host → linked templates →
+     * global chain. Host-level wins, then template-inherited, then
+     * globals — matching how Zabbix itself resolves macros at runtime.
+     *
+     * Secret macros come through fine via output=['macro','value'] as
+     * long as the requesting user has read access (admin does).
+     *
      * @return array{url:string, token:string, verify_ssl:bool, snippet_id:int, device_id:?int}|null
      */
     private function resolveRConfigMacros(string $hostid): ?array {
-        $rows = API::UserMacro()->get([
-            'output'  => ['macro', 'value'],
-            'hostids' => [$hostid],
-            'filter'  => ['macro' => [
-                '{$RCONFIG.URL}',
-                '{$RCONFIG.TOKEN}',
-                '{$RCONFIG.POE_SNIPPET_ID}',
-                '{$RCONFIG.DEVICE_ID}',
-                '{$RCONFIG.VERIFY.SSL}'
-            ]]
-        ]) ?: [];
-
+        $names = [
+            '{$RCONFIG.URL}',
+            '{$RCONFIG.TOKEN}',
+            '{$RCONFIG.POE_SNIPPET_ID}',
+            '{$RCONFIG.DEVICE_ID}',
+            '{$RCONFIG.VERIFY.SSL}'
+        ];
         $bag = [];
-        foreach ($rows as $r) {
+        $diag = ['globals' => [], 'tpls' => [], 'host' => []];
+
+        // 1. Global macros (lowest precedence). Pull ALL globals matching
+        // the RCONFIG prefix — drop the exact-name filter so a single typo
+        // (extra space, case mismatch, …) doesn't silently hide them. Log
+        // what we actually see so misconfigurations are easy to spot.
+        $globals = API::UserMacro()->get([
+            'output'      => ['macro', 'value', 'type'],
+            'globalmacro' => true,
+            'search'      => ['macro' => '{$RCONFIG.'],
+            'startSearch' => true
+        ]) ?: [];
+        foreach ($globals as $r) {
+            $isSecret = isset($r['type']) && (int) $r['type'] !== 0;
+            $diag['globals'][] = $r['macro'].($isSecret ? '(secret/vault)' : '');
+            if (!in_array($r['macro'], $names, true)) continue;
+            if (!array_key_exists('value', $r)) continue; // secret/vault — value not exposed via API
             $bag[$r['macro']] = (string) $r['value'];
         }
+
+        // 2. Template-inherited macros — walk the full ancestry, not just
+        // the direct parents. selectParentTemplates is one hop only, so a
+        // macro on a base template that a mid-tier template inherits from
+        // gets missed without recursion.
+        $templateIds = $this->collectTemplateAncestry($hostid);
+        if ($templateIds) {
+            $tpl = API::UserMacro()->get([
+                'output'      => ['macro', 'value', 'type', 'hostid'],
+                'hostids'     => $templateIds,
+                'search'      => ['macro' => '{$RCONFIG.'],
+                'startSearch' => true
+            ]) ?: [];
+            foreach ($tpl as $r) {
+                $isSecret = isset($r['type']) && (int) $r['type'] !== 0;
+                $diag['tpls'][] = $r['macro'].'@'.$r['hostid'].($isSecret ? '(secret/vault)' : '');
+                if (!in_array($r['macro'], $names, true)) continue;
+                if (!array_key_exists('value', $r)) continue;
+                $bag[$r['macro']] = (string) $r['value'];
+            }
+        }
+
+        // 3. Host-level (highest precedence).
+        $hostRows = API::UserMacro()->get([
+            'output'      => ['macro', 'value', 'type'],
+            'hostids'     => [$hostid],
+            'search'      => ['macro' => '{$RCONFIG.'],
+            'startSearch' => true
+        ]) ?: [];
+        foreach ($hostRows as $r) {
+            $isSecret = isset($r['type']) && (int) $r['type'] !== 0;
+            $diag['host'][] = $r['macro'].($isSecret ? '(secret/vault)' : '');
+            if (!in_array($r['macro'], $names, true)) continue;
+            if (!array_key_exists('value', $r)) continue;
+            $bag[$r['macro']] = (string) $r['value'];
+        }
+
+        error_log(sprintf(
+            '[tcs_dashboard] cyclepoe macros found — host[%s]=[%s] tpls(%d)=[%s] globals=[%s]',
+            $hostid,
+            implode(',', $diag['host']),
+            count($templateIds),
+            implode(',', $diag['tpls']),
+            implode(',', $diag['globals'])
+        ));
 
         $url     = $bag['{$RCONFIG.URL}'] ?? '';
         $token   = $bag['{$RCONFIG.TOKEN}'] ?? '';
         $snippet = (int) ($bag['{$RCONFIG.POE_SNIPPET_ID}'] ?? 0);
-        if ($url === '' || $token === '' || $snippet <= 0) return null;
+        if ($url === '' || $token === '' || $snippet <= 0) {
+            error_log(sprintf(
+                '[tcs_dashboard] cyclepoe: macros missing — url=%s token=%s snippet=%s (host %s + %d template(s) + globals)',
+                $url !== '' ? 'set' : 'EMPTY',
+                $token !== '' ? 'set' : 'EMPTY',
+                $snippet > 0 ? (string) $snippet : 'EMPTY',
+                $hostid, count($templateIds)
+            ));
+            return null;
+        }
 
         $deviceMacro = isset($bag['{$RCONFIG.DEVICE_ID}']) && $bag['{$RCONFIG.DEVICE_ID}'] !== ''
             ? (int) $bag['{$RCONFIG.DEVICE_ID}']

@@ -61,6 +61,8 @@ $asset_base = 'modules/tcs_dashboard/assets';
     window.SWITCH_BOOT = <?= json_encode($data['boot'] ?? new stdClass(), JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) ?>;
     // POST target for the CYCLE PoE button (admin-only on the server side).
     window.TCS_SWITCH_CYCLEPOE_URL = "zabbix.php?action=tcs.switch.cyclepoe";
+    // POST target for PacketFence per-device actions (reevaluate / restart).
+    window.TCS_PF_DEVICE_URL = "zabbix.php?action=tcs.pf.device";
     // Async data endpoints — switches-bridge.jsx fetches these after first paint.
     window.TCS_SWITCH_FLEET_URL    = "zabbix.php?action=tcs.switches.fleet.data";
     window.TCS_SWITCH_SNAPSHOT_URL = "zabbix.php?action=tcs.switches.snapshot.data";

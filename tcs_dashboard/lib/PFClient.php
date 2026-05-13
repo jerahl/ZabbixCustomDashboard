@@ -105,6 +105,210 @@ class PFClient {
     }
 
     /**
+     * Rich per-node detail for an explicit list of MACs. Returns the full
+     * field set the Port Detail card consumes, keyed by lowercased MAC.
+     *
+     * PF v11+ doesn't support filtering /api/v1/nodes by `locationlog.switch`
+     * (locationlog is a separate table linked by MAC), so the working pf_device
+     * reference resolves the per-switch MAC list out-of-band (FDB / bridge
+     * table on the switch) and looks each MAC up here. We do the same — the
+     * FDB already comes back in the snapshot via SwitchClient.
+     *
+     * Uses POST /api/v1/nodes/search with an OR'd MAC-equals query.
+     *
+     * @param array<int, string> $macs
+     * @return array<string, array<string, mixed>>  keyed by lowercased MAC
+     */
+    public function nodesByMac(array $macs): array {
+        $clean = [];
+        foreach ($macs as $m) {
+            $norm = strtolower(trim((string) $m));
+            if ($norm === '') continue;
+            $clean[$norm] = true;
+        }
+        if (!$clean) return [];
+        $list = array_keys($clean);
+
+        $clauses = array_map(fn($m) => [
+            'op'    => 'equals',
+            'field' => 'mac',
+            'value' => $m
+        ], $list);
+
+        $body = [
+            'cursor' => 0,
+            'limit'  => max(25, count($list) + 10),
+            'sort'   => ['mac ASC'],
+            'fields' => [
+                'mac', 'pid', 'computername', 'status', 'category_id',
+                'device_class', 'device_type', 'device_manufacturer', 'device_version',
+                'dhcp_fingerprint', 'dhcp_vendor',
+                'last_seen', 'last_arp', 'last_dhcp',
+                'ip4log.ip'
+            ],
+            'query'  => count($clauses) === 1
+                ? $clauses[0]
+                : ['op' => 'or', 'values' => $clauses]
+        ];
+
+        $rows = $this->call('POST', '/api/v1/nodes/search', [], $body);
+
+        $out = [];
+        foreach (($rows['items'] ?? []) as $r) {
+            $mac = strtolower((string) ($r['mac'] ?? ''));
+            if ($mac === '') continue;
+            $out[$mac] = [
+                'mac'      => $mac,
+                'host'     => (string) ($r['computername'] ?? ''),
+                'ip'       => (string) ($r['ip4log.ip'] ?? ''),
+                'reg'      => strtolower((string) ($r['status'] ?? '')) === 'reg' ? 'REG' : 'UNREG',
+                'role'     => (string) ($r['category_id'] ?? ''),
+                'vendor'   => (string) ($r['device_manufacturer'] ?? $r['device_class'] ?? ''),
+                'os'       => (string) ($r['device_type'] ?? ($r['device_class'] ?? '')),
+                'owner'    => (string) ($r['pid'] ?? ''),
+                'dhcpFp'   => (string) ($r['dhcp_fingerprint'] ?? $r['dhcp_vendor'] ?? ''),
+                'lastSeen' => (string) ($r['last_seen'] ?? ''),
+                'lastArp'  => (string) ($r['last_arp'] ?? ''),
+                'lastDhcp' => (string) ($r['last_dhcp'] ?? '')
+            ];
+        }
+        return $out;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Write actions                                                      */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Re-evaluate access (role / vlan / acls) for a node. PF re-runs its
+     * registration / role-mapping rules and triggers a CoA so the switch
+     * sees the new role without the operator having to bounce the port.
+     *
+     * @return array{ok:bool, message:string}
+     */
+    public function reevaluateAccess(string $mac): array {
+        return $this->nodeAction($mac, 'reevaluate_access');
+    }
+
+    /**
+     * Restart the switch port the node is currently learned on. PF uses
+     * its switches.conf SNMP credentials to shutdown / no-shutdown the
+     * port, which forces the supplicant to re-auth.
+     *
+     * @return array{ok:bool, message:string}
+     */
+    public function restartSwitchport(string $mac): array {
+        return $this->nodeAction($mac, 'restart_switchport');
+    }
+
+    /**
+     * Shared plumbing for the per-node POST actions. PF returns a JSON
+     * body with a `message` field on success; on failure the message
+     * comes back in `message` or `errors[]`.
+     *
+     * @return array{ok:bool, message:string}
+     */
+    private function nodeAction(string $mac, string $op): array {
+        $mac = strtolower(trim($mac));
+        if ($mac === '') {
+            return ['ok' => false, 'message' => 'mac required'];
+        }
+        // PF v11+ exposes per-node actions under both /api/v1/node/<mac>/<op>
+        // and /api/v1/nodes/<mac>/<op>. The singular `node` form is the
+        // documented action endpoint.
+        try {
+            $resp = $this->call('POST', '/api/v1/node/'.rawurlencode($mac).'/'.$op, [], null);
+        }
+        catch (\Throwable $e) {
+            return ['ok' => false, 'message' => $e->getMessage()];
+        }
+        $msg = (string) ($resp['message'] ?? $resp['status_msg'] ?? '');
+        if ($msg === '' && isset($resp['errors']) && is_array($resp['errors'])) {
+            $msg = (string) ($resp['errors'][0]['message'] ?? '');
+        }
+        return ['ok' => true, 'message' => $msg !== '' ? $msg : 'ok'];
+    }
+
+    /**
+     * Map of node category id (string) → human role name. PF stores roles
+     * on /nodes as `category_id` (numeric) and only sometimes surfaces the
+     * label on locationlog.role; this endpoint is the canonical id-to-name
+     * dictionary.
+     *
+     * @return array<string, string>
+     */
+    public function nodeCategories(): array {
+        try {
+            $rows = $this->get('/api/v1/node_categories', ['limit' => 500]);
+        } catch (\Throwable) {
+            return [];
+        }
+        $out = [];
+        foreach (($rows['items'] ?? []) as $r) {
+            $id   = (string) ($r['category_id'] ?? $r['id'] ?? '');
+            $name = (string) ($r['name'] ?? '');
+            if ($id !== '' && $name !== '') {
+                $out[$id] = $name;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Latest locationlog entry per MAC — gives us the human role name,
+     * 802.1X username, VLAN, SSID, switch port, and ifDesc that the
+     * /nodes endpoint doesn't carry (nodes only has category_id, which
+     * is the numeric internal id, not the role label).
+     *
+     * One OR'd POST to /api/v1/locationlogs/search, sorted newest first,
+     * deduped to the first hit per MAC on the way out.
+     *
+     * @param array<int, string> $macs
+     * @return array<string, array<string, mixed>>  keyed by lowercased MAC
+     */
+    public function locationsByMac(array $macs): array {
+        $clean = [];
+        foreach ($macs as $m) {
+            $norm = strtolower(trim((string) $m));
+            if ($norm !== '') $clean[$norm] = true;
+        }
+        if (!$clean) return [];
+        $list = array_keys($clean);
+
+        $clauses = array_map(fn($m) => [
+            'op'    => 'equals',
+            'field' => 'mac',
+            'value' => $m
+        ], $list);
+
+        $body = [
+            'cursor' => 0,
+            // Buffer for stale entries; one MAC can have many locationlog rows.
+            'limit'  => max(100, count($list) * 4),
+            'sort'   => ['start_time DESC'],
+            'fields' => [
+                'mac', 'switch', 'switch_ip', 'port', 'vlan', 'role',
+                'ssid', 'connection_type', 'connection_sub_type',
+                'dot1x_username', 'realm', 'ifDesc', 'start_time', 'end_time'
+            ],
+            'query' => count($clauses) === 1
+                ? $clauses[0]
+                : ['op' => 'or', 'values' => $clauses]
+        ];
+
+        $rows = $this->call('POST', '/api/v1/locationlogs/search', [], $body);
+
+        // Pre-sorted DESC by start_time — first hit per MAC wins.
+        $out = [];
+        foreach (($rows['items'] ?? []) as $r) {
+            $mac = strtolower((string) ($r['mac'] ?? ''));
+            if ($mac === '' || isset($out[$mac])) continue;
+            $out[$mac] = $r;
+        }
+        return $out;
+    }
+
+    /**
      * Recent 802.1X auth failures (radius_audit_logs filtered to reject).
      *
      * @return array<int, array<string, mixed>>
@@ -194,7 +398,9 @@ class PFClient {
         $this->ensureToken();
 
         [$status, $payload] = $this->raw($method, $path, $query, $body, [
-            'Authorization: Bearer '.($this->token ?? '')
+            // PF accepts the raw token (no "Bearer " prefix) — confirmed against the
+            // pf_device reference client in jerahl/ZabbixSwitchPortWidgets.
+            'Authorization: '.($this->token ?? '')
         ]);
 
         if ($status === 401) {
@@ -205,7 +411,9 @@ class PFClient {
             $this->ensureToken();
 
             [$status, $payload] = $this->raw($method, $path, $query, $body, [
-                'Authorization: Bearer '.($this->token ?? '')
+                // PF accepts the raw token (no "Bearer " prefix) — confirmed against the
+            // pf_device reference client in jerahl/ZabbixSwitchPortWidgets.
+            'Authorization: '.($this->token ?? '')
             ]);
         }
 

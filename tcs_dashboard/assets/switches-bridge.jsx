@@ -64,6 +64,7 @@
     window.ARC_MDF_HISTORY  = { cpu: [], mem: [], temp: [], poeWatts: [], uplinkRx: [], uplinkTx: [] };
     window.SWITCH_SITES     = [];
     window.SWITCH_INFO      = {};
+    window.PF_ADMIN_BASE    = "";
     // Single empty stack member keeps the port grid renderable until the
     // snapshot arrives (the grid expects at least one member to map over).
     window.ARC_MDF_STACK    = [{ idx: 1, ports: [], sfp: [], upCount: 0, downCount: 0, poeCount: 0 }];
@@ -78,13 +79,67 @@
     const FLAT60 = Array.from({ length: 60 }, () => 0);
     const _fdbByKey     = Object.create(null);
     const _trafficByKey = Object.create(null);
+    const _pfByKey      = Object.create(null);
     window._tcsFdbByKey     = _fdbByKey;
     window._tcsTrafficByKey = _trafficByKey;
+    window._tcsPfByKey      = _pfByKey;
+
+    // Role tags in the design system: faculty/student/guest/av/byod/quarantine/unknown.
+    // PF category names rarely match these 1:1 — coerce unknown values to "unknown"
+    // so the CSS still renders a sensible chip.
+    const _PF_ROLE_CLASSES = new Set(["faculty","student","guest","av","byod","quarantine","unknown"]);
+    const pfRoleClass = (raw) => {
+        const s = String(raw || "").toLowerCase().trim();
+        if (!s) return "unknown";
+        if (_PF_ROLE_CLASSES.has(s)) return s;
+        // Look for a known token inside e.g. "BYOD-Wifi" → "byod"
+        for (const c of _PF_ROLE_CLASSES) if (s.includes(c)) return c;
+        return "unknown";
+    };
+
+    const pfAgeMin = (lastSeen) => {
+        if (!lastSeen) return 0;
+        // PF returns "YYYY-MM-DD HH:MM:SS" in server-local time. Replacing the
+        // space with "T" lets Date.parse handle it as a local timestamp.
+        const t = Date.parse(String(lastSeen).replace(" ", "T"));
+        if (!isFinite(t)) return 0;
+        return Math.max(0, Math.round((Date.now() - t) / 60000));
+    };
 
     window.makePortDetail = function (memberIdx, port) {
         const k = `${memberIdx}.${port.n}`;
         const macs = _fdbByKey[k] || [];
         const tr   = _trafficByKey[k] || null;
+        const pfRows = _pfByKey[k] || [];
+
+        // Project every PF row into the device shape the React tile reads
+        // and sort by recency so the freshest MAC is tab #0 by default.
+        const _toDevice = (r) => ({
+            mac:       r.mac,
+            reg:       r.reg,
+            ip:        r.ip,
+            host:      r.host || "—",
+            vendor:    r.vendor || "—",
+            os:        r.os || "—",
+            owner:     r.owner || "—",
+            dhcpFp:    r.dhcpFp || "—",
+            lastSeen:  r.lastSeen || "—",
+            lastArp:   r.lastArp || "—",
+            lastDhcp:  r.lastDhcp || "—",
+            // Raw label for display, normalized class for the chip's color.
+            role:      r.role || "",
+            roleClass: pfRoleClass(r.role)
+        });
+        const _seenMs = (ls) => {
+            const t = Date.parse(String(ls || "").replace(" ", "T"));
+            return Number.isFinite(t) ? t : 0;
+        };
+        const devices = pfRows
+            .map(_toDevice)
+            .sort((a, b) => _seenMs(b.lastSeen) - _seenMs(a.lastSeen));
+        // detail.device kept for any caller still reading the singular —
+        // freshest device wins as the default primary.
+        const device = devices[0] || null;
 
         // Server gives us bytes/sec on each side. Convert to kbps for the
         // detail panel, then derive a coarse utilization % off the port's
@@ -117,11 +172,14 @@
             discards1h: discIn + discOut,
             discIn,
             discOut,
-            device:     null,    // PacketFenceDevicePane shows empty-state on null
-            extraMacs:  macs.length > 1 ? macs.length - 1 : 0,
+            device,
+            devices,
+            extraMacs:  device
+                ? Math.max(pfRows.length - 1, macs.length > 1 ? macs.length - 1 : 0)
+                : (macs.length > 1 ? macs.length - 1 : 0),
             macs,
-            ifIndex:    1000 + (Number(port.n) || 0),
-            ageMin:     0
+            ifIndex:    (Number(memberIdx) || 1) * 1000 + (Number(port.n) || 0),
+            ageMin:     device ? pfAgeMin(device.lastSeen) : 0
         };
     };
 
@@ -307,6 +365,24 @@
             const k = `${row.member}.${row.port}`;
             (bag[k] = bag[k] || []).push(row.mac);
         }
+
+        // PF admin base URL (for the "View in PacketFence" link).
+        if (typeof snap.pfBase === "string") window.PF_ADMIN_BASE = snap.pfBase;
+
+        // PacketFence-resolved devices per port. Server pre-buckets by m.p.
+        const pfBag = window._tcsPfByKey;
+        for (const k of Object.keys(pfBag)) delete pfBag[k];
+        const pfNodes = (snap.pfNodes && typeof snap.pfNodes === "object") ? snap.pfNodes : {};
+        let pfPorts = 0, pfDevices = 0;
+        for (const k of Object.keys(pfNodes)) {
+            const rows = pfNodes[k];
+            if (Array.isArray(rows) && rows.length) {
+                pfBag[k] = rows;
+                pfPorts++;
+                pfDevices += rows.length;
+            }
+        }
+        console.info("[tcs] pf nodes:", pfPorts, "port(s),", pfDevices, "device(s)");
     }
 
     /** Fire a re-render in the React app. */
@@ -414,18 +490,52 @@
             return { ok: false, error: "endpoint not configured" };
         }
         try {
+            const form = new URLSearchParams({
+                hostid,
+                member: String(Number(member) || 1),
+                port:   String(Number(port)   || 0)
+            });
             const resp = await fetch(url, {
                 method: "POST",
                 credentials: "same-origin",
                 headers: {
                     "Accept": "application/json",
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
                 },
-                body: JSON.stringify({
-                    hostid,
-                    member: Number(member) || 1,
-                    port:   Number(port)   || 0
-                })
+                body: form.toString()
+            });
+            const body = await resp.json().catch(() => ({}));
+            if (!resp.ok) {
+                return { ok: false, error: body.error || `HTTP ${resp.status}` };
+            }
+            return body;
+        } catch (e) {
+            return { ok: false, error: String(e && e.message ? e.message : e) };
+        }
+    };
+
+    // PacketFence per-device write-actions (reevaluate access / restart
+    // switchport). Same envelope as tcsCyclePoe: returns { ok, message? }
+    // on success, { ok:false, error } otherwise. Backend is admin-gated.
+    window.tcsPfDeviceAction = async function (mac, op) {
+        const url = window.TCS_PF_DEVICE_URL;
+        const hostid = window.TCS_SWITCH_HOSTID;
+        if (!url || !hostid) return { ok: false, error: "endpoint not configured" };
+        if (!mac || !op)     return { ok: false, error: "mac and op required" };
+        try {
+            // Zabbix's CController::validateInput reads $_REQUEST, which is
+            // populated from form-encoded bodies — JSON bodies don't reach
+            // it. Form-encode the payload so the server-side mandatory-field
+            // check finds hostid / mac / op.
+            const form = new URLSearchParams({ hostid, mac: String(mac), op: String(op) });
+            const resp = await fetch(url, {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {
+                    "Accept": "application/json",
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
+                },
+                body: form.toString()
             });
             const body = await resp.json().catch(() => ({}));
             if (!resp.ok) {
