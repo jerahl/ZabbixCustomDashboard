@@ -91,12 +91,11 @@ $asset_base = 'modules/tcs_dashboard/assets';
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
 
-<!-- Order matters: tweaks → primitives → shared shell → switches data/widgets → app entry -->
+<!-- Order matters: tweaks → primitives → shared shell → bridge → widgets/tabs → app entry -->
 <script type="text/babel" src="<?= $asset_base ?>/tweaks-panel.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/primitives.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/global-nav.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/nvr-shell.jsx"></script>
-<script type="text/babel" src="<?= $asset_base ?>/switches-data.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/switches-bridge.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/switches-widgets.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/switches-tabs.jsx"></script>

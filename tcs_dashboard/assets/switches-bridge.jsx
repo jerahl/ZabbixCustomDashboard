@@ -40,18 +40,52 @@
         window.location.search = "?" + params.toString();
     };
 
-    // Initial empty defaults. Critical: these UNCONDITIONALLY overwrite the
-    // mock-data globals populated by switches-data.jsx so the page starts in
-    // a skeleton state (empty navigator, empty grid, no fake KPIs). The
-    // applyFleet/applySnapshot calls below fill them in when fetches resolve.
+    // Initial empty defaults. The page is data-source-truthy: nothing renders
+    // until the JSON endpoints respond. No mock fixtures are loaded at all
+    // (switches-data.jsx was removed) — empty arrays are the empty state.
     window.SWITCH_KPIS      = { cpu: null, mem: null, temp: null, poeWatts: null, poeBudget: null };
     window.SWITCH_PROBLEMS  = [];
     window.ARC_MDF_LINKS    = [];
     window.ARC_MDF_HISTORY  = { cpu: [], mem: [], temp: [], poeWatts: [], uplinkRx: [], uplinkTx: [] };
     window.SWITCH_SITES     = [];
+    // Single empty stack member keeps the port grid renderable until the
+    // snapshot arrives (the grid expects at least one member to map over).
     window.ARC_MDF_STACK    = [{ idx: 1, ports: [], sfp: [], upCount: 0, downCount: 0, poeCount: 0 }];
     // Loading flags so widgets / future skeletons can show "loading…" affordances.
     window.SWITCH_LOADING   = { fleet: true, snapshot: true };
+
+    // Self-contained port-detail builder. Returns the fields PortDetailPane
+    // / PacketFenceDevicePane read; histories and per-port rates stay empty
+    // until dedicated items are wired. FDB MACs are attached when applySnapshot
+    // captures them.
+    const FLAT60 = Array.from({ length: 60 }, () => 0);
+    const _fdbByKey = Object.create(null);
+    window.makePortDetail = function (memberIdx, port) {
+        const k = `${memberIdx}.${port.n}`;
+        const macs = _fdbByKey[k] || [];
+        return {
+            label:      `${memberIdx}:${port.n}`,
+            state:      port.state,
+            speed:      port.speed || 0,
+            poe:        !!port.poe,
+            poeWatts:   0,
+            inKbps:     0,
+            outKbps:    0,
+            utilPct:    0,
+            inHist:     FLAT60,
+            outHist:    FLAT60,
+            onlineHist: FLAT60.map(() => port.state === "up" ? "ok" : "off"),
+            errors1h:   0,
+            discards1h: 0,
+            device:     null,    // PacketFenceDevicePane shows empty-state on null
+            extraMacs:  macs.length > 1 ? macs.length - 1 : 0,
+            macs,
+            ifIndex:    1000 + (Number(port.n) || 0),
+            ageMin:     0
+        };
+    };
+    // Stash the bag so applySnapshot can repopulate it on each refresh.
+    window._tcsFdbByKey = _fdbByKey;
 
     /* --------------------------------------------------------------------- */
     /* Adapters: payload sections → window globals                           */
@@ -164,30 +198,15 @@
         window.ARC_MDF_LINKS   = uplinks;
         window.SWITCH_PROBLEMS = problems;
 
-        // Rebuild port-detail builder so the FDB MAC list is current.
-        const fdbByKey = Object.create(null);
+        // Repopulate the FDB bag — makePortDetail (defined once at IIFE time)
+        // reads from this on demand so the next click on a port picks up the
+        // freshest MAC list without rebinding the builder.
+        const bag = window._tcsFdbByKey;
+        for (const k of Object.keys(bag)) delete bag[k];
         for (const row of fdb) {
             const k = `${row.member}.${row.port}`;
-            (fdbByKey[k] = fdbByKey[k] || []).push(row.mac);
+            (bag[k] = bag[k] || []).push(row.mac);
         }
-        const mockMakePortDetail = window._mockMakePortDetail || window.makePortDetail;
-        // Cache the mock builder once so successive snapshots don't recurse
-        // into our own wrapper.
-        window._mockMakePortDetail = mockMakePortDetail;
-        window.makePortDetail = function (memberIdx, port) {
-            const base = typeof mockMakePortDetail === "function"
-                ? mockMakePortDetail(memberIdx, port)
-                : { label: `${memberIdx}:${port.n}`, state: port.state };
-            const k = `${memberIdx}.${port.n}`;
-            const macs = fdbByKey[k] || [];
-            return {
-                ...base,
-                state: port.state,
-                poe:   port.poe,
-                extraMacs: macs.length > 1 ? macs.length - 1 : (base.extraMacs || 0),
-                macs
-            };
-        };
     }
 
     /** Fire a re-render in the React app. */
