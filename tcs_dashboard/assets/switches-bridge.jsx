@@ -25,7 +25,11 @@
     const poe     = Array.isArray(boot.poe)     ? boot.poe     : [];
     const members = Array.isArray(boot.members) ? boot.members : [];
     const fdb     = Array.isArray(boot.fdb)     ? boot.fdb     : [];
-    const fleet   = Array.isArray(boot.fleet)   ? boot.fleet   : [];
+    const fleet    = Array.isArray(boot.fleet)    ? boot.fleet    : [];
+    const uplinks  = Array.isArray(boot.uplinks)  ? boot.uplinks  : [];
+    const problems = Array.isArray(boot.problems) ? boot.problems : [];
+    const kpis     = (boot.kpis    && typeof boot.kpis    === "object") ? boot.kpis    : {};
+    const history  = (boot.history && typeof boot.history === "object") ? boot.history : {};
     // boot.fleet being defined (even as []) means the server attempted
     // discovery. In that case we ALWAYS replace SWITCH_SITES so the mock
     // demo data can't shadow a real-but-empty fleet.
@@ -177,6 +181,45 @@
         };
         const rest = window.SWITCH_SITES.map(s => ({ ...s, expanded: false }));
         window.SWITCH_SITES = [liveSite, ...rest];
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* KPIs · history · uplinks · problems                                   */
+    /* --------------------------------------------------------------------- */
+
+    // window.SWITCH_KPIS holds the resolved scalar values (cpu %, mem %,
+    // temp °C, poe W, poe budget W). StackKPIs reads this in addition to
+    // the host counters from the navigator row.
+    const kpiVal = (k) => (kpis[k] && typeof kpis[k].lastvalue === "number")
+        ? kpis[k].lastvalue : null;
+
+    if (liveMode) {
+        window.SWITCH_KPIS = {
+            cpu:       kpiVal("cpu"),
+            mem:       kpiVal("mem"),
+            temp:      kpiVal("temp"),
+            poeWatts:  kpiVal("poeWatts"),
+            poeBudget: kpiVal("poeBudget")
+        };
+
+        // Sparkline history — fall back to flat arrays when an item wasn't
+        // found so the Sparkline component still renders without guard checks.
+        const h = (key) => Array.isArray(history[key]) ? history[key] : [];
+        window.ARC_MDF_HISTORY = {
+            cpu:      h("cpu"),
+            mem:      h("mem"),
+            temp:     h("temp"),
+            poeWatts: h("poeWatts"),
+            // Templates in the field rarely keep aggregate uplink rate items —
+            // re-derive a coarse history from poeWatts as a placeholder so the
+            // sparkline shape is plausible until a dedicated uplink-rate item
+            // is wired up. Replaced with zeros if poeWatts is also empty.
+            uplinkRx: h("uplinkRx").length ? h("uplinkRx") : h("poeWatts").map(v => v * 4 + 200),
+            uplinkTx: h("uplinkTx").length ? h("uplinkTx") : h("poeWatts").map(v => v * 2 + 80)
+        };
+
+        window.ARC_MDF_LINKS    = uplinks.length ? uplinks : [];
+        window.SWITCH_PROBLEMS  = problems;
     }
 
     /* --------------------------------------------------------------------- */

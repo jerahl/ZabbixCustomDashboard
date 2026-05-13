@@ -43,12 +43,16 @@ class ActionSwitches extends ActionBase {
         $switchid = $this->getInput('switchid', '');
 
         $boot = [
-            'host'    => null,
-            'members' => [],
-            'ports'   => [],
-            'poe'     => [],
-            'fdb'     => [],
-            'fleet'   => []
+            'host'     => null,
+            'members'  => [],
+            'ports'    => [],
+            'poe'      => [],
+            'fdb'      => [],
+            'kpis'     => new \stdClass(),
+            'history'  => new \stdClass(),
+            'uplinks'  => [],
+            'problems' => [],
+            'fleet'    => []
         ];
 
         // Fleet discovery powers the Host navigator. Cheap enough (3 item.get
@@ -68,6 +72,12 @@ class ActionSwitches extends ActionBase {
             }
             catch (\Throwable $e) {
                 error_log('[tcs_dashboard] SwitchClient: '.$e->getMessage());
+            }
+            try {
+                $boot['problems'] = $this->collectProblems($switchid);
+            }
+            catch (\Throwable $e) {
+                error_log('[tcs_dashboard] collectProblems: '.$e->getMessage());
             }
         }
 
@@ -107,6 +117,62 @@ class ActionSwitches extends ActionBase {
             'status'       => ((int) $h['status'] === 0) ? 'monitored' : 'not monitored',
             'maintenance'  => (int) ($h['maintenance_status'] ?? 0)
         ];
+    }
+
+    /**
+     * Recent problems for one switch host, shaped for the React ProblemsWidget
+     * (SWITCH_PROBLEMS schema: { ts, sev, host, trig, age, ack }).
+     *
+     * Includes open and recently-resolved problems from the last 24h so the
+     * "last 24h" header above the list is accurate.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function collectProblems(string $hostid, int $limit = 25): array {
+        $sinceClock = time() - 24 * 3600;
+
+        $problems = API::Problem()->get([
+            'output'        => ['eventid', 'name', 'severity', 'clock', 'r_eventid', 'r_clock', 'acknowledged'],
+            'hostids'       => [$hostid],
+            'recent'        => true, // include resolved-recent
+            'time_from'     => $sinceClock,
+            'sortfield'     => ['eventid'],
+            'sortorder'     => 'DESC',
+            'limit'         => $limit
+        ]) ?: [];
+
+        // Single host.get for the display name.
+        $hosts = API::Host()->get([
+            'output'  => ['hostid', 'host'],
+            'hostids' => [$hostid]
+        ]);
+        $hostName = $hosts[0]['host'] ?? '';
+
+        // Zabbix severity 0..5 → frontend label expected by the widget.
+        $sevLabel = [
+            0 => 'info', 1 => 'info', 2 => 'warning',
+            3 => 'average', 4 => 'high', 5 => 'disaster'
+        ];
+
+        $now = time();
+        $out = [];
+        foreach ($problems as $p) {
+            $clock = (int) $p['clock'];
+            $ageSec = max(0, $now - $clock);
+            $h = intdiv($ageSec, 3600);
+            $m = intdiv($ageSec % 3600, 60);
+            $age = sprintf('%02d:%02d', $h, $m);
+
+            $out[] = [
+                'ts'   => date('H:i:s', $clock),
+                'sev'  => $sevLabel[(int) $p['severity']] ?? 'info',
+                'host' => $hostName,
+                'trig' => (string) $p['name'],
+                'age'  => $age,
+                'ack'  => (int) $p['acknowledged'] === 1
+            ];
+        }
+        return $out;
     }
 
     /**

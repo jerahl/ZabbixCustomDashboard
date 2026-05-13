@@ -441,8 +441,22 @@ const ProblemsWidget = () => {
 const StackKPIs = ({ host }) => {
   const stack = window.ARC_MDF_STACK;
   const totalUp = stack.reduce((n, m) => n + m.upCount, 0);
-  const totalPoe = stack.reduce((n, m) => n + m.poeCount, 0);
   const H = window.ARC_MDF_HISTORY;
+  const K = window.SWITCH_KPIS || {};
+
+  const fmt = (v, suffix = "") =>
+    (v === null || v === undefined) ? "—" : (Math.round(v * 10) / 10) + suffix;
+
+  const cpuVal  = K.cpu  !== null && K.cpu  !== undefined ? Math.round(K.cpu)  : host.cpu;
+  const tempVal = K.temp !== null && K.temp !== undefined ? Math.round(K.temp) : host.temp;
+  const poeW    = K.poeWatts;
+  const poeMax  = K.poeBudget;
+
+  // Peak uplink RX from the history series, converted to a friendly unit.
+  const peakRx  = H.uplinkRx && H.uplinkRx.length ? Math.max(...H.uplinkRx) : 0;
+  const peakRxV = peakRx >= 1000 ? (peakRx / 1000).toFixed(1) : Math.round(peakRx);
+  const peakRxU = peakRx >= 1000 ? "Gbps" : "Mbps";
+
   return (
     <div className="card" style={{ marginBottom: 14 }}>
       <div className="swstat-strip">
@@ -454,27 +468,30 @@ const StackKPIs = ({ host }) => {
         <div className="swstat-cell">
           <div className="lbl">Active Ports</div>
           <div className="val">{totalUp}<span style={{fontSize:11,color:"var(--muted)",fontWeight:500}}> / {host.ports}</span></div>
-          <Sparkline data={H.uplinkRx.map(v => Math.round(v / 30 + 60))} color="var(--ok)" width={120} height={20} />
+          <Sparkline data={(H.uplinkRx || []).map(v => Math.round(v / 30 + 60))} color="var(--ok)" width={120} height={20} />
         </div>
         <div className="swstat-cell">
           <div className="lbl">PoE Budget</div>
-          <div className="val">428<span style={{fontSize:11,color:"var(--muted)",fontWeight:500}}> W / 720</span></div>
-          <Sparkline data={H.poeWatts} color="var(--warn)" width={120} height={20} />
+          <div className="val">
+            {fmt(poeW)}
+            <span style={{fontSize:11,color:"var(--muted)",fontWeight:500}}> W{poeMax ? ` / ${Math.round(poeMax)}` : ""}</span>
+          </div>
+          <Sparkline data={H.poeWatts || []} color="var(--warn)" width={120} height={20} />
         </div>
         <div className="swstat-cell">
           <div className="lbl">Uplink RX (peak)</div>
-          <div className="val">1.9<span style={{fontSize:11,color:"var(--muted)",fontWeight:500}}> Gbps</span></div>
-          <Sparkline data={H.uplinkRx} color="var(--zbx)" width={120} height={20} />
+          <div className="val">{peakRxV}<span style={{fontSize:11,color:"var(--muted)",fontWeight:500}}> {peakRxU}</span></div>
+          <Sparkline data={H.uplinkRx || []} color="var(--zbx)" width={120} height={20} />
         </div>
         <div className="swstat-cell">
           <div className="lbl">CPU · 1m</div>
-          <div className="val ok">{host.cpu}%</div>
-          <Sparkline data={H.cpu} color="var(--info)" width={120} height={20} />
+          <div className="val ok">{cpuVal}%</div>
+          <Sparkline data={H.cpu || []} color="var(--info)" width={120} height={20} />
         </div>
         <div className="swstat-cell">
           <div className="lbl">Temp (max)</div>
-          <div className="val warn">{host.temp}°C</div>
-          <Sparkline data={H.temp} color="var(--pf)" width={120} height={20} threshold={75} />
+          <div className="val warn">{tempVal}°C</div>
+          <Sparkline data={H.temp || []} color="var(--pf)" width={120} height={20} threshold={75} />
         </div>
       </div>
     </div>
