@@ -222,8 +222,50 @@ const PfActionRow = ({ mac }) => {
   );
 };
 
+// Normalize detail.device / detail.devices into one array so the tile
+// works both with the new multi-MAC payload and any legacy single-device
+// callers.
+const pfDeviceList = (detail) => {
+  if (!detail) return [];
+  if (Array.isArray(detail.devices) && detail.devices.length) return detail.devices.filter(Boolean);
+  return detail.device ? [detail.device] : [];
+};
+
+// Last two octets of a MAC, uppercased — used as the tab label.
+const pfMacTail = (mac) => {
+  const parts = String(mac || "").split(":");
+  return (parts.length >= 2 ? parts.slice(-2).join(":") : String(mac || "")).toUpperCase();
+};
+
+// "5m" / "2h" / "1d" / "now", relative to the freshest lastSeen on the port.
+const pfRelAge = (lastSeen, refMs) => {
+  if (!lastSeen || lastSeen === "—") return "—";
+  const t = Date.parse(String(lastSeen).replace(" ", "T"));
+  if (!Number.isFinite(t)) return "";
+  const dm = Math.max(0, Math.round((refMs - t) / 60000));
+  if (dm < 1) return "now";
+  if (dm < 60) return `${dm}m`;
+  if (dm < 60 * 24) return `${Math.round(dm/60)}h`;
+  return `${Math.round(dm / (60*24))}d`;
+};
+
+// Threshold above which we expose the filter input + cap the rendered
+// tab count. 100+ MACs on a trunk / uplink port shouldn't be impossible
+// to navigate.
+const PF_TAB_FILTER_THRESHOLD = 12;
+const PF_TAB_RENDER_CAP       = 60;
+
 const PacketFenceDevicePane = ({ host, detail }) => {
-  if (!detail || !detail.device) {
+  const devices = pfDeviceList(detail);
+  const [activeIdx, setActiveIdx] = React.useState(0);
+  const [filter, setFilter] = React.useState("");
+  // Reset selection + filter on port change.
+  React.useEffect(() => {
+    setActiveIdx(0);
+    setFilter("");
+  }, [detail && detail.label]);
+
+  if (!detail || devices.length === 0) {
     return (
       <div className="pf-pane">
         <div className="pf-head">
@@ -236,19 +278,100 @@ const PacketFenceDevicePane = ({ host, detail }) => {
       </div>
     );
   }
-  const d = detail.device;
+
+  const multi = devices.length > 1;
+  const refMs = devices.reduce((mx, dv) => {
+    const t = Date.parse(String(dv.lastSeen || "").replace(" ", "T"));
+    return Number.isNaN(t) ? mx : Math.max(mx, t);
+  }, 0);
+
+  // Filter (when shown) matches against MAC, hostname, IP, role text —
+  // case-insensitive substring. We keep activeIdx pointed at the absolute
+  // device list so the main card stays consistent even when filtered out.
+  const showFilter = devices.length > PF_TAB_FILTER_THRESHOLD;
+  const fq = filter.trim().toLowerCase();
+  const filteredIdxs = !fq
+    ? devices.map((_, i) => i)
+    : devices.reduce((acc, dv, i) => {
+        const hay = [dv.mac, dv.host, dv.ip, dv.role, dv.owner].join(" ").toLowerCase();
+        if (hay.includes(fq)) acc.push(i);
+        return acc;
+      }, []);
+  const renderedIdxs = filteredIdxs.slice(0, PF_TAB_RENDER_CAP);
+  const hiddenCount  = filteredIdxs.length - renderedIdxs.length;
+
+  const safeIdx = Math.min(Math.max(activeIdx, 0), devices.length - 1);
+  const d = devices[safeIdx];
+
   return (
     <div className="pf-pane">
       <div className="pf-head">
         <span className="pf-host">PacketFence device</span>
         <SourceBadge src="pf" />
+        {multi && (
+          <span className="pf-multi-pill" title={`${devices.length} MAC addresses learned on this port`}>
+            <i className="pf-multi-dot" />
+            {devices.length} MACs on port
+          </span>
+        )}
       </div>
       <div className="pf-head" style={{ marginBottom: 10, fontSize: 11 }}>
         <span style={{ fontFamily: "var(--mono)", color: "var(--fg)" }}>{host.id}</span>
         <span className="pf-ifx">ifIndex {detail.ifIndex}</span>
-        <span className="pf-ifx">{1 + (detail.extraMacs || 0)} MAC{detail.extraMacs ? "S" : ""}</span>
+        <span className="pf-ifx">{devices.length} MAC{devices.length > 1 ? "s" : ""} learned</span>
         <span className="pf-age">{detail.ageMin < 60 ? `${detail.ageMin}m old` : `${Math.round(detail.ageMin/60)}h old`}</span>
       </div>
+
+      {multi && (
+        <React.Fragment>
+          {showFilter && (
+            <div className="pf-mac-filter">
+              <input
+                type="text"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder={`Filter ${devices.length} MACs — MAC / host / IP / role`}
+                spellCheck={false}
+                autoComplete="off"
+              />
+              {fq && (
+                <span className="pf-mac-filter-count">
+                  {filteredIdxs.length}/{devices.length}
+                </span>
+              )}
+            </div>
+          )}
+          <div className="pf-mac-tabs" role="tablist" aria-label="MAC addresses on this port">
+            {renderedIdxs.map(i => {
+              const dv = devices[i];
+              const active = i === safeIdx;
+              const age = pfRelAge(dv.lastSeen, refMs);
+              return (
+                <button
+                  key={dv.mac + ":" + i}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  className={"pf-mac-tab" + (active ? " active" : "")}
+                  onClick={() => setActiveIdx(i)}
+                  title={`${dv.mac} · ${dv.host}`}
+                >
+                  <span className={`pf-mac-tab-role role-tag ${dv.roleClass || "unknown"}`}>{dv.role || "—"}</span>
+                  <span className="pf-mac-tab-mac">{pfMacTail(dv.mac)}</span>
+                  <span className={"pf-mac-tab-reg " + (dv.reg === "REG" ? "reg" : "unreg")}>{dv.reg}</span>
+                  <span className="pf-mac-tab-age">{age}</span>
+                </button>
+              );
+            })}
+            {hiddenCount > 0 && (
+              <span className="pf-mac-tab-overflow" title="Narrow the filter to see these">
+                + {hiddenCount} more
+              </span>
+            )}
+          </div>
+        </React.Fragment>
+      )}
+
       <div className="pf-card">
         <div className="pf-mac">
           <span>{d.mac}</span>

@@ -111,23 +111,35 @@
         const macs = _fdbByKey[k] || [];
         const tr   = _trafficByKey[k] || null;
         const pfRows = _pfByKey[k] || [];
-        const pfPrimary = pfRows[0] || null;
-        const device = pfPrimary ? {
-            mac:       pfPrimary.mac,
-            reg:       pfPrimary.reg,
-            ip:        pfPrimary.ip,
-            host:      pfPrimary.host || "—",
-            vendor:    pfPrimary.vendor || "—",
-            os:        pfPrimary.os || "—",
-            owner:     pfPrimary.owner || "—",
-            dhcpFp:    pfPrimary.dhcpFp || "—",
-            lastSeen:  pfPrimary.lastSeen || "—",
-            lastArp:   pfPrimary.lastArp || "—",
-            lastDhcp:  pfPrimary.lastDhcp || "—",
+
+        // Project every PF row into the device shape the React tile reads
+        // and sort by recency so the freshest MAC is tab #0 by default.
+        const _toDevice = (r) => ({
+            mac:       r.mac,
+            reg:       r.reg,
+            ip:        r.ip,
+            host:      r.host || "—",
+            vendor:    r.vendor || "—",
+            os:        r.os || "—",
+            owner:     r.owner || "—",
+            dhcpFp:    r.dhcpFp || "—",
+            lastSeen:  r.lastSeen || "—",
+            lastArp:   r.lastArp || "—",
+            lastDhcp:  r.lastDhcp || "—",
             // Raw label for display, normalized class for the chip's color.
-            role:      pfPrimary.role || "",
-            roleClass: pfRoleClass(pfPrimary.role)
-        } : null;
+            role:      r.role || "",
+            roleClass: pfRoleClass(r.role)
+        });
+        const _seenMs = (ls) => {
+            const t = Date.parse(String(ls || "").replace(" ", "T"));
+            return Number.isFinite(t) ? t : 0;
+        };
+        const devices = pfRows
+            .map(_toDevice)
+            .sort((a, b) => _seenMs(b.lastSeen) - _seenMs(a.lastSeen));
+        // detail.device kept for any caller still reading the singular —
+        // freshest device wins as the default primary.
+        const device = devices[0] || null;
 
         // Server gives us bytes/sec on each side. Convert to kbps for the
         // detail panel, then derive a coarse utilization % off the port's
@@ -161,6 +173,7 @@
             discIn,
             discOut,
             device,
+            devices,
             extraMacs:  device
                 ? Math.max(pfRows.length - 1, macs.length > 1 ? macs.length - 1 : 0)
                 : (macs.length > 1 ? macs.length - 1 : 0),
