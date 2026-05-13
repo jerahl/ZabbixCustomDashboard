@@ -163,19 +163,174 @@ class SwitchClient {
      * Aggregate everything the dashboard needs to render the Switches page
      * for a single host, in one pass.
      *
+     * Performance: prior versions made 6 `item.get` calls (one per logical
+     * section) — every page load and every navigator click paid all 6. We
+     * now do ONE item.get that pulls every item on the host with a single
+     * round-trip, then partition by key prefix in PHP. History.get is also
+     * batched: items are grouped by `value_type` so we end up with at most
+     * 2 history calls instead of 5 (one per KPI). Net result: ~7 fewer
+     * API round-trips per request, the dominant cost.
+     *
      * @return array{members:array, ports:array, poe:array, fdb:array, kpis:array, history:array, uplinks:array}
      */
     public function snapshot(string $hostid): array {
-        $kpis = $this->kpis($hostid);
+        $items = API::Item()->get([
+            'output'  => ['itemid', 'key_', 'lastvalue', 'value_type', 'units'],
+            'hostids' => [$hostid]
+        ]) ?: [];
+
+        $members = $this->extractStackMembers($items);
+        $ports   = $this->extractPortStatus($items);
+        $poe     = $this->extractPoeStatus($items);
+        $fdb     = $this->extractFdb($items);
+        $kpis    = $this->extractKpis($items);
+        $uplinks = $this->extractUplinks($items);
+
         return [
-            'members' => $this->stackMembers($hostid),
-            'ports'   => array_values($this->portStatus($hostid)),
-            'poe'     => array_values($this->poeStatus($hostid)),
-            'fdb'     => $this->fdbTable($hostid),
+            'members' => $members,
+            'ports'   => array_values($ports),
+            'poe'     => array_values($poe),
+            'fdb'     => $fdb,
             'kpis'    => $kpis,
             'history' => $this->historyForKpis($kpis),
-            'uplinks' => $this->uplinks($hostid)
+            'uplinks' => $uplinks
         ];
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Partitioners (operate on the unified item list)                    */
+    /* ------------------------------------------------------------------ */
+
+    /** @param array<int,array<string,mixed>> $items */
+    private function extractStackMembers(array $items): array {
+        $out = [];
+        foreach ($items as $it) {
+            if (!preg_match('/^stacking\.member\[(\d+)\]$/', (string) $it['key_'], $m)) continue;
+            $idx = (int) $m[1];
+            if ($idx < 1 || $idx > self::STACK_LIMIT) continue;
+            $out[$idx] = [
+                'index'  => $idx,
+                'role'   => self::stackRoleLabel((string) $it['lastvalue']),
+                'raw'    => (string) $it['lastvalue'],
+                'itemid' => (string) $it['itemid']
+            ];
+        }
+        ksort($out);
+        return array_values($out);
+    }
+
+    /** @param array<int,array<string,mixed>> $items */
+    private function extractPortStatus(array $items): array {
+        $out = [];
+        foreach ($items as $it) {
+            $idx = self::parseMemberPort((string) $it['key_'], 'net.if.status[ifOperStatus.');
+            if ($idx === null) continue;
+            [$member, $port] = $idx;
+            $status = (int) $it['lastvalue'];
+            $out[$member.'.'.$port] = [
+                'member' => $member, 'port' => $port, 'status' => $status,
+                'label' => self::ifOperLabel($status),
+                'key' => $it['key_'], 'itemid' => (string) $it['itemid']
+            ];
+        }
+        return $out;
+    }
+
+    /** @param array<int,array<string,mixed>> $items */
+    private function extractPoeStatus(array $items): array {
+        $out = [];
+        foreach ($items as $it) {
+            $idx = self::parseMemberPort((string) $it['key_'], 'snmp.interfaces.poe.dstatus[');
+            if ($idx === null) continue;
+            [$member, $port] = $idx;
+            $status = (int) $it['lastvalue'];
+            $out[$member.'.'.$port] = [
+                'member' => $member, 'port' => $port, 'status' => $status,
+                'label' => self::poeLabel($status),
+                'key' => $it['key_'], 'itemid' => (string) $it['itemid']
+            ];
+        }
+        return $out;
+    }
+
+    /** @param array<int,array<string,mixed>> $items */
+    private function extractFdb(array $items): array {
+        $out = [];
+        foreach ($items as $it) {
+            $idx = self::parseMemberPort((string) $it['key_'], 'net.if.mac[');
+            if ($idx === null) continue;
+            [$member, $port] = $idx;
+            $mac = trim((string) $it['lastvalue']);
+            if ($mac === '') continue;
+            $out[] = [
+                'member' => $member, 'port' => $port,
+                'mac'    => self::normalizeMac($mac),
+                'key'    => $it['key_']
+            ];
+        }
+        return $out;
+    }
+
+    /** @param array<int,array<string,mixed>> $items */
+    private function extractKpis(array $items): array {
+        $out = [];
+        foreach (self::KPI_MATCHERS as $logical => $matchers) {
+            foreach ($matchers as [$mode, $needle]) {
+                foreach ($items as $it) {
+                    $k = (string) $it['key_'];
+                    $hit = match ($mode) {
+                        'exact'    => $k === $needle,
+                        'prefix'   => str_starts_with($k, $needle),
+                        'contains' => str_contains($k, $needle),
+                        default    => false
+                    };
+                    if ($hit) {
+                        $out[$logical] = [
+                            'itemid'     => (string) $it['itemid'],
+                            'key'        => $k,
+                            'lastvalue'  => is_numeric($it['lastvalue']) ? (float) $it['lastvalue'] : $it['lastvalue'],
+                            'value_type' => (int) $it['value_type'],
+                            'units'      => (string) $it['units']
+                        ];
+                        continue 3;
+                    }
+                }
+            }
+        }
+        return $out;
+    }
+
+    /** @param array<int,array<string,mixed>> $items */
+    private function extractUplinks(array $items, int $limit = 4): array {
+        $by = [];
+        foreach ($items as $it) {
+            $k = (string) $it['key_'];
+            $idx = null; $kind = null;
+            if (preg_match('/^net\.if\.in\[[^,\]]*?(\d+\.\d+)/', $k, $m))         { $idx = $m[1]; $kind = 'in'; }
+            elseif (preg_match('/^net\.if\.out\[[^,\]]*?(\d+\.\d+)/', $k, $m))    { $idx = $m[1]; $kind = 'out'; }
+            elseif (preg_match('/^net\.if\.errors\[[^,\]]*?(\d+\.\d+)/', $k, $m)) { $idx = $m[1]; $kind = 'err'; }
+            if ($idx === null) continue;
+
+            $by[$idx] ??= ['in' => 0.0, 'out' => 0.0, 'err' => 0];
+            $val = (float) $it['lastvalue'];
+            if ($kind === 'err') $by[$idx]['err'] = (int) $val;
+            else                 $by[$idx][$kind] = $val;
+        }
+
+        $rows = [];
+        foreach ($by as $idx => $v) {
+            $rows[] = [
+                'name'   => str_replace('.', ':', (string) $idx),
+                'type'   => '—',
+                'peer'   => '—',
+                'rxMbps' => round(($v['in']  * 8) / 1_000_000, 1),
+                'txMbps' => round(($v['out'] * 8) / 1_000_000, 1),
+                'util'   => 0,
+                'errors' => (int) $v['err']
+            ];
+        }
+        usort($rows, fn($a, $b) => ($b['rxMbps'] + $b['txMbps']) <=> ($a['rxMbps'] + $a['txMbps']));
+        return array_slice($rows, 0, $limit);
     }
 
     /* ------------------------------------------------------------------ */
@@ -223,43 +378,10 @@ class SwitchClient {
      *
      * @return array<string, array<string, mixed>>
      */
-    public function kpis(string $hostid): array {
-        $items = API::Item()->get([
-            'output'  => ['itemid', 'key_', 'lastvalue', 'value_type', 'units'],
-            'hostids' => [$hostid]
-        ]) ?: [];
-
-        $out = [];
-        foreach (self::KPI_MATCHERS as $logical => $matchers) {
-            foreach ($matchers as [$mode, $needle]) {
-                foreach ($items as $it) {
-                    $k = (string) $it['key_'];
-                    $hit = match ($mode) {
-                        'exact'    => $k === $needle,
-                        'prefix'   => str_starts_with($k, $needle),
-                        'contains' => str_contains($k, $needle),
-                        default    => false
-                    };
-                    if ($hit) {
-                        $out[$logical] = [
-                            'itemid'     => (string) $it['itemid'],
-                            'key'        => $k,
-                            'lastvalue'  => is_numeric($it['lastvalue']) ? (float) $it['lastvalue'] : $it['lastvalue'],
-                            'value_type' => (int) $it['value_type'],
-                            'units'      => (string) $it['units']
-                        ];
-                        continue 3; // next logical
-                    }
-                }
-            }
-        }
-        return $out;
-    }
-
     /**
      * Pull 24h history for the resolved KPI items, downsampled to 48 buckets
-     * (one per 30 min). Returns one array per logical KPI; missing KPIs
-     * return an empty array so the React sparkline renders flat.
+     * (one per 30 min). Items are grouped by `value_type` so we make at
+     * most 2 history.get calls (float + uint) instead of one per KPI.
      *
      * @param array<string, array<string, mixed>> $kpis
      * @return array<string, array<int, float>>
@@ -270,95 +392,54 @@ class SwitchClient {
         $buckets = 48;
         $bucketSec = (int) (($now - $from) / $buckets);
 
-        $out = [];
+        // Group resolved KPIs by their history value_type — only float (0)
+        // and unsigned-int (3) make sense for sparklines.
+        $byType = [];               // value_type => [logical => itemid]
         foreach ($kpis as $logical => $meta) {
             $vt = (int) $meta['value_type'];
-            if ($vt !== 0 && $vt !== 3) { // numeric-float / numeric-uint only
-                $out[$logical] = [];
-                continue;
-            }
+            if ($vt !== 0 && $vt !== 3) continue;
+            $byType[$vt] ??= [];
+            $byType[$vt][$logical] = (string) $meta['itemid'];
+        }
+
+        // Pre-populate the result so missing KPIs render flat.
+        $out = [];
+        foreach (array_keys($kpis) as $logical) $out[$logical] = [];
+
+        foreach ($byType as $vt => $bag) {
+            $itemids = array_values($bag);
             $rows = API::History()->get([
-                'output'    => ['clock', 'value'],
+                'output'    => ['itemid', 'clock', 'value'],
                 'history'   => $vt,
-                'itemids'   => [$meta['itemid']],
+                'itemids'   => $itemids,
                 'time_from' => $from,
                 'sortfield' => 'clock',
                 'sortorder' => 'ASC'
             ]) ?: [];
 
-            // Bucket by floor((clock - from) / bucketSec), average per bucket.
-            $sum = array_fill(0, $buckets, 0.0);
-            $cnt = array_fill(0, $buckets, 0);
+            // Bucket per itemid in one pass.
+            $accum = [];     // itemid => [sum[], cnt[]]
+            foreach ($itemids as $iid) {
+                $accum[$iid] = [array_fill(0, $buckets, 0.0), array_fill(0, $buckets, 0)];
+            }
             foreach ($rows as $r) {
+                $iid = (string) $r['itemid'];
+                if (!isset($accum[$iid])) continue;
                 $i = (int) (((int) $r['clock'] - $from) / max(1, $bucketSec));
                 if ($i < 0 || $i >= $buckets) continue;
-                $sum[$i] += (float) $r['value'];
-                $cnt[$i]++;
+                $accum[$iid][0][$i] += (float) $r['value'];
+                $accum[$iid][1][$i]++;
             }
-            $series = [];
-            for ($i = 0; $i < $buckets; $i++) {
-                $series[] = $cnt[$i] > 0 ? round($sum[$i] / $cnt[$i], 2) : 0.0;
+            foreach ($bag as $logical => $iid) {
+                [$sum, $cnt] = $accum[$iid];
+                $series = [];
+                for ($i = 0; $i < $buckets; $i++) {
+                    $series[] = $cnt[$i] > 0 ? round($sum[$i] / $cnt[$i], 2) : 0.0;
+                }
+                $out[$logical] = $series;
             }
-            $out[$logical] = $series;
         }
         return $out;
-    }
-
-    /* ------------------------------------------------------------------ */
-    /* Uplinks — top-N interfaces by current rate                         */
-    /* ------------------------------------------------------------------ */
-
-    /**
-     * Top-N uplink ports by current (lastvalue) bytes-per-second. Reads
-     * `net.if.in[*]` and `net.if.out[*]` items, pairs them by SNMP index,
-     * and returns rows shaped for the UplinkTable widget.
-     *
-     * Each row: { name "m:p", type, peer, rxMbps, txMbps, util, errors }
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    public function uplinks(string $hostid, int $limit = 4): array {
-        $items = API::Item()->get([
-            'output'      => ['itemid', 'key_', 'lastvalue', 'units'],
-            'hostids'     => [$hostid],
-            'search'      => ['key_' => 'net.if.'],
-            'startSearch' => true
-        ]) ?: [];
-
-        // Group bytes-in / bytes-out / errors by parsed SNMP index.
-        $by = [];   // "m.p" => ['in'=>bps, 'out'=>bps, 'err'=>n]
-        foreach ($items as $it) {
-            $k = (string) $it['key_'];
-            $idx = null;
-            $kind = null;
-            if (preg_match('/^net\.if\.in\[[^,\]]*?(\d+\.\d+)/', $k, $m))       { $idx = $m[1]; $kind = 'in'; }
-            elseif (preg_match('/^net\.if\.out\[[^,\]]*?(\d+\.\d+)/', $k, $m))  { $idx = $m[1]; $kind = 'out'; }
-            elseif (preg_match('/^net\.if\.errors\[[^,\]]*?(\d+\.\d+)/', $k, $m)) { $idx = $m[1]; $kind = 'err'; }
-            if ($idx === null) continue;
-
-            $by[$idx] ??= ['in' => 0.0, 'out' => 0.0, 'err' => 0];
-            $val = (float) $it['lastvalue'];
-            if ($kind === 'err') $by[$idx]['err'] = (int) $val;
-            else                 $by[$idx][$kind] = $val;
-        }
-
-        // Convert to Mbps (template typically returns bps), rank by total, take top N.
-        $rows = [];
-        foreach ($by as $idx => $v) {
-            $rxMbps = round(($v['in']  * 8) / 1_000_000, 1);
-            $txMbps = round(($v['out'] * 8) / 1_000_000, 1);
-            $rows[] = [
-                'name'   => str_replace('.', ':', (string) $idx),
-                'type'   => '—',
-                'peer'   => '—',
-                'rxMbps' => $rxMbps,
-                'txMbps' => $txMbps,
-                'util'   => 0,
-                'errors' => (int) $v['err']
-            ];
-        }
-        usort($rows, fn($a, $b) => ($b['rxMbps'] + $b['txMbps']) <=> ($a['rxMbps'] + $a['txMbps']));
-        return array_slice($rows, 0, $limit);
     }
 
     /* ------------------------------------------------------------------ */

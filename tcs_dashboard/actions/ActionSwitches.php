@@ -193,6 +193,26 @@ class ActionSwitches extends ActionBase {
      * @return array<int, array<string, mixed>>
      */
     private function collectFleet(): array {
+        // Per-request page loads (and every navigator click — tcsNavigateSwitch
+        // does a full page reload) pay the full discovery cost. Cache for 30s
+        // in APCu so the navigator feels instant; counters lag by ≤30s, which
+        // is far below the underlying SNMP poll interval anyway.
+        $cacheKey = 'tcs_dashboard:switch_fleet:v1';
+        if (function_exists('apcu_fetch')) {
+            $hit = apcu_fetch($cacheKey, $ok);
+            if ($ok && is_array($hit)) return $hit;
+        }
+
+        $fleet = $this->collectFleetUncached();
+
+        if (function_exists('apcu_store')) {
+            apcu_store($cacheKey, $fleet, 30);
+        }
+        return $fleet;
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function collectFleetUncached(): array {
         // Step 1: Site/* host groups.
         $siteGroups = API::HostGroup()->get([
             'output'      => ['groupid', 'name'],
