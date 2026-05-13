@@ -126,15 +126,22 @@
     if (liveMode) {
         const activeHostid = host ? String(host.hostid || "") : "";
         const activeHost   = host ? String(host.host || "")   : "";
-        window.SWITCH_SITES = fleet.map(site => ({
-            ...site,
-            switches: (site.switches || []).map(sw => ({
+        const matches = (sw) => activeHostid !== ""
+            ? String(sw.hostid) === activeHostid
+            : sw.id === activeHost;
+        window.SWITCH_SITES = fleet.map(site => {
+            const switches = (site.switches || []).map(sw => ({
                 ...sw,
-                selected: activeHostid !== ""
-                    ? String(sw.hostid) === activeHostid
-                    : sw.id === activeHost
-            }))
-        }));
+                selected: matches(sw)
+            }));
+            return {
+                ...site,
+                // Start collapsed; expand only the site holding the
+                // currently-active switch so the user can see their context.
+                expanded: switches.some(sw => sw.selected),
+                switches
+            };
+        });
         const total = fleet.reduce((n, s) => n + (s.switches || []).length, 0);
         console.info(`[tcs] switch fleet: ${fleet.length} site(s), ${total} host(s)`);
         if (total === 0) {
@@ -168,7 +175,8 @@
             id: "live", name: "Live (Zabbix)", expanded: true, problems: 0,
             switches: [liveRow]
         };
-        window.SWITCH_SITES = [liveSite, ...window.SWITCH_SITES];
+        const rest = window.SWITCH_SITES.map(s => ({ ...s, expanded: false }));
+        window.SWITCH_SITES = [liveSite, ...rest];
     }
 
     /* --------------------------------------------------------------------- */

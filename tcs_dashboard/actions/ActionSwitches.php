@@ -259,7 +259,7 @@ class ActionSwitches extends ActionBase {
                 $sites[$siteId] = [
                     'id'       => $siteId,
                     'name'     => $siteName,
-                    'expanded' => true,
+                    'expanded' => false,
                     'problems' => 0,
                     'switches' => []
                 ];

@@ -31,9 +31,29 @@ $asset_base = 'modules/tcs_dashboard/assets';
         .sidebar .nav-item span:not(.nav-count), .sidebar-footer { display: none; }
         .sidebar .nav-item { justify-content: center; }
     }
+    /* Boot splash: rendered inside #root and replaced when React mounts.
+       Covers the gap between HTML arrival and Babel finishing its parse. */
+    .tcs-boot {
+        position: fixed; inset: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 14px;
+        background: #0d1117; color: #c9d1d9; font: 13px/1.4 "Inter", system-ui, sans-serif;
+    }
+    .tcs-boot .spinner {
+        width: 36px; height: 36px; border-radius: 50%;
+        border: 3px solid rgba(217, 41, 41, 0.15);
+        border-top-color: #d92929;
+        animation: tcs-spin 0.8s linear infinite;
+    }
+    .tcs-boot .label { color: #6e7681; font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; }
+    @keyframes tcs-spin { to { transform: rotate(360deg); } }
 </style>
 
-<div id="root"></div>
+<div id="root">
+    <div class="tcs-boot" role="status" aria-live="polite">
+        <div class="spinner" aria-hidden="true"></div>
+        <div class="label">Loading switch fleet…</div>
+    </div>
+</div>
 
 <script>
     // Server-side snapshot from ActionSwitches; switches-bridge.jsx adapts
