@@ -184,7 +184,9 @@ class SwitchClient {
         $poe     = $this->extractPoeStatus($items);
         $fdb     = $this->extractFdb($items);
         $kpis    = $this->extractKpis($items);
-        $uplinks = $this->extractUplinks($items);
+        // PoE watts is per-port in this template — sum mpower items into a
+        // single host-level KPI so the dashboard's "PoE Budget" tile populates.
+        $this->derivePoeFromMpower($items, $kpis);
 
         return [
             'members' => $members,
@@ -205,12 +207,14 @@ class SwitchClient {
     /** @param array<int,array<string,mixed>> $items */
     private function extractStackMembers(array $items): array {
         // Multiple EXOS / generic-SNMP templates use slightly different key
-        // names for the stacking LLD prototype. Match on any of them — the
-        // shared shape is `<prefix>[<n>]` where <n> is the member index.
+        // names for the stacking LLD prototype. Note that the official
+        // Extreme EXOS by SNMP w POE template ships the key
+        // `stacking.memeber[…]` (typo, sic) — match it as-is.
         $rxList = [
             '/^(?:extreme\.)?stacking\.member\[(\d+)\]$/',
+            '/^(?:extreme\.)?stacking\.memeber\[(\d+)\]$/',
             '/^(?:extreme\.)?stack\.member\[(\d+)\]$/',
-            '/^snmp\.(?:stacking|stack)\.member\[(\d+)\]$/'
+            '/^snmp\.(?:stacking|stack)\.(?:member|memeber)\[(\d+)\]$/'
         ];
         $out = [];
         foreach ($items as $it) {
@@ -283,18 +287,34 @@ class SwitchClient {
 
     /** @param array<int,array<string,mixed>> $items */
     private function extractFdb(array $items): array {
+        // Two template variants for the FDB / MAC-learning list:
+        //   net.if.mac[<idx>]   (generic SNMP)
+        //   port.mac.list[<idx>] (Extreme EXOS by SNMP w POE)
+        $prefixes = ['net.if.mac[', 'port.mac.list['];
         $out = [];
         foreach ($items as $it) {
-            $idx = self::parseMemberPort((string) $it['key_'], 'net.if.mac[');
+            $k = (string) $it['key_'];
+            $idx = null;
+            foreach ($prefixes as $p) {
+                $idx = self::parseMemberPort($k, $p);
+                if ($idx !== null) break;
+            }
             if ($idx === null) continue;
             [$member, $port] = $idx;
-            $mac = trim((string) $it['lastvalue']);
-            if ($mac === '') continue;
-            $out[] = [
-                'member' => $member, 'port' => $port,
-                'mac'    => self::normalizeMac($mac),
-                'key'    => $it['key_']
-            ];
+            $raw = trim((string) $it['lastvalue']);
+            if ($raw === '') continue;
+            // port.mac.list returns a comma-separated list; explode and emit
+            // one FDB row per MAC so the bridge can attach them to the right
+            // port detail.
+            foreach (preg_split('/[\s,;]+/', $raw) as $tok) {
+                $tok = trim((string) $tok);
+                if ($tok === '') continue;
+                $out[] = [
+                    'member' => $member, 'port' => $port,
+                    'mac'    => self::normalizeMac($tok),
+                    'key'    => $k
+                ];
+            }
         }
         return $out;
     }
@@ -329,6 +349,36 @@ class SwitchClient {
     }
 
     /**
+     * Extreme EXOS by SNMP w POE doesn't ship a host-level "total PoE watts"
+     * item — it has per-port `snmp.interfaces.poe.mpower[<idx>]` (milliwatts).
+     * Sum those into a synthetic KPI so the PoE Budget tile populates.
+     *
+     * @param array<int,array<string,mixed>> $items
+     * @param array<string,array<string,mixed>> $kpis  modified in place
+     */
+    private function derivePoeFromMpower(array $items, array &$kpis): void {
+        if (isset($kpis['poeWatts'])) return; // template provided one directly
+
+        $milliWatts = 0.0;
+        $haveAny = false;
+        foreach ($items as $it) {
+            $k = (string) $it['key_'];
+            if (!str_starts_with($k, 'snmp.interfaces.poe.mpower[')) continue;
+            $haveAny = true;
+            $milliWatts += (float) $it['lastvalue'];
+        }
+        if (!$haveAny) return;
+
+        $kpis['poeWatts'] = [
+            'itemid'     => '',
+            'key'        => 'synthetic:sum(snmp.interfaces.poe.mpower[*])',
+            'lastvalue'  => round($milliWatts / 1000.0, 1),  // mW → W
+            'value_type' => 0,
+            'units'      => 'W'
+        ];
+    }
+
+    /**
      * Extract per-port traffic + errors from net.if.in/out/errors items.
      * Returns one row per (m.p) key with bps values + error count, so
      * uplinksFromTraffic can pick the top N and makePortDetail can read
@@ -338,19 +388,34 @@ class SwitchClient {
      * @return array<string, array{in:float, out:float, err:int}>
      */
     private function extractTraffic(array $items): array {
+        // Template variants (Extreme EXOS by SNMP w POE uses the first two):
+        //   net.if.in[ifHCInOctets.<idx>]       net.if.out[ifHCOutOctets.<idx>]
+        //   net.if.in.errors[ifInErrors.<idx>]  net.if.out.errors[ifOutErrors.<idx>]
+        //   net.if.errors[<m>.<p>]              (older generic-SNMP templates)
+        // parseMemberPort handles both single-ifIndex and "m.p" suffixes.
+        $prefixes = [
+            'in'  => ['net.if.in[ifHCInOctets.',  'net.if.in['],
+            'out' => ['net.if.out[ifHCOutOctets.', 'net.if.out['],
+            'err' => ['net.if.in.errors[ifInErrors.', 'net.if.out.errors[ifOutErrors.', 'net.if.errors[']
+        ];
+
         $by = [];
         foreach ($items as $it) {
             $k = (string) $it['key_'];
-            $idx = null; $kind = null;
-            if (preg_match('/^net\.if\.in\[[^,\]]*?(\d+\.\d+)/', $k, $m))         { $idx = $m[1]; $kind = 'in'; }
-            elseif (preg_match('/^net\.if\.out\[[^,\]]*?(\d+\.\d+)/', $k, $m))    { $idx = $m[1]; $kind = 'out'; }
-            elseif (preg_match('/^net\.if\.errors\[[^,\]]*?(\d+\.\d+)/', $k, $m)) { $idx = $m[1]; $kind = 'err'; }
-            if ($idx === null) continue;
-
+            $hit = null; $hitKind = null;
+            foreach ($prefixes as $kind => $pfxList) {
+                foreach ($pfxList as $p) {
+                    $r = self::parseMemberPort($k, $p);
+                    if ($r !== null) { $hit = $r; $hitKind = $kind; break 2; }
+                }
+            }
+            if ($hit === null) continue;
+            $idx = $hit[0].'.'.$hit[1];
             $by[$idx] ??= ['in' => 0.0, 'out' => 0.0, 'err' => 0];
             $val = (float) $it['lastvalue'];
-            if ($kind === 'err') $by[$idx]['err'] = (int) $val;
-            else                 $by[$idx][$kind] = $val;
+            // Two error items per port (in + out); sum into one bucket.
+            if ($hitKind === 'err') $by[$idx]['err'] += (int) $val;
+            else                    $by[$idx][$hitKind] = $val;
         }
         return $by;
     }
@@ -385,6 +450,8 @@ class SwitchClient {
      */
     private const KPI_MATCHERS = [
         'cpu' => [
+            // Extreme EXOS template:
+            ['prefix',   'system.cpu.util[extremeCpuMonitorTotalUtilization'],
             ['exact',    'system.cpu.util'],
             ['prefix',   'system.cpu.util['],
             ['prefix',   'extreme.cpu.util'],
@@ -397,10 +464,17 @@ class SwitchClient {
             ['contains', 'memory.util']
         ],
         'temp' => [
+            // Extreme EXOS template:
+            ['prefix',   'sensor.temp.value[extremeCurrentTemperature'],
+            ['prefix',   'sensor.temp.value['],
             ['prefix',   'sensor.temp['],
             ['prefix',   'extreme.temp'],
             ['contains', 'temperature']
         ],
+        // poeWatts / poeBudget are not first-class items in the Extreme EXOS
+        // template — they're derived in extractKpisDerived() from the per-port
+        // mpower values. Leave the matchers here for templates that DO have
+        // dedicated host-level items.
         'poeWatts' => [
             ['prefix',   'extreme.poe.watts'],
             ['prefix',   'snmp.poe.total'],
@@ -487,22 +561,45 @@ class SwitchClient {
     /* ------------------------------------------------------------------ */
 
     /**
-     * Parse "<prefix><member>.<port>]" → [member, port]. Returns null on
-     * mismatch.
+     * Parse the port identifier out of an item key, accepting either format
+     * the wild encounters:
+     *
+     *   - `<prefix><member>.<port>]`  (older per-stack-port templates)
+     *   - `<prefix><ifIndex>]`        (Extreme EXOS by SNMP w POE — uses SNMP
+     *                                  ifIndex; ifIndex = 1000 × member + port
+     *                                  in stacks, or just port on standalones)
+     *
+     * Returns [member, port]. Returns null on mismatch.
      *
      * @return array{0:int,1:int}|null
      */
     private static function parseMemberPort(string $key, string $prefix): ?array {
         if (!str_starts_with($key, $prefix)) return null;
         $rest = substr($key, strlen($prefix));
-        // Trim trailing ']' and anything after a comma (some template
-        // variants include extra dimensions).
         $rest = rtrim($rest, ']');
         if (($cpos = strpos($rest, ',')) !== false) {
             $rest = substr($rest, 0, $cpos);
         }
-        if (!preg_match('/^(\d+)\.(\d+)$/', $rest, $m)) return null;
-        return [(int) $m[1], (int) $m[2]];
+        // Dotted "m.p" form: take verbatim.
+        if (preg_match('/^(\d+)\.(\d+)$/', $rest, $m)) {
+            return [(int) $m[1], (int) $m[2]];
+        }
+        // Single ifIndex: derive (member, port) from the standard Extreme
+        // EXOS encoding. ifIndex < 1000 → standalone (member 1). >= 1000 →
+        // member = ifIndex / 1000, port = ifIndex % 1000. Anything above
+        // STACK_LIMIT is rejected — those are usually VLAN / virtual ifs.
+        if (preg_match('/^(\d+)$/', $rest, $m)) {
+            $idx = (int) $m[1];
+            if ($idx <= 0) return null;
+            if ($idx < 1000) {
+                return [1, $idx];
+            }
+            $member = intdiv($idx, 1000);
+            $port   = $idx % 1000;
+            if ($member < 1 || $member > self::STACK_LIMIT || $port <= 0) return null;
+            return [$member, $port];
+        }
+        return null;
     }
 
     private static function ifOperLabel(int $status): string {
