@@ -48,6 +48,11 @@
             "layout": "layout.json",
             "view": null
         },
+        "tcs.switches.port.history.data": {
+            "class": "ActionSwitchesPortHistoryData",
+            "layout": "layout.json",
+            "view": null
+        },
         "tcs.servers.view": {
             "class": "ActionServers",
             "view": "servers.view",

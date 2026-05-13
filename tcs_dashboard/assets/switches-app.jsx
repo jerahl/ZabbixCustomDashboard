@@ -26,6 +26,19 @@ const SwitchesApp = () => {
     if (!port || port.state === "absent") return;
     const detail = window.makePortDetail(memberIdx, port);
     setSelectedPort({ member: memberIdx, port: port.n, detail });
+    // Sparklines are populated lazily — the snapshot has scalar rates per
+    // port but not per-port time series. Fire the history fetch in the
+    // background and patch the detail when it returns, only if the user
+    // hasn't selected a different port in the meantime.
+    if (typeof window.tcsLoadPortHistory === "function") {
+      window.tcsLoadPortHistory(memberIdx, port.n).then(hist => {
+        setSelectedPort(curr =>
+          curr && curr.member === memberIdx && curr.port === port.n
+            ? { ...curr, detail: { ...curr.detail, inHist: hist.inHist, outHist: hist.outHist } }
+            : curr
+        );
+      });
+    }
   };
 
   useEffectSWA(() => {

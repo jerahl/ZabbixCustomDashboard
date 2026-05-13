@@ -289,6 +289,7 @@
 
     const URL_FLEET    = window.TCS_SWITCH_FLEET_URL    || "zabbix.php?action=tcs.switches.fleet.data";
     const URL_SNAPSHOT = window.TCS_SWITCH_SNAPSHOT_URL || "zabbix.php?action=tcs.switches.snapshot.data";
+    const URL_PORTHIST = window.TCS_SWITCH_PORTHIST_URL || "zabbix.php?action=tcs.switches.port.history.data";
 
     async function fetchJson(url) {
         const resp = await fetch(url, {
@@ -354,6 +355,26 @@
     /* --------------------------------------------------------------------- */
     /* CYCLE PoE handler                                                     */
     /* --------------------------------------------------------------------- */
+
+    // Lazy per-port sparkline history. SwitchesApp calls this on port click
+    // and patches the detail when the response arrives. Errors return flat
+    // arrays so the panel stays renderable.
+    window.tcsLoadPortHistory = async function (member, port) {
+        const hostid = window.TCS_SWITCH_HOSTID;
+        if (!hostid || !member || !port) return { inHist: FLAT60, outHist: FLAT60 };
+        const url = `${URL_PORTHIST}&hostid=${encodeURIComponent(hostid)}`
+                  + `&member=${encodeURIComponent(member)}&port=${encodeURIComponent(port)}`;
+        try {
+            const j = await fetchJson(url);
+            return {
+                inHist:  Array.isArray(j.inHist)  ? j.inHist  : FLAT60,
+                outHist: Array.isArray(j.outHist) ? j.outHist : FLAT60
+            };
+        } catch (e) {
+            console.warn("[tcs] port history fetch failed:", e);
+            return { inHist: FLAT60, outHist: FLAT60 };
+        }
+    };
 
     window.tcsCyclePoe = async function (member, port) {
         const url = window.TCS_SWITCH_CYCLEPOE_URL;
