@@ -35,6 +35,14 @@ $asset_base = 'modules/tcs_dashboard/assets';
 
 <div id="root"></div>
 
+<script>
+    // Server-side snapshot from ActionSwitches::collectSwitchBoot(). A later
+    // switches-bridge.jsx will adapt this into window.SWITCH_SITES /
+    // window.ARC_MDF_STACK / window.makePortDetail. Until then, switches-data.jsx
+    // continues to populate those globals from its mock fixtures.
+    window.SWITCH_BOOT = <?= json_encode($data['boot'] ?? new stdClass(), JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) ?>;
+</script>
+
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>

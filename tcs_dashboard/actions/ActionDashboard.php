@@ -5,6 +5,7 @@ namespace Modules\TcsDashboard\Actions;
 use API;
 use CControllerResponseData;
 use CControllerResponseFatal;
+use Modules\TcsDashboard\Lib\PFClient;
 
 /**
  * GET zabbix.php?action=tcs.dashboard.view[&hostid=NNN]
@@ -63,7 +64,9 @@ class ActionDashboard extends ActionBase {
             $boot['events']      = $this->collectEvents($hostid);
             $boot['alerts']      = $this->collectAlertsSummary($hostid);
             $boot['wiredPorts']  = $this->collectWiredPorts($hostid);
-            // $boot['pfClients']   = $this->collectPacketFence($hostid);
+            [$pfClients, $pfAuthFails] = $this->collectPacketFence($hostid, $boot['host']);
+            $boot['pfClients']   = $pfClients;
+            $boot['pfAuthFails'] = $pfAuthFails;
         }
 
         $data = [
@@ -322,6 +325,72 @@ class ActionDashboard extends ActionBase {
     private function collectWiredPorts(string $hostid): array {
         // Stub. Populate from net.if.* items if/when you discover them.
         return [];
+    }
+
+    /**
+     * Pull recent PacketFence clients + auth failures for the given host.
+     * Returns [[clients], [authFails]] — empty arrays on any failure so the
+     * UI renders its empty-state instead of breaking.
+     *
+     * Reads PF endpoint creds from host- or template-level user macros:
+     *   {$PF.URL}        — base URL, e.g. https://pf.example/api
+     *   {$PF.USER}       — API username
+     *   {$PF.PASSWORD}   — API password (Secret text recommended)
+     *   {$PF.VERIFY.SSL} — "0" to disable TLS verify; anything else verifies
+     *
+     * Device key passed to PF is the host's `host` field (typically the
+     * switch hostname or AP MAC, which PF stores in locationlog.switch).
+     */
+    private function collectPacketFence(string $hostid, ?array $host): array {
+        $macros = $this->resolvePfMacros($hostid);
+        if ($macros === null) {
+            return [[], []];
+        }
+
+        try {
+            $pf = PFClient::fromMacros($macros);
+            $deviceId = (string) ($host['host'] ?? '');
+            if ($deviceId === '') return [[], []];
+
+            return [
+                $pf->clientsForNode($deviceId),
+                $pf->authFailuresForNode($deviceId)
+            ];
+        }
+        catch (\Throwable $e) {
+            error_log('[tcs_dashboard] PFClient: '.$e->getMessage());
+            return [[], []];
+        }
+    }
+
+    /**
+     * @return array{url:string,user:string,pass:string,verify_ssl:bool}|null
+     */
+    private function resolvePfMacros(string $hostid): ?array {
+        $rows = API::UserMacro()->get([
+            'output'  => ['macro', 'value'],
+            'hostids' => [$hostid],
+            'filter'  => ['macro' => ['{$PF.URL}', '{$PF.USER}', '{$PF.PASSWORD}', '{$PF.VERIFY.SSL}']]
+        ]) ?: [];
+
+        $bag = [];
+        foreach ($rows as $r) {
+            $bag[$r['macro']] = (string) $r['value'];
+        }
+
+        $url  = $bag['{$PF.URL}']  ?? '';
+        $user = $bag['{$PF.USER}'] ?? '';
+        $pass = $bag['{$PF.PASSWORD}'] ?? '';
+        if ($url === '' || $user === '' || $pass === '') {
+            return null;
+        }
+
+        return [
+            'url'        => $url,
+            'user'       => $user,
+            'pass'       => $pass,
+            'verify_ssl' => ($bag['{$PF.VERIFY.SSL}'] ?? '1') !== '0'
+        ];
     }
 
     /* --------------------------------------------------------------------- */
