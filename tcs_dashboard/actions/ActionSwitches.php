@@ -113,37 +113,61 @@ class ActionSwitches extends ActionBase {
      * Discover the switch fleet and roll up per-host port/PoE counters in a
      * shape the existing HostNavigator widget consumes (SWITCH_SITES schema).
      *
-     * Switch identity: a host is treated as a switch iff it has at least one
-     * item whose key starts with `stacking.member[` (the EXOS template's
-     * discovery signature). This is cheaper and more accurate than matching
-     * on template name and stays correct when templates are renamed.
+     * Discovery (in order):
+     *   1. Enumerate host groups whose name starts with `Site/` — these are
+     *      the operator-curated sites the navigator buckets switches into.
+     *   2. Pull hosts in those groups that carry tag `target=exos` (set on
+     *      the EXOS template / per-host so non-switch members of a Site/
+     *      group don't leak into the switch view).
+     *   3. Pull stacking.member items for those hosts so we know stack size.
      *
-     * Site grouping: hosts are bucketed by their first host group whose name
-     * starts with `Site/` (integration-plan §2a convention). Everything else
-     * falls into a synthetic "Unsited" bucket so it still renders.
+     * Site grouping: each host's first `Site/<name>` group wins. Hosts in
+     * multiple Site/* groups are still listed once, under their first.
      *
      * @return array<int, array<string, mixed>>
      */
     private function collectFleet(): array {
-        // Step 1: discover switch hostids via stacking.member items.
+        // Step 1: Site/* host groups.
+        $siteGroups = API::HostGroup()->get([
+            'output'      => ['groupid', 'name'],
+            'search'      => ['name' => 'Site/'],
+            'startSearch' => true
+        ]) ?: [];
+        if (!$siteGroups) return [];
+
+        $groupids = array_column($siteGroups, 'groupid');
+
+        // Step 2: hosts in those groups, tag target=exos.
+        $taggedHosts = API::Host()->get([
+            'output'           => ['hostid', 'host', 'name', 'status'],
+            'selectInterfaces' => ['ip', 'main'],
+            'selectHostGroups' => ['groupid', 'name'],
+            'selectInventory'  => ['model'],
+            'selectTags'       => ['tag', 'value'],
+            'groupids'         => $groupids,
+            'tags'             => [['tag' => 'target', 'value' => 'exos', 'operator' => 1]],
+            'evaltype'         => 0,
+            'preservekeys'     => true
+        ]) ?: [];
+        if (!$taggedHosts) return [];
+
+        $hostids = array_keys($taggedHosts);
+
+        // Step 3: stacking.member items — count per host for the members KPI.
         $stackingItems = API::Item()->get([
-            'output'      => ['hostid', 'key_', 'lastvalue'],
+            'output'      => ['hostid', 'key_'],
+            'hostids'     => $hostids,
             'search'      => ['key_' => 'stacking.member['],
             'startSearch' => true
         ]) ?: [];
 
-        if (!$stackingItems) return [];
-
-        $hostids = [];
         $memberCount = [];
         foreach ($stackingItems as $it) {
             $hid = (string) $it['hostid'];
-            $hostids[$hid] = true;
             $memberCount[$hid] = ($memberCount[$hid] ?? 0) + 1;
         }
-        $hostids = array_keys($hostids);
 
-        // Step 2: pull port + PoE state for every switch in one go each.
+        // Step 4: port + PoE state for every switch, one item.get per key prefix.
         $portItems = API::Item()->get([
             'output'      => ['hostid', 'key_', 'lastvalue'],
             'hostids'     => $hostids,
@@ -176,16 +200,7 @@ class ActionSwitches extends ActionBase {
             }
         }
 
-        // Step 3: host metadata + open problem counts.
-        $hosts = API::Host()->get([
-            'output'           => ['hostid', 'host', 'name', 'status'],
-            'selectInterfaces' => ['ip', 'main'],
-            'selectHostGroups' => ['name'],
-            'selectInventory'  => ['model'],
-            'hostids'          => $hostids,
-            'preservekeys'     => true
-        ]) ?: [];
-
+        // Step 5: open problem counts. Hosts metadata already came in step 2.
         $problems = API::Problem()->get([
             'output'  => ['eventid', 'severity', 'r_eventid', 'objectid'],
             'hostids' => $hostids,
@@ -214,10 +229,10 @@ class ActionSwitches extends ActionBase {
             }
         }
 
-        // Step 4: bucket by site host group, build the SWITCH_SITES payload.
+        // Step 6: bucket by Site/* host group, build the SWITCH_SITES payload.
         $sites = [];   // siteId => row
         foreach ($hostids as $hid) {
-            $h = $hosts[$hid] ?? null;
+            $h = $taggedHosts[$hid] ?? null;
             if (!$h) continue;
 
             $ip = '';
@@ -225,14 +240,16 @@ class ActionSwitches extends ActionBase {
                 if ((int) ($iface['main'] ?? 0) === 1) { $ip = $iface['ip']; break; }
             }
 
-            $siteName = 'Unsited';
+            // Discovery guarantees at least one Site/* group; pick the first.
+            $siteName = '';
             foreach ($h['hostgroups'] ?? [] as $g) {
                 if (str_starts_with((string) $g['name'], 'Site/')) {
                     $siteName = substr($g['name'], strlen('Site/'));
                     break;
                 }
             }
-            $siteId = strtolower(preg_replace('/[^a-z0-9]+/i', '-', $siteName)) ?: 'unsited';
+            if ($siteName === '') continue; // shouldn't happen — defensive
+            $siteId = strtolower(preg_replace('/[^a-z0-9]+/i', '-', $siteName));
 
             if (!isset($sites[$siteId])) {
                 $sites[$siteId] = [
@@ -266,18 +283,13 @@ class ActionSwitches extends ActionBase {
             $sites[$siteId]['problems'] += $row['problems'];
         }
 
-        // Sort: switches alphabetically within each site, sites alphabetically
-        // but pin Unsited to the bottom.
+        // Sort: switches alphabetically within each site, sites alphabetically.
         foreach ($sites as &$site) {
             usort($site['switches'], fn($a, $b) => strcmp($a['id'], $b['id']));
         }
         unset($site);
 
-        uasort($sites, function($a, $b) {
-            if ($a['id'] === 'unsited') return 1;
-            if ($b['id'] === 'unsited') return -1;
-            return strcmp($a['name'], $b['name']);
-        });
+        uasort($sites, fn($a, $b) => strcmp($a['name'], $b['name']));
 
         return array_values($sites);
     }
