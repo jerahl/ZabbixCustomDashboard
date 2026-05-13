@@ -96,21 +96,40 @@ class ActionSwitchesSnapshotData extends ActionDataBase {
      */
     private function collectPfNodes(string $hostid, ?array $host) {
         $macros = $this->resolvePfMacros($hostid);
-        if ($macros === null) return new \stdClass();
-        $deviceId = (string) ($host['host'] ?? '');
-        if ($deviceId === '') return new \stdClass();
+        if ($macros === null) {
+            error_log('[tcs_dashboard] pfNodes: skipped — {$PF.URL/USER/PASSWORD} not set on host '.$hostid);
+            return new \stdClass();
+        }
+
+        // PF stores switches by whatever identifier was set in switches.conf —
+        // usually IP, sometimes hostname (or visible_name). OR all three so we
+        // hit regardless of how the operator configured it.
+        $candidates = array_values(array_unique(array_filter([
+            (string) ($host['host']         ?? ''),
+            (string) ($host['visible_name'] ?? ''),
+            (string) ($host['ip']           ?? ''),
+        ], fn($s) => $s !== '')));
+        if (!$candidates) {
+            error_log('[tcs_dashboard] pfNodes: no switch identifier on host '.$hostid);
+            return new \stdClass();
+        }
 
         $pf = PFClient::fromMacros($macros);
-        $devices = $pf->devicesOnSwitch($deviceId);
+        $devices = $pf->devicesOnSwitch($candidates);
 
         $bag = [];
+        $skipped = 0;
         foreach ($devices as $d) {
             $idx = self::parseIfIndex((string) ($d['port'] ?? ''));
-            if ($idx === null) continue;
+            if ($idx === null) { $skipped++; continue; }
             $key = $idx[0].'.'.$idx[1];
             $bag[$key] ??= [];
             $bag[$key][] = $d;
         }
+        error_log(sprintf(
+            '[tcs_dashboard] pfNodes: host=%s candidates=[%s] devices=%d bucketed=%d skipped=%d',
+            $hostid, implode(',', $candidates), count($devices), count($bag), $skipped
+        ));
         return $bag ?: new \stdClass();
     }
 

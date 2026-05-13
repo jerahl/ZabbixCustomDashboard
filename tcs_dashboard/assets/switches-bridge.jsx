@@ -354,10 +354,16 @@
         const pfBag = window._tcsPfByKey;
         for (const k of Object.keys(pfBag)) delete pfBag[k];
         const pfNodes = (snap.pfNodes && typeof snap.pfNodes === "object") ? snap.pfNodes : {};
+        let pfPorts = 0, pfDevices = 0;
         for (const k of Object.keys(pfNodes)) {
             const rows = pfNodes[k];
-            if (Array.isArray(rows) && rows.length) pfBag[k] = rows;
+            if (Array.isArray(rows) && rows.length) {
+                pfBag[k] = rows;
+                pfPorts++;
+                pfDevices += rows.length;
+            }
         }
+        console.info("[tcs] pf nodes:", pfPorts, "port(s),", pfDevices, "device(s)");
     }
 
     /** Fire a re-render in the React app. */

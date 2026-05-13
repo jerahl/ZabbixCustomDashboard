@@ -111,19 +111,45 @@ class PFClient {
      * timestamps, and the SNMP ifIndex (locationlog.port) needed to bucket
      * the row to a member.port.
      *
+     * PF stores `locationlog.switch` as whatever NAS identifier the operator
+     * configured in conf/switches.conf — usually the IP, sometimes the
+     * hostname. Caller can pass any number of candidate identifiers; we OR
+     * them together in a single search query.
+     *
+     * Uses POST /api/v1/nodes/search (the canonical PF v11+ search surface)
+     * rather than GET /api/v1/nodes with flat query params — the GET form
+     * silently ignores nested-field filters on most PF builds.
+     *
+     * @param array<int, string>|string $switchIds
      * @return array<int, array<string, mixed>>
      */
-    public function devicesOnSwitch(string $deviceId, int $limit = 500): array {
-        $rows = $this->get('/api/v1/nodes', [
-            'fields' => 'mac,pid,computername,status,category_id,'
-                       .'device_class,device_type,device_manufacturer,'
-                       .'dhcp_fingerprint,dhcp_vendor,'
-                       .'last_seen,last_arp,last_dhcp,'
-                       .'ip4log.ip,locationlog.switch,locationlog.port',
-            'limit'  => $limit,
-            'sort'   => 'last_seen DESC',
-            'locationlog.switch' => $deviceId
-        ]);
+    public function devicesOnSwitch($switchIds, int $limit = 500): array {
+        $ids = is_array($switchIds) ? $switchIds : [(string) $switchIds];
+        $ids = array_values(array_filter(array_map('strval', $ids), fn($s) => $s !== ''));
+        if (!$ids) return [];
+
+        $values = array_map(fn($id) => [
+            'field' => 'locationlog.switch',
+            'op'    => 'equals',
+            'value' => $id
+        ], $ids);
+
+        $body = [
+            'query' => count($values) === 1
+                ? $values[0]
+                : ['op' => 'or', 'values' => $values],
+            'fields' => [
+                'mac', 'pid', 'computername', 'status', 'category_id',
+                'device_class', 'device_type', 'device_manufacturer',
+                'dhcp_fingerprint', 'dhcp_vendor',
+                'last_seen', 'last_arp', 'last_dhcp',
+                'ip4log.ip', 'locationlog.switch', 'locationlog.port'
+            ],
+            'limit' => $limit,
+            'sort'  => ['last_seen DESC']
+        ];
+
+        $rows = $this->call('POST', '/api/v1/nodes/search', [], $body);
 
         $out = [];
         foreach (($rows['items'] ?? []) as $r) {
