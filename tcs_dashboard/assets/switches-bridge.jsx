@@ -30,14 +30,29 @@
     // Expose the bound hostid so the CYCLE button can POST without prop-drilling.
     window.TCS_SWITCH_HOSTID = host ? String(host.hostid || "") : "";
 
-    // Navigation helper: reload page with ?switchid=<hostid>. Preserves the
-    // rest of the query string (tweak overrides, etc.).
+    // Navigation: SPA-style. No page reload — just re-fetch the snapshot for
+    // the new hostid and update the URL via pushState so refresh / back-button
+    // still target the right switch.
     window.tcsNavigateSwitch = function (hostid) {
         if (!hostid) return;
+        const id = String(hostid);
         const params = new URLSearchParams(window.location.search);
         params.set("action", "tcs.switches.view");
-        params.set("switchid", String(hostid));
-        window.location.search = "?" + params.toString();
+        params.set("switchid", id);
+        try {
+            window.history.pushState({ switchid: id }, "", "?" + params.toString());
+        } catch (e) { /* ignore — pushState rarely fails */ }
+        window.TCS_SWITCH_HOSTID = id;
+        // Reset port-status / KPI state so the user sees the empty skeleton
+        // for the new host while the snapshot is in flight.
+        window.ARC_MDF_STACK   = [{ idx: 1, ports: [], sfp: [], upCount: 0, downCount: 0, poeCount: 0 }];
+        window.SWITCH_KPIS     = { cpu: null, mem: null, temp: null, poeWatts: null, poeBudget: null };
+        window.ARC_MDF_HISTORY = { cpu: [], mem: [], temp: [], poeWatts: [], uplinkRx: [], uplinkTx: [] };
+        window.ARC_MDF_LINKS   = [];
+        window.SWITCH_PROBLEMS = [];
+        window.SWITCH_LOADING  = { ...window.SWITCH_LOADING, snapshot: true };
+        window.dispatchEvent(new CustomEvent("tcs:switch-data", { detail: { section: "navigate" } }));
+        fetchSnapshot(id);
     };
 
     // Initial empty defaults. The page is data-source-truthy: nothing renders
@@ -230,6 +245,28 @@
         return resp.json();
     }
 
+    function fetchSnapshot(switchid) {
+        if (!switchid) return;
+        const url = `${URL_SNAPSHOT}&switchid=${encodeURIComponent(switchid)}`;
+        return fetchJson(url)
+            .then(j => {
+                applySnapshot(j || {});
+                const counts = {
+                    members: (j.members || []).length,
+                    ports:   (j.ports   || []).length,
+                    poe:     (j.poe     || []).length,
+                    uplinks: (j.uplinks || []).length,
+                    problems: (j.problems || []).length
+                };
+                console.info("[tcs] snapshot for hostid", switchid, counts);
+            })
+            .catch(e => console.error("[tcs] snapshot fetch failed:", e, "url:", url))
+            .finally(() => {
+                window.SWITCH_LOADING.snapshot = false;
+                notify("snapshot");
+            });
+    }
+
     // Fire both in parallel so they don't queue behind each other.
     console.info("[tcs] fetching switch fleet + snapshot…");
     fetchJson(URL_FLEET)
@@ -245,23 +282,20 @@
 
     const switchid = host ? String(host.hostid || "") : "";
     if (switchid) {
-        const snapUrl = `${URL_SNAPSHOT}&switchid=${encodeURIComponent(switchid)}`;
-        fetchJson(snapUrl)
-            .then(j => {
-                applySnapshot(j || {});
-                console.info("[tcs] snapshot loaded for hostid", switchid);
-            })
-            .catch(e => console.error("[tcs] snapshot fetch failed:", e, "url:", snapUrl))
-            .finally(() => {
-                window.SWITCH_LOADING.snapshot = false;
-                notify("snapshot");
-            });
+        fetchSnapshot(switchid);
     } else {
-        // No host selected — nothing to snapshot. Clear the flag so the UI
-        // doesn't sit in "loading" forever.
         window.SWITCH_LOADING.snapshot = false;
         console.info("[tcs] no switchid in URL — skipping snapshot fetch");
     }
+
+    // Browser back/forward should also re-snapshot, not full-reload.
+    window.addEventListener("popstate", () => {
+        const p = new URLSearchParams(window.location.search);
+        const id = p.get("switchid") || "";
+        if (id && id !== window.TCS_SWITCH_HOSTID) {
+            window.tcsNavigateSwitch(id);
+        }
+    });
 
     /* --------------------------------------------------------------------- */
     /* CYCLE PoE handler                                                     */

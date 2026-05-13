@@ -9,6 +9,26 @@ const { useState: useStateSW } = React;
 // to onSelect() for in-page selection (mock mode).
 const HostNavigator = ({ activeId, onSelect }) => {
   const [sites, setSites] = useStateSW(window.SWITCH_SITES);
+  // The bridge updates window.SWITCH_SITES in-place after the fleet fetch
+  // resolves. Re-sync our local state on each tcs:switch-data event,
+  // preserving expand/collapse choices by id so user toggles don't get
+  // clobbered when a refresh lands.
+  React.useEffect(() => {
+    const sync = () => {
+      const fresh = window.SWITCH_SITES || [];
+      setSites(prev => {
+        if (!prev || prev.length === 0) return fresh;
+        const expandedById = Object.create(null);
+        for (const s of prev) expandedById[s.id] = !!s.expanded;
+        return fresh.map(s => ({
+          ...s,
+          expanded: (s.id in expandedById) ? expandedById[s.id] : s.expanded
+        }));
+      });
+    };
+    window.addEventListener("tcs:switch-data", sync);
+    return () => window.removeEventListener("tcs:switch-data", sync);
+  }, []);
   const toggle = (idx) => {
     setSites(sites.map((s, i) => i === idx ? { ...s, expanded: !s.expanded } : s));
   };
@@ -18,11 +38,13 @@ const HostNavigator = ({ activeId, onSelect }) => {
     return a === String(sw.hostid || "") || a === String(sw.id);
   };
   const onRowClick = (sw) => {
+    // Always let the parent update activeId so the page header / KPI tiles
+    // re-bind to the new switch immediately. Then fire SPA-style navigation
+    // which kicks off the snapshot fetch in the background.
+    onSelect(sw.id);
     if (sw.hostid && typeof window.tcsNavigateSwitch === "function") {
       window.tcsNavigateSwitch(sw.hostid);
-      return;
     }
-    onSelect(sw.id);
   };
   return (
     <div className="card">
