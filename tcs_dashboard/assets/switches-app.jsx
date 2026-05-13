@@ -86,6 +86,17 @@ const SwitchesApp = () => {
     || allHosts.find(h => h.hostid && h.hostid === String(liveHost && liveHost.hostid))
     || synth;
 
+  // Stack member count: prefer the live snapshot's stack (more accurate than
+  // the fleet roll-up, which can lag), then fall back to the fleet row.
+  const liveStack = Array.isArray(window.ARC_MDF_STACK) ? window.ARC_MDF_STACK : [];
+  const liveStackCount = liveStack.filter(m => (m.ports || []).length + (m.sfp || []).length > 0).length;
+  const stackMemberCount = liveStackCount || host.members || 1;
+
+  // Firmware shown in the EXOS pill — try the dedicated firmware item first,
+  // fall back to the software-rev item, then to model, then placeholder.
+  const info = window.SWITCH_INFO || {};
+  const firmwareLabel = info.firmware || info.swOs || info.version || "—";
+
   return (
     <div className="app" data-density={t.density} style={{ fontSize: `${13 * densityVar}px` }}>
       <NVRSidebar active="switches" />
@@ -101,10 +112,10 @@ const SwitchesApp = () => {
             </div>
             <div className="host-meta">
               <span className="pill"><span className="dot" style={{ background: "var(--ok)" }} /> All members up</span>
-              <span className="pill"><span className="lbl">Stack</span> <span className="v">{host.members} member{host.members > 1 ? "s" : ""}</span></span>
+              <span className="pill"><span className="lbl">Stack</span> <span className="v">{stackMemberCount} member{stackMemberCount === 1 ? "" : "s"}</span></span>
               <span className="pill"><span className="lbl">Ports</span> <span className="v">{host.up} up · {host.down} down · {host.ports} total</span></span>
               <span className="pill"><span className="lbl">PoE</span> <span className="v">{host.poe} drawing</span></span>
-              <span className="pill"><span className="lbl">EXOS</span> <span className="v">31.7.1.4</span></span>
+              <span className="pill"><span className="lbl">EXOS</span> <span className="v">{firmwareLabel}</span></span>
             </div>
           </div>
           <div className="timerange">

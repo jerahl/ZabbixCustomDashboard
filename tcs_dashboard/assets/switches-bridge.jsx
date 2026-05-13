@@ -63,6 +63,7 @@
     window.ARC_MDF_LINKS    = [];
     window.ARC_MDF_HISTORY  = { cpu: [], mem: [], temp: [], poeWatts: [], uplinkRx: [], uplinkTx: [] };
     window.SWITCH_SITES     = [];
+    window.SWITCH_INFO      = {};
     // Single empty stack member keeps the port grid renderable until the
     // snapshot arrives (the grid expects at least one member to map over).
     window.ARC_MDF_STACK    = [{ idx: 1, ports: [], sfp: [], upCount: 0, downCount: 0, poeCount: 0 }];
@@ -257,9 +258,12 @@
         const history  = (snap.history && typeof snap.history === "object") ? snap.history : {};
         const traffic  = (snap.traffic && typeof snap.traffic === "object") ? snap.traffic : {};
         const speeds   = (snap.speeds  && typeof snap.speeds  === "object") ? snap.speeds  : {};
+        const info     = (snap.info    && typeof snap.info    === "object") ? snap.info    : {};
 
         // Stash speeds for buildStack to consume.
         window._tcsSpeedByKey = speeds;
+        // Host firmware / model / serial — consumed by the page-header pills.
+        window.SWITCH_INFO = info;
 
         // Per-port traffic — makePortDetail reads from this on demand so port
         // clicks pick up the freshest rates without a second fetch.

@@ -197,8 +197,56 @@ class SwitchClient {
             'history' => $this->historyForKpis($kpis),
             'uplinks' => $this->uplinksFromTraffic($traffic = $this->extractTraffic($items)),
             'traffic' => $traffic,
-            'speeds'  => $this->extractSpeeds($items)
+            'speeds'  => $this->extractSpeeds($items),
+            'info'    => $this->extractHostInfo($items)
         ];
+    }
+
+    /**
+     * Host-level identifying / firmware info pulled from the unified item
+     * list. Returns a flat map of strings keyed by logical name so the
+     * frontend can drop the right value into header pills without per-key
+     * negotiation.
+     *
+     * Template items consumed:
+     *   system.hw.firmware                       → firmware
+     *   system.hw.model                          → model
+     *   system.hw.serialnumber                   → serial
+     *   system.hw.version                        → version
+     *   system.sw.os[extremePrimarySoftwareRev.0]→ swOs (firmware fallback)
+     *
+     * @param array<int,array<string,mixed>> $items
+     * @return array<string, string>
+     */
+    private function extractHostInfo(array $items): array {
+        // Logical name → ordered list of accepted key forms.
+        $map = [
+            'firmware' => ['system.hw.firmware'],
+            'model'    => ['system.hw.model'],
+            'serial'   => ['system.hw.serialnumber'],
+            'version'  => ['system.hw.version'],
+            'swOs'     => ['system.sw.os[extremePrimarySoftwareRev.0]', 'system.sw.os']
+        ];
+
+        $out = [];
+        foreach ($map as $logical => $candidates) {
+            foreach ($items as $it) {
+                $k = (string) $it['key_'];
+                $hit = false;
+                foreach ($candidates as $cand) {
+                    if ($k === $cand || str_starts_with($k, $cand.'[') || str_starts_with($k, $cand)) {
+                        $hit = true;
+                        break;
+                    }
+                }
+                if (!$hit) continue;
+                $v = trim((string) $it['lastvalue']);
+                if ($v === '') continue;
+                $out[$logical] = $v;
+                break;
+            }
+        }
+        return $out;
     }
 
     /**

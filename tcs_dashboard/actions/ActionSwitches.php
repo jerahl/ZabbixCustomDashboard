@@ -227,16 +227,20 @@ class ActionSwitches extends ActionBase {
 
         $hostids = array_keys($taggedHosts);
 
-        // Step 3: stacking.member items — count per host for the members KPI.
+        // Step 3: stacking items — count per host for the members KPI. The
+        // Extreme EXOS template literally ships the misspelled key
+        // `stacking.memeber[…]` (sic), so we match both forms.
         $stackingItems = API::Item()->get([
             'output'      => ['hostid', 'key_'],
             'hostids'     => $hostids,
-            'search'      => ['key_' => 'stacking.member['],
+            'search'      => ['key_' => 'stacking.'],
             'startSearch' => true
         ]) ?: [];
 
         $memberCount = [];
         foreach ($stackingItems as $it) {
+            $k = (string) $it['key_'];
+            if (!preg_match('/^(?:extreme\.)?(?:snmp\.)?stack(?:ing)?\.(?:member|memeber)\[\d+\]$/', $k)) continue;
             $hid = (string) $it['hostid'];
             $memberCount[$hid] = ($memberCount[$hid] ?? 0) + 1;
         }
