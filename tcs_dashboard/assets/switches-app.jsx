@@ -87,6 +87,8 @@ const SwitchesApp = () => {
               <PortDetailRow host={host} detail={selectedPort ? selectedPort.detail : null} />
               <UplinkTable />
             </div>
+          </div>
+          <div className="switch-problems-row">
             <ProblemsWidget />
           </div>
         </div>
