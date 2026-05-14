@@ -25,9 +25,12 @@ use CControllerResponseData;
  */
 class ActionXiqData extends ActionDataBase {
 
-    /** Site/* + target=xiq host discovery is cached this many seconds. */
+    /** Site/Wireless/* + target=xiq host discovery is cached this many seconds. */
     private const FLEET_CACHE_TTL = 30;
-    private const FLEET_CACHE_KEY = 'tcs_dashboard:xiq_fleet:v1';
+    private const FLEET_CACHE_KEY = 'tcs_dashboard:xiq_fleet:v2';
+
+    /** Host group prefix used to discover wireless APs and their site bucket. */
+    private const SITE_PREFIX = 'Site/Wireless/';
 
     protected function checkInput(): bool {
         return $this->validateInput([]);
@@ -89,36 +92,26 @@ class ActionXiqData extends ActionDataBase {
             'sites' => [], 'problemAps' => []
         ];
 
-        // Step 1: Site/* host groups.
+        // Step 1: Site/Wireless/<schoolname>/<floor> host groups. APs are
+        // bucketed per-floor in this convention, so we roll several groups
+        // up under the schoolname segment when projecting to the React side.
         $siteGroups = API::HostGroup()->get([
             'output'      => ['groupid', 'name'],
-            'search'      => ['name' => 'Site/'],
+            'search'      => ['name' => self::SITE_PREFIX],
             'startSearch' => true
         ]) ?: [];
         if (!$siteGroups) return $empty;
         $groupids = array_column($siteGroups, 'groupid');
 
-        // Step 2: hosts in those groups carrying tag target=xiq. inheritedTags
-        // lets operators put the tag on the XIQ template instead of every host.
+        // Step 2: hosts in any Site/Wireless/* group. The path prefix already
+        // qualifies these as wireless APs — no extra tag filter required.
         $hosts = API::Host()->get([
             'output'           => ['hostid', 'host', 'name', 'status', 'maintenance_status'],
             'selectHostGroups' => ['groupid', 'name'],
             'selectInventory'  => ['model'],
-            'tags'             => [['tag' => 'target', 'value' => 'xiq', 'operator' => 1]],
-            'evaltype'         => 0,
-            'inheritedTags'    => true,
+            'groupids'         => $groupids,
             'preservekeys'     => true
         ]) ?: [];
-
-        // Narrow to hosts that are ALSO in a Site/* group (the tag-only filter
-        // would otherwise return XIQ hosts that operators haven't bucketed yet).
-        $siteGroupids = array_flip($groupids);
-        $hosts = array_filter($hosts, function ($h) use ($siteGroupids) {
-            foreach ($h['hostgroups'] ?? [] as $g) {
-                if (isset($siteGroupids[$g['groupid']])) return true;
-            }
-            return false;
-        });
         if (!$hosts) return $empty;
 
         $hostids   = array_keys($hosts);
@@ -152,20 +145,15 @@ class ActionXiqData extends ActionDataBase {
             }
         }
 
-        // Step 4: bucket hosts by Site/* group, compute counts + severity.
+        // Step 4: bucket hosts by school (the first segment after the
+        // Site/Wireless/ prefix). Multiple floors collapse into one site row.
         $sites = [];
         foreach ($hostids as $hid) {
             $h = $hosts[$hid];
 
-            $siteName = '';
-            foreach ($h['hostgroups'] ?? [] as $g) {
-                if (str_starts_with((string) $g['name'], 'Site/')) {
-                    $siteName = substr($g['name'], strlen('Site/'));
-                    break;
-                }
-            }
+            $siteName = self::schoolNameFor($h);
             if ($siteName === '') continue;
-            $siteId = strtoupper(substr(preg_replace('/[^a-z0-9]+/i', '', $siteName), 0, 3) ?: 'SITE');
+            $siteId = self::siteIdFromName($siteName);
 
             $sites[$siteName] = $sites[$siteName] ?? [
                 'id'      => $siteId,
@@ -343,13 +331,41 @@ class ActionXiqData extends ActionDataBase {
     }
 
     private static function siteIdFor(array $host): string {
+        $name = self::schoolNameFor($host);
+        return $name === '' ? '—' : self::siteIdFromName($name);
+    }
+
+    /**
+     * Walk the host's groups for one named Site/Wireless/<schoolname>/... and
+     * return the schoolname segment. Returns '' if no matching group is found.
+     */
+    private static function schoolNameFor(array $host): string {
         foreach ($host['hostgroups'] ?? [] as $g) {
-            if (str_starts_with((string) $g['name'], 'Site/')) {
-                $name = substr($g['name'], strlen('Site/'));
-                return strtoupper(substr(preg_replace('/[^a-z0-9]+/i', '', $name), 0, 3) ?: 'SITE');
-            }
+            $name = (string) $g['name'];
+            if (!str_starts_with($name, self::SITE_PREFIX)) continue;
+            $rest = substr($name, strlen(self::SITE_PREFIX));
+            $segments = explode('/', $rest, 2);
+            $school = trim($segments[0] ?? '');
+            if ($school !== '') return $school;
         }
-        return '—';
+        return '';
+    }
+
+    private static function siteIdFromName(string $name): string {
+        // Take the leading uppercase letters of significant words (drops "the",
+        // "of", "for"); fall back to first 3 alphanumerics. "Bryant High School"
+        // → "BHS"; "Tuscaloosa Magnet Elementary" → "TME".
+        $stopwords = ['the', 'of', 'for', 'and', 'a', 'an'];
+        $initials = '';
+        foreach (preg_split('/[\s\-_\/]+/', $name) as $word) {
+            $w = strtolower(trim($word));
+            if ($w === '' || in_array($w, $stopwords, true)) continue;
+            $initials .= strtoupper(substr($w, 0, 1));
+            if (strlen($initials) >= 4) break;
+        }
+        if (strlen($initials) >= 2) return $initials;
+        $alnum = strtoupper(preg_replace('/[^a-z0-9]+/i', '', $name) ?: '');
+        return $alnum === '' ? 'SITE' : substr($alnum, 0, 3);
     }
 
     /** Shape consumed by xiq-bridge.jsx — also used by ActionXiq for SSR boot. */
