@@ -36,7 +36,7 @@ class ActionXiqData extends ActionDataBase {
 
     /** APCu cache for the parsed fleet snapshot. */
     private const FLEET_CACHE_TTL = 30;
-    private const FLEET_CACHE_KEY = 'tcs_dashboard:xiq_fleet:v6';
+    private const FLEET_CACHE_KEY = 'tcs_dashboard:xiq_fleet:v7';
 
     /** Host group prefix the template's host prototype puts each AP under. */
     private const SITE_PREFIX = 'Site/Wireless/';
@@ -140,13 +140,15 @@ class ActionXiqData extends ActionDataBase {
         ];
     }
 
-    /** Three radio bands the design expects, with counts blanked until data arrives. */
+    /**
+     * Radio bands we monitor. The TCS fleet runs 5 GHz only (2.4 GHz radios
+     * are disabled across the board, including for legacy clients), so the
+     * Band Health card shows a single row with the whole client population.
+     */
     private static function bandShells(): array {
         $zeros = array_fill(0, 24, 0);
         return [
-            ['id' => '5',   'label' => '5 GHz',      'aps' => 0, 'clients' => 0, 'util' => 0, 'noise' => 0, 'saturated' => 0, 'color' => 'var(--ext)',  'spark' => $zeros],
-            ['id' => '2_4', 'label' => '2.4 GHz',    'aps' => 0, 'clients' => 0, 'util' => 0, 'noise' => 0, 'saturated' => 0, 'color' => 'var(--warn)', 'spark' => $zeros],
-            ['id' => '6',   'label' => '6 GHz (6E)', 'aps' => 0, 'clients' => 0, 'util' => 0, 'noise' => 0, 'saturated' => 0, 'color' => 'var(--ok)',   'spark' => $zeros],
+            ['id' => '5', 'label' => '5 GHz', 'aps' => 0, 'clients' => 0, 'util' => 0, 'noise' => 0, 'saturated' => 0, 'color' => 'var(--ext)', 'spark' => $zeros],
         ];
     }
 
@@ -341,18 +343,10 @@ class ActionXiqData extends ActionDataBase {
             'target'    => $target !== '' ? $target : '—',
         ];
 
-        // Bands — total AP counts (every XIQ AP broadcasts at least 5 + 2.4).
+        // Bands — TCS runs 5 GHz only, so every AP counts on the single 5 GHz row.
         $bands = self::bandShells();
         foreach ($bands as &$b) {
-            if ($b['id'] === '5' || $b['id'] === '2_4') {
-                $b['aps'] = $total;
-            } else {
-                $b['aps'] = 0;
-                foreach ($devices as $d) {
-                    $m = strtoupper($d['model']);
-                    if (preg_match('/^AP(4|5)\d+/', $m) || str_ends_with($m, 'X')) $b['aps']++;
-                }
-            }
+            $b['aps'] = $total;
         }
         unset($b);
 
@@ -623,11 +617,9 @@ class ActionXiqData extends ActionDataBase {
         $payload['ssids'] = $ssidRows;
         $payload['totals']['ssids'] = ['total' => count($ssidRows), 'broadcast' => count($ssidRows)];
 
-        // Bands client split using the PHY buckets we already have.
+        // All clients ride 5 GHz on this fleet (legacy a/b/g/n included).
         foreach ($payload['bands'] as &$b) {
-            if ($b['id'] === '5')       $b['clients'] = $std['ax'] + $std['ac'];
-            elseif ($b['id'] === '2_4') $b['clients'] = $std['n']  + $std['legacy'];
-            // 6 GHz client count is hard to derive from radio_type alone — leave at 0
+            if ($b['id'] === '5') $b['clients'] = $totalClients;
         }
         unset($b);
 
