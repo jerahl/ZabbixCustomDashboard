@@ -13,66 +13,94 @@ use Modules\TcsDashboard\Lib\XIQFleetClient;
  * XIQ_BANDS, XIQ_SSIDS, XIQ_PROBLEM_APS, XIQ_CHANNEL_GRID, XIQ_CLIENT_MIX,
  * XIQ_THROUGHPUT, XIQ_FIRMWARE, XIQ_ROAMING, XIQ_EVENTS).
  *
- * Live sections (Zabbix-side, no XIQ token required):
- *   - totals.aps    — host counts from API::Host (tag target=xiq)
- *   - sites         — bucketed by Site/* host group, sev derived from open
- *                     problem severity
- *   - problemAps    — top-N open problems on XIQ hosts
- *   - events        — recent problem events (open + resolved-recent)
+ * Data flow:
+ *   1. Read the fleet master item xiq.devices.raw — a JSON array of every AP
+ *      that the "Extreme XIQ APs by API" template's Script item collects every
+ *      5 minutes (id, serial, hostname, mac, ip, model, version, connected,
+ *      clients, building, floor, …). Drives totals.aps, totals.clients.total,
+ *      sites, firmware, and the AP rows under "Top problem APs".
  *
- * Synthetic sections (need XIQ API token to populate, deferred):
- *   - totals.{clients,throughput,ssids,rfHealth,firmware,controllers}
- *   - bands, ssids, channelGrid, clientMix, throughput, firmware, roaming
+ *   2. Query API::Problem for the auto-created per-AP hosts (tag target=xiq).
+ *      Drives problemAps reasons/severities and the events stream.
+ *
+ *   3. Optional XIQ direct call (when {$XIQ_TOKEN} is set): pull /clients/active
+ *      for the per-client PHY / OS / SSID breakdown that Zabbix does NOT
+ *      collect. Only this section needs the token; everything else works off
+ *      Zabbix items.
+ *
+ * Synthetic data was removed in this iteration. On a cold cache the payload
+ * carries loading=true with empty arrays; the React side renders a spinner on
+ * APs-by-site until the first refresh resolves.
  */
 class ActionXiqData extends ActionDataBase {
 
-    /** Site/Wireless/* + target=xiq host discovery is cached this many seconds. */
-    private const FLEET_CACHE_TTL = 30;
-    private const FLEET_CACHE_KEY = 'tcs_dashboard:xiq_fleet:v4';
+    /** APCu key for the parsed master-item snapshot. TTL matches the upstream
+     *  poll interval — the Zabbix Script item runs every 5 minutes. */
+    private const FLEET_CACHE_TTL = 60;
+    private const FLEET_CACHE_KEY = 'tcs_dashboard:xiq_fleet:v5';
 
-    /** Host group prefix used to discover wireless APs and their site bucket. */
-    private const SITE_PREFIX = 'Site/Wireless/';
+    /** Master item key on the fleet host (see template "Extreme XIQ APs by API"). */
+    private const MASTER_ITEM_KEY = 'xiq.devices.raw';
+
+    /** Tag on per-AP hosts created by the host prototype. */
+    private const AP_HOST_TAG = ['tag' => 'target', 'value' => 'xiq'];
 
     protected function checkInput(): bool {
         return $this->validateInput([]);
     }
 
     protected function doAction(): void {
-        $payload = self::syntheticPayload();
-        $payload['sources'] = ['zbx' => 'unknown', 'xiq' => 'unknown'];
+        $payload = self::emptyPayload();
 
-        // Layer 1: Zabbix-side overlay (host counts, sites, problems, events).
+        // Layer 1: Zabbix master-item snapshot — the bulk of the data.
         try {
             $fleet = self::collectFleet();
-            if ($fleet['hostids']) {
-                $payload['totals']['aps'] = $fleet['apTotals'];
-                $payload['sites']         = $fleet['sites'];
-                $payload['problemAps']    = $fleet['problemAps'];
-                $payload['events']        = self::collectEvents($fleet['hostids'], $fleet['hostNames']);
-                $payload['sources']['zbx'] = 'live';
+            if (!empty($fleet['devices'])) {
+                $payload['totals']['aps']               = $fleet['apTotals'];
+                $payload['totals']['clients']['total']  = $fleet['clientTotal'];
+                $payload['totals']['firmware']          = $fleet['firmwareTotals'];
+                $payload['sites']                       = $fleet['sites'];
+                $payload['firmware']                    = $fleet['firmware'];
+                $payload['bands']                       = $fleet['bands'];
+                $payload['sources']['zbx']              = 'live';
+                $payload['loading']                     = false;
             } else {
                 $payload['sources']['zbx'] = 'empty';
+                $payload['error']          = $payload['error']
+                    ?? 'No XIQ master item found in Zabbix. Expected an item with key "' . self::MASTER_ITEM_KEY . '" on the fleet host (template "Extreme XIQ APs by API").';
             }
         } catch (\Throwable $e) {
-            error_log('[tcs_dashboard] xiq.data zbx overlay: ' . $e->getMessage());
+            error_log('[tcs_dashboard] xiq.data zbx fleet: ' . $e->getMessage());
             $payload['sources']['zbx'] = 'error';
-            $payload['error'] = $payload['error'] ?? ('Zabbix fleet query failed: ' . $e->getMessage());
+            $payload['error']          = $payload['error'] ?? ('Zabbix fleet query failed: ' . $e->getMessage());
         }
 
-        // Layer 2: ExtremeCloud IQ overlay (clients, firmware, SSIDs, mix).
+        // Layer 2: problems + events for per-AP hosts (tag target=xiq).
+        try {
+            $problemCtx = self::collectProblemContext();
+            $payload['problemAps'] = $problemCtx['problemAps'];
+            $payload['events']     = $problemCtx['events'];
+            // Refine totals.aps.critical with real problem severities.
+            $payload['totals']['aps']['critical'] = $problemCtx['criticalCount'];
+        } catch (\Throwable $e) {
+            error_log('[tcs_dashboard] xiq.data problems: ' . $e->getMessage());
+        }
+
+        // Layer 3: XIQ direct call for what Zabbix does NOT collect — per-client
+        // OS, PHY standard, and SSID counts.
         $token = self::xiqToken();
         if ($token === null) {
             $payload['sources']['xiq'] = 'no-token';
-            $payload['error'] = $payload['error']
-                ?? 'XIQ data not loaded — global macro {$XIQ_API_TOKEN} is not set. Some panels show synthetic numbers until the token is added.';
+            $payload['warning']        = $payload['warning']
+                ?? 'XIQ direct queries skipped — {$XIQ_TOKEN} macro is not set. Client mix / SSID counts are unavailable.';
         } else {
             try {
-                self::overlayXiq($payload, $token);
+                self::overlayXiqClients($payload, $token);
                 $payload['sources']['xiq'] = 'live';
             } catch (\Throwable $e) {
                 error_log('[tcs_dashboard] xiq.data XIQ overlay: ' . $e->getMessage());
                 $payload['sources']['xiq'] = 'error';
-                $payload['error'] = $payload['error'] ?? ('XIQ query failed: ' . $e->getMessage());
+                $payload['warning']        = $payload['warning'] ?? ('XIQ direct query failed: ' . $e->getMessage());
             }
         }
 
@@ -82,38 +110,346 @@ class ActionXiqData extends ActionDataBase {
         ]));
     }
 
-    /** Returns the {$XIQ_API_TOKEN} global macro value, or null when unset/empty. */
-    private static function xiqToken(): ?string {
-        $rows = API::UserMacro()->get([
-            'output'      => ['macro', 'value'],
-            'globalmacro' => true,
-            'filter'      => ['macro' => '{$XIQ_API_TOKEN}'],
-        ]) ?: [];
-        $v = trim((string) ($rows[0]['value'] ?? ''));
-        return $v === '' ? null : $v;
+    // ── Payload skeleton (also used as SSR boot by ActionXiq) ───────────────
+
+    /** Empty shell. Same keys as the bridge expects, all zero / empty. */
+    public static function emptyPayload(): array {
+        return [
+            'loading' => true,
+            'totals'  => [
+                'aps'         => ['total' => 0, 'online' => 0, 'offline' => 0, 'critical' => 0, 'idle' => 0],
+                'clients'     => ['total' => 0, 'dot11ax' => 0, 'dot11ac' => 0, 'legacy' => 0],
+                'throughput'  => ['agg_gbps' => 0.0, 'peak_gbps' => 0.0, 'ingress_gbps' => 0.0, 'egress_gbps' => 0.0],
+                'ssids'       => ['total' => 0, 'broadcast' => 0],
+                'rfHealth'    => ['score' => 0, 'target' => 90],
+                'firmware'    => ['compliant' => 0, 'behind' => 0, 'ahead' => 0, 'target' => '—'],
+                'controllers' => ['region' => '—', 'instance' => '—', 'lastSync' => '—'],
+            ],
+            'sites'       => [],
+            'bands'       => self::bandShells(),
+            'ssids'       => [],
+            'problemAps'  => [],
+            'channelGrid' => ['sites' => [], 'channels' => [36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 149, 153, 157, 161], 'matrix' => []],
+            'clientMix'   => ['standards' => [], 'os' => []],
+            'throughput'  => [],
+            'firmware'    => ['versions' => []],
+            'roaming'     => ['buckets' => [], 'rate24h' => 0.0],
+            'events'      => [],
+            'sources'     => ['zbx' => 'unknown', 'xiq' => 'unknown'],
+        ];
     }
 
+    /** Three radio bands the design expects, with counts blanked until data arrives. */
+    private static function bandShells(): array {
+        $zeros = array_fill(0, 24, 0);
+        return [
+            ['id' => '5',   'label' => '5 GHz',      'aps' => 0, 'clients' => 0, 'util' => 0, 'noise' => 0, 'saturated' => 0, 'color' => 'var(--ext)',  'spark' => $zeros],
+            ['id' => '2_4', 'label' => '2.4 GHz',    'aps' => 0, 'clients' => 0, 'util' => 0, 'noise' => 0, 'saturated' => 0, 'color' => 'var(--warn)', 'spark' => $zeros],
+            ['id' => '6',   'label' => '6 GHz (6E)', 'aps' => 0, 'clients' => 0, 'util' => 0, 'noise' => 0, 'saturated' => 0, 'color' => 'var(--ok)',   'spark' => $zeros],
+        ];
+    }
+
+    // ── Layer 1: master-item snapshot ───────────────────────────────────────
+
     /**
-     * Layer XIQ-side facts onto the payload. Mutates $payload in place.
-     *
-     * Sections wired:
-     *   totals.clients               from /clients/active (count + radio_type buckets)
-     *   totals.firmware              target = most-common software_version
-     *   totals.controllers.lastSync  approximate (now), tenant info best-effort
-     *   firmware.versions            from /devices software_version histogram
-     *   clientMix.standards          from /clients/active radio_type
-     *   clientMix.os                 from /clients/active os_type
-     *   ssids[].clients              join /clients/active.ssid into synthetic SSID rows
-     *   bands[].aps                  XIQ AP counts reporting each band (proxied from product_type)
+     * Read xiq.devices.raw, decode, and project into the shapes the page wants.
+     * Returns { devices, apTotals, clientTotal, sites, firmware, firmwareTotals, bands }.
      */
-    private static function overlayXiq(array &$payload, string $token): void {
-        $client = XIQFleetClient::fromToken($token);
+    private static function collectFleet(): array {
+        if (function_exists('apcu_fetch')) {
+            $hit = apcu_fetch(self::FLEET_CACHE_KEY, $ok);
+            if ($ok && is_array($hit)) return $hit;
+        }
 
-        $devices = $client->getDevices();
+        $result = self::collectFleetUncached();
+
+        if (function_exists('apcu_store')) {
+            apcu_store(self::FLEET_CACHE_KEY, $result, self::FLEET_CACHE_TTL);
+        }
+        return $result;
+    }
+
+    private static function collectFleetUncached(): array {
+        $empty = ['devices' => [], 'apTotals' => self::emptyPayload()['totals']['aps'],
+                  'clientTotal' => 0, 'sites' => [], 'firmware' => ['versions' => []],
+                  'firmwareTotals' => self::emptyPayload()['totals']['firmware'],
+                  'bands' => self::bandShells()];
+
+        // Find the master item. There should only be one in a typical deployment
+        // (the fleet host). If there are several we take the freshest.
+        $items = API::Item()->get([
+            'output'      => ['itemid', 'hostid', 'lastvalue', 'lastclock'],
+            'filter'      => ['key_' => self::MASTER_ITEM_KEY],
+            'limit'       => 5,
+            'sortfield'   => 'lastclock',
+            'sortorder'   => 'DESC',
+        ]) ?: [];
+        if (!$items) return $empty;
+
+        $raw = (string) ($items[0]['lastvalue'] ?? '');
+        if ($raw === '') return $empty;
+
+        $devices = json_decode($raw, true);
+        if (!is_array($devices) || !$devices) return $empty;
+
+        // ── Totals ──────────────────────────────────────────────────────────
+        $total = count($devices);
+        $online = 0; $offline = 0; $idle = 0;
+        $clientTotal = 0;
+        $now = time();
+        foreach ($devices as $d) {
+            $connected = (int) ($d['connected'] ?? 0);
+            $last      = (int) ($d['last_connect'] ?? 0);
+            // last_connect can be unix ms — normalize.
+            if ($last > 9999999999) $last = (int) ($last / 1000);
+
+            if ($connected === 1) $online++;
+            elseif ($connected === 0 && $last > 0 && ($now - $last) < 24 * 3600) $offline++;
+            elseif ($connected === 0) $idle++;
+            else $idle++;
+
+            $clientTotal += (int) ($d['clients'] ?? 0);
+        }
+        $apTotals = [
+            'total'    => $total,
+            'online'   => $online,
+            'offline'  => $offline,
+            'critical' => 0,            // refined later from problem severities
+            'idle'     => $idle,
+        ];
+
+        // ── Sites: group by building, count online via connected flag ───────
+        $siteAcc = [];
+        foreach ($devices as $d) {
+            $building = trim((string) ($d['building'] ?? ''));
+            if ($building === '') $building = trim((string) ($d['location'] ?? '')); // fall back
+            if ($building === '') continue;
+
+            $siteAcc[$building] = $siteAcc[$building] ?? [
+                'id'      => self::siteIdFromName($building),
+                'name'    => $building,
+                'aps'     => 0,
+                'online'  => 0,
+                'util'    => 0,
+                'clients' => 0,
+                'sev'     => 'ok',
+                'top'     => '—',
+            ];
+            $siteAcc[$building]['aps']++;
+            if ((int) ($d['connected'] ?? 0) === 1) $siteAcc[$building]['online']++;
+            $siteAcc[$building]['clients'] += (int) ($d['clients'] ?? 0);
+        }
+        // Outage flag — site has ≥25% offline.
+        foreach ($siteAcc as &$s) {
+            $offPct = $s['aps'] > 0 ? (($s['aps'] - $s['online']) / $s['aps']) : 0.0;
+            if ($offPct >= 0.25) {
+                $s['kind'] = 'outage';
+                $s['sev']  = 'high';
+            } elseif ($offPct > 0) {
+                $s['sev'] = 'warning';
+            } else {
+                $s['sev'] = 'ok';
+            }
+        }
+        unset($s);
+        usort($siteAcc, fn($a, $b) => self::sevRank($b['sev']) <=> self::sevRank($a['sev']) ?: strcmp($a['name'], $b['name']));
+        $sites = array_values($siteAcc);
+
+        // ── Firmware histogram ──────────────────────────────────────────────
+        $versionCounts = [];
+        foreach ($devices as $d) {
+            $v = trim((string) ($d['version'] ?? ''));
+            if ($v === '') continue;
+            $versionCounts[$v] = ($versionCounts[$v] ?? 0) + 1;
+        }
+        arsort($versionCounts);
+        $target = (string) (array_key_first($versionCounts) ?? '');
+        $fwVersions = [];
+        $compliant = $behind = $ahead = 0;
+        foreach ($versionCounts as $v => $count) {
+            $cmp    = self::compareSemver($v, $target);
+            $status = $cmp === 0 ? 'target' : ($cmp < 0 ? 'behind' : 'ahead');
+            if ($status === 'target')      $compliant = $count;
+            elseif ($status === 'behind')  $behind  += $count;
+            else                           $ahead   += $count;
+            $fwVersions[] = ['v' => $v, 'count' => $count, 'status' => $status, 'note' => ''];
+        }
+        $firmwareTotals = [
+            'compliant' => $compliant,
+            'behind'    => $behind,
+            'ahead'     => $ahead,
+            'target'    => $target !== '' ? $target : '—',
+        ];
+
+        // ── Bands: AP counts (every XIQ AP broadcasts at least 5 + 2.4) ─────
+        $bands = self::bandShells();
+        foreach ($bands as &$b) {
+            if ($b['id'] === '5' || $b['id'] === '2_4') {
+                $b['aps'] = $total;
+            } else {
+                // 6 GHz: only newer models. Heuristic — APs whose product_type
+                // contains an "X" or starts with AP4/AP5 usually support 6E.
+                $b['aps'] = 0;
+                foreach ($devices as $d) {
+                    $m = strtoupper((string) ($d['model'] ?? ''));
+                    if (preg_match('/^AP(4|5)\d+/', $m) || str_ends_with($m, 'X')) $b['aps']++;
+                }
+            }
+        }
+        unset($b);
+
+        return [
+            'devices'        => $devices,
+            'apTotals'       => $apTotals,
+            'clientTotal'    => $clientTotal,
+            'sites'          => $sites,
+            'firmware'       => ['versions' => $fwVersions],
+            'firmwareTotals' => $firmwareTotals,
+            'bands'          => $bands,
+        ];
+    }
+
+    // ── Layer 2: problems + events on per-AP hosts ──────────────────────────
+
+    /** Returns { problemAps, events, criticalCount }. */
+    private static function collectProblemContext(): array {
+        $hosts = API::Host()->get([
+            'output'        => ['hostid', 'host', 'name'],
+            'selectTags'    => ['tag', 'value'],
+            'tags'          => [self::AP_HOST_TAG + ['operator' => 1]],
+            'evaltype'      => 0,
+            'inheritedTags' => true,
+            'preservekeys'  => true,
+        ]) ?: [];
+        if (!$hosts) return ['problemAps' => [], 'events' => [], 'criticalCount' => 0];
+
+        $hostids   = array_keys($hosts);
+        $hostNames = [];
+        foreach ($hosts as $h) $hostNames[(string) $h['hostid']] = (string) ($h['name'] ?: $h['host']);
+
+        $hostMeta = [];
+        foreach ($hosts as $h) {
+            $meta = ['model' => '—', 'building' => '—'];
+            foreach ($h['tags'] ?? [] as $t) {
+                if (($t['tag'] ?? '') === 'ap_model') $meta['model']    = (string) $t['value'];
+                if (($t['tag'] ?? '') === 'building') $meta['building'] = (string) $t['value'];
+            }
+            $hostMeta[(string) $h['hostid']] = $meta;
+        }
+
+        $problems = API::Problem()->get([
+            'output'    => ['eventid', 'name', 'severity', 'clock'],
+            'hostids'   => $hostids,
+            'recent'    => true,
+            'time_from' => time() - 24 * 3600,
+            'sortfield' => ['eventid'],
+            'sortorder' => 'DESC',
+            'limit'     => 200,
+        ]) ?: [];
+
+        // Map eventid → hostid via event.get (problems don't carry hostid directly).
+        $hostByEvent = [];
+        if ($problems) {
+            $events = API::Event()->get([
+                'output'      => ['eventid'],
+                'eventids'    => array_column($problems, 'eventid'),
+                'selectHosts' => ['hostid']
+            ]) ?: [];
+            foreach ($events as $ev) {
+                $first = $ev['hosts'][0] ?? null;
+                if ($first) $hostByEvent[(string) $ev['eventid']] = (string) $first['hostid'];
+            }
+        }
+
+        $now = time();
+        $criticalCount = 0;
+        $countedHosts  = [];
+        $problemAps    = [];
+        $eventRows     = [];
+        foreach ($problems as $p) {
+            $hid = $hostByEvent[(string) $p['eventid']] ?? null;
+            if ($hid === null || !isset($hosts[$hid])) continue;
+
+            $sevLabel = self::zabbixSevToLabel((int) $p['severity']);
+            if (in_array($sevLabel, ['high', 'disaster'], true) && !isset($countedHosts[$hid])) {
+                $criticalCount++;
+                $countedHosts[$hid] = true;
+            }
+
+            // Top problem APs — keep up to 8 highest-severity rows
+            if (count($problemAps) < 32) {
+                $age = max(0, $now - (int) $p['clock']);
+                $problemAps[] = [
+                    'ap'      => $hostNames[$hid],
+                    'hostid'  => (string) $hid,
+                    'site'    => self::siteIdFromName($hostMeta[$hid]['building'] ?? '—'),
+                    'model'   => $hostMeta[$hid]['model'] ?? '—',
+                    'reason'  => (string) $p['name'],
+                    'sev'     => $sevLabel,
+                    'util2'   => 0,
+                    'util5'   => 0,
+                    'clients' => 0,
+                    'age'     => sprintf('%02d:%02d:%02d', intdiv($age, 3600), intdiv($age % 3600, 60), $age % 60),
+                    '_clock'  => (int) $p['clock'],
+                    '_sevr'   => self::sevRank($sevLabel),
+                ];
+            }
+
+            // Events stream — keep up to 12 newest rows from the last hour
+            if (count($eventRows) < 12 && (int) $p['clock'] >= $now - 3600) {
+                $eventRows[] = [
+                    'ts'     => date('H:i:s', (int) $p['clock']),
+                    'source' => 'zbx',
+                    'host'   => $hostNames[$hid],
+                    'msg'    => 'Problem:',
+                    'obj'    => (string) $p['name'],
+                    'sev'    => $sevLabel,
+                ];
+            }
+        }
+
+        usort($problemAps, fn($a, $b) => $b['_sevr'] <=> $a['_sevr'] ?: $b['_clock'] <=> $a['_clock']);
+        $problemAps = array_slice($problemAps, 0, 8);
+        foreach ($problemAps as &$p) { unset($p['_clock'], $p['_sevr']); }
+        unset($p);
+
+        return ['problemAps' => $problemAps, 'events' => $eventRows, 'criticalCount' => $criticalCount];
+    }
+
+    // ── Layer 3: XIQ direct (per-client breakdown only) ─────────────────────
+
+    /** Returns the {$XIQ_TOKEN} global macro value, or null when unset/empty. */
+    private static function xiqToken(): ?string {
+        // Try the global macro first (per template hint); also accept the
+        // older {$XIQ_API_TOKEN} name in case operators set that one.
+        foreach (['{$XIQ_TOKEN}', '{$XIQ_API_TOKEN}'] as $name) {
+            $rows = API::UserMacro()->get([
+                'output'      => ['macro', 'value'],
+                'globalmacro' => true,
+                'filter'      => ['macro' => $name],
+            ]) ?: [];
+            $v = trim((string) ($rows[0]['value'] ?? ''));
+            if ($v !== '') return $v;
+        }
+        // Fall back: pull from any host macro on the XIQ fleet host
+        // (the template ships {$XIQ_TOKEN} as a host macro, not a global).
+        $rows = API::UserMacro()->get([
+            'output' => ['macro', 'value', 'hostid'],
+            'filter' => ['macro' => '{$XIQ_TOKEN}'],
+        ]) ?: [];
+        foreach ($rows as $r) {
+            $v = trim((string) ($r['value'] ?? ''));
+            if ($v !== '') return $v;
+        }
+        return null;
+    }
+
+    /** Pull /clients/active and project PHY / OS / SSID breakdowns. */
+    private static function overlayXiqClients(array &$payload, string $token): void {
+        $client  = XIQFleetClient::fromToken($token);
         $clients = $client->getActiveClients();
+        if (!$clients) return;
 
-        // ── clientMix.standards / totals.clients (PHY breakdown) ─────────────
-        // XIQ exposes radio_type per client; map to the design's standard buckets.
         $std = ['ax' => 0, 'ac' => 0, 'n' => 0, 'legacy' => 0];
         $osCounts = [];
         $ssidClients = [];
@@ -121,7 +457,7 @@ class ActionXiqData extends ActionDataBase {
             $radio = strtoupper((string) ($c['radio_type'] ?? ''));
             if (str_contains($radio, 'AX') || str_contains($radio, '11AX') || str_contains($radio, '6E')) $std['ax']++;
             elseif (str_contains($radio, 'AC')) $std['ac']++;
-            elseif (str_contains($radio, '11N') || $radio === 'N')  $std['n']++;
+            elseif (str_contains($radio, '11N') || $radio === 'N') $std['n']++;
             else $std['legacy']++;
 
             $os = self::normalizeOs((string) ($c['os_type'] ?? $c['os'] ?? ''));
@@ -132,6 +468,7 @@ class ActionXiqData extends ActionDataBase {
         }
         $totalClients = array_sum($std);
 
+        // Standards row
         $stdColors = ['ax' => 'var(--ext)', 'ac' => 'var(--info)', 'n' => 'var(--warn)', 'legacy' => 'var(--err)'];
         $stdLabels = ['ax' => 'Wi-Fi 6 / 6E (ax)', 'ac' => 'Wi-Fi 5 (ac)', 'n' => 'Wi-Fi 4 (n)', 'legacy' => 'Legacy a/b/g'];
         $standards = [];
@@ -145,6 +482,7 @@ class ActionXiqData extends ActionDataBase {
             ];
         }
 
+        // OS rows
         $osRows = [];
         arsort($osCounts);
         foreach ($osCounts as $label => $count) {
@@ -156,390 +494,52 @@ class ActionXiqData extends ActionDataBase {
             ];
         }
 
-        $payload['totals']['clients'] = [
-            'total'   => $totalClients,
-            'dot11ax' => $std['ax'],
-            'dot11ac' => $std['ac'],
-            'legacy'  => $std['n'] + $std['legacy'],
-        ];
-        $payload['clientMix'] = ['standards' => $standards, 'os' => $osRows];
+        // Prefer Zabbix's fleet total (xiq.clients.total) — we already have it
+        // in totals.clients.total. Refine with the PHY breakdown from XIQ.
+        if (($payload['totals']['clients']['total'] ?? 0) === 0) {
+            $payload['totals']['clients']['total'] = $totalClients;
+        }
+        $payload['totals']['clients']['dot11ax'] = $std['ax'];
+        $payload['totals']['clients']['dot11ac'] = $std['ac'];
+        $payload['totals']['clients']['legacy']  = $std['n'] + $std['legacy'];
+        $payload['clientMix']                    = ['standards' => $standards, 'os' => $osRows];
 
-        // ── firmware histogram + totals.firmware ─────────────────────────────
-        $versionCounts = [];
-        foreach ($devices as $d) {
-            $v = trim((string) ($d['software_version'] ?? ''));
-            if ($v === '') continue;
-            $versionCounts[$v] = ($versionCounts[$v] ?? 0) + 1;
-        }
-        arsort($versionCounts);
-        // Target = most-common version. Anything higher = ahead; lower = behind.
-        $target = (string) (array_key_first($versionCounts) ?? '');
-        $fwVersions = [];
-        $compliant = $behind = $ahead = 0;
-        foreach ($versionCounts as $v => $count) {
-            $cmp = self::compareSemver($v, $target);
-            $status = $cmp === 0 ? 'target' : ($cmp < 0 ? 'behind' : 'ahead');
-            if ($status === 'target')      $compliant = $count;
-            elseif ($status === 'behind')  $behind  += $count;
-            else                           $ahead   += $count;
-            $fwVersions[] = ['v' => $v, 'count' => $count, 'status' => $status, 'note' => ''];
-        }
-        $payload['totals']['firmware'] = [
-            'compliant' => $compliant,
-            'behind'    => $behind,
-            'ahead'     => $ahead,
-            'target'    => $target ?: '—',
-        ];
-        $payload['firmware'] = ['versions' => $fwVersions];
-
-        // ── ssids[].clients overlay ──────────────────────────────────────────
-        // Walk the synthetic SSID list and replace `clients` with the live
-        // count where the SSID label matches what XIQ reports. SSIDs XIQ
-        // reports but the synthetic list doesn't carry are appended.
-        $matched = [];
-        $newSsids = [];
-        foreach ($payload['ssids'] as $row) {
-            $label = (string) $row['label'];
-            if (isset($ssidClients[$label])) {
-                $row['clients'] = $ssidClients[$label];
-                $matched[$label] = true;
-            } else {
-                $row['clients'] = 0;
-            }
-            $newSsids[] = $row;
-        }
+        // SSIDs — one row per SSID XIQ reports a client on. No auth/vlan info
+        // (would need per-policy lookups via XIQClient::getPolicySsids).
+        $ssidRows = [];
+        arsort($ssidClients);
         foreach ($ssidClients as $label => $count) {
-            if (!isset($matched[$label])) {
-                $newSsids[] = [
-                    'id'         => strtolower(preg_replace('/[^a-z0-9]+/i', '-', $label) ?: 'ssid'),
-                    'label'      => $label,
-                    'auth'       => '—',
-                    'vlan'       => 0,
-                    'clients'    => $count,
-                    'success'    => 0.0,
-                    'throughput' => 0.0,
-                    'role'       => 'unknown',
-                ];
-            }
+            $ssidRows[] = [
+                'id'         => strtolower(preg_replace('/[^a-z0-9]+/i', '-', $label) ?: 'ssid'),
+                'label'      => $label,
+                'auth'       => '—',
+                'vlan'       => 0,
+                'clients'    => $count,
+                'success'    => 100.0,    // unknown — show as success until we wire per-SSID stats
+                'throughput' => 0.0,
+                'role'       => 'unknown',
+            ];
         }
-        $payload['ssids'] = $newSsids;
-        $payload['totals']['ssids'] = ['total' => count($newSsids), 'broadcast' => count(array_filter($newSsids, fn($s) => empty($s['hidden'])))];
+        $payload['ssids'] = $ssidRows;
+        $payload['totals']['ssids'] = ['total' => count($ssidRows), 'broadcast' => count($ssidRows)];
 
-        // ── bands[].aps from XIQ device list ─────────────────────────────────
-        // We don't have per-radio utilization without d360 calls (per-device,
-        // expensive). Just populate the AP counts so the design's structure
-        // stays accurate; util/noise/saturated stay synthetic.
-        $countAps = count($devices);
+        // Bands client split using the PHY buckets we already have.
         foreach ($payload['bands'] as &$b) {
-            $b['aps']     = $countAps;
-            $b['clients'] = $b['id'] === '5'   ? $std['ax'] + $std['ac']
-                          : ($b['id'] === '2_4' ? $std['n']  + $std['legacy']
-                          : 0); // 6 GHz: leave at 0 unless we can detect from radio_type
+            if ($b['id'] === '5')       $b['clients'] = $std['ax'] + $std['ac'];
+            elseif ($b['id'] === '2_4') $b['clients'] = $std['n']  + $std['legacy'];
+            // 6 GHz client count is hard to derive from radio_type alone — leave at 0
         }
         unset($b);
 
-        // ── controllers.lastSync ────────────────────────────────────────────
         $payload['totals']['controllers']['lastSync'] = 'just now';
 
-        // Rate-limit awareness for the banner.
-        $rem = $client->getRateLimitRemaining();
-        if ($rem >= 0 && $client->isRateLimitLow()) {
+        if ($client->isRateLimitLow()) {
+            $rem = $client->getRateLimitRemaining();
             $payload['warning'] = "XIQ rate-limit low: $rem requests left this hour.";
         }
     }
 
-    private static function normalizeOs(string $raw): string {
-        $s = strtoupper(trim($raw));
-        if ($s === '') return 'Other';
-        if (str_contains($s, 'CHROME'))                return 'ChromeOS';
-        if (str_contains($s, 'WIN'))                   return 'Windows';
-        if (str_contains($s, 'IPAD') || str_contains($s, 'IPHONE') || str_contains($s, 'IOS')) return 'iPadOS';
-        if (str_contains($s, 'MAC') || str_contains($s, 'OSX')) return 'macOS';
-        if (str_contains($s, 'ANDROID'))               return 'Android';
-        if (str_contains($s, 'LINUX'))                 return 'Linux';
-        return ucfirst(strtolower($raw));
-    }
-
-    /** Compare two dotted version strings. Returns -1/0/1. Non-numeric falls back to strcmp. */
-    private static function compareSemver(string $a, string $b): int {
-        if ($a === $b) return 0;
-        $pa = array_map('intval', preg_split('/[.\-_]/', $a) ?: []);
-        $pb = array_map('intval', preg_split('/[.\-_]/', $b) ?: []);
-        $len = max(count($pa), count($pb));
-        for ($i = 0; $i < $len; $i++) {
-            $x = $pa[$i] ?? 0;
-            $y = $pb[$i] ?? 0;
-            if ($x !== $y) return $x <=> $y;
-        }
-        return strcmp($a, $b);
-    }
-
-    /**
-     * Discover XIQ-tagged hosts, bucket by Site/* group, count up/down, and
-     * project into the shape the React widgets consume.
-     *
-     * Result keys:
-     *   hostids   — string[]   for downstream problem/event queries
-     *   hostNames — hostid => display name
-     *   apTotals  — { total, online, offline, critical, idle }
-     *   sites     — array<{ id, name, aps, online, util, clients, sev, top, kind? }>
-     *   problemAps— array<{ ap, site, model, reason, sev, util2, util5, clients, age }>
-     */
-    private static function collectFleet(): array {
-        if (function_exists('apcu_fetch')) {
-            $hit = apcu_fetch(self::FLEET_CACHE_KEY, $ok);
-            if ($ok && is_array($hit)) return $hit;
-        }
-
-        $fleet = self::collectFleetUncached();
-
-        if (function_exists('apcu_store')) {
-            apcu_store(self::FLEET_CACHE_KEY, $fleet, self::FLEET_CACHE_TTL);
-        }
-        return $fleet;
-    }
-
-    /** @return array<string, mixed> */
-    private static function collectFleetUncached(): array {
-        $empty = [
-            'hostids' => [], 'hostNames' => [], 'apTotals' => ['total' => 0, 'online' => 0, 'offline' => 0, 'critical' => 0, 'idle' => 0],
-            'sites' => [], 'problemAps' => []
-        ];
-
-        // Step 1: Site/Wireless/<schoolname>/<floor> host groups. APs are
-        // bucketed per-floor in this convention, so we roll several groups
-        // up under the schoolname segment when projecting to the React side.
-        $siteGroups = API::HostGroup()->get([
-            'output'      => ['groupid', 'name'],
-            'search'      => ['name' => self::SITE_PREFIX],
-            'startSearch' => true
-        ]) ?: [];
-        if (!$siteGroups) return $empty;
-        $groupids = array_column($siteGroups, 'groupid');
-
-        // Step 2: hosts in any Site/Wireless/* group. The path prefix already
-        // qualifies these as wireless APs — no extra tag filter required.
-        // selectInterfaces brings the per-interface `available` flag we need
-        // to tell reachable hosts (1) from unreachable (2) — host.status by
-        // itself only indicates monitored/disabled, not up/down.
-        $hosts = API::Host()->get([
-            'output'           => ['hostid', 'host', 'name', 'status', 'maintenance_status', 'active_available'],
-            'selectHostGroups' => ['groupid', 'name'],
-            'selectInventory'  => ['model'],
-            'selectInterfaces' => ['interfaceid', 'main', 'type', 'available'],
-            'groupids'         => $groupids,
-            'preservekeys'     => true
-        ]) ?: [];
-        if (!$hosts) return $empty;
-
-        $hostids   = array_keys($hosts);
-        $hostNames = [];
-        foreach ($hosts as $h) {
-            $hostNames[(string) $h['hostid']] = (string) ($h['name'] ?: $h['host']);
-        }
-
-        // Step 3: open problems for these hosts so we can score severity per
-        // site and surface the top-N problem APs.
-        $problems = self::collectProblemsForHosts($hostids);
-
-        // Map problem.eventid -> hostid via event.get(selectHosts).
-        $problemByHost = [];
-        if ($problems) {
-            $events = API::Event()->get([
-                'output'      => ['eventid'],
-                'eventids'    => array_column($problems, 'eventid'),
-                'selectHosts' => ['hostid']
-            ]) ?: [];
-            $hostByEvent = [];
-            foreach ($events as $ev) {
-                $first = $ev['hosts'][0] ?? null;
-                if ($first) $hostByEvent[(string) $ev['eventid']] = (string) $first['hostid'];
-            }
-            foreach ($problems as $p) {
-                $hid = $hostByEvent[(string) $p['eventid']] ?? null;
-                if ($hid !== null && isset($hosts[$hid])) {
-                    $problemByHost[$hid][] = $p;
-                }
-            }
-        }
-
-        // Step 4: bucket hosts by school (the first segment after the
-        // Site/Wireless/ prefix). Multiple floors collapse into one site row.
-        $sites = [];
-        foreach ($hostids as $hid) {
-            $h = $hosts[$hid];
-
-            $siteName = self::schoolNameFor($h);
-            if ($siteName === '') continue;
-            $siteId = self::siteIdFromName($siteName);
-
-            $sites[$siteName] = $sites[$siteName] ?? [
-                'id'      => $siteId,
-                'name'    => $siteName,
-                'aps'     => 0,
-                'online'  => 0,
-                'util'    => 0,
-                'clients' => 0,
-                'sev'     => 'ok',
-                'top'     => '—',
-                '_hostids'=> [],
-            ];
-
-            $sites[$siteName]['aps']++;
-            if (self::isHostReachable($h)) $sites[$siteName]['online']++;
-
-            $sites[$siteName]['_hostids'][] = $hid;
-
-            // Promote severity per-site to the worst open problem on any host.
-            $worst = self::worstSev($problemByHost[$hid] ?? []);
-            if (self::sevRank($worst) > self::sevRank($sites[$siteName]['sev'])) {
-                $sites[$siteName]['sev'] = $worst;
-                // Pick the top reason from this host's worst problem.
-                foreach ($problemByHost[$hid] ?? [] as $p) {
-                    if (self::zabbixSevToLabel((int) $p['severity']) === $worst) {
-                        $sites[$siteName]['top'] = sprintf('%s · %s', $hostNames[$hid], $p['name']);
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Flag a site as "outage" (pulses in the UI) when ≥25% of its APs are
-        // offline AND severity is high/disaster.
-        $sitesOut = [];
-        foreach ($sites as $s) {
-            $offPct = $s['aps'] > 0 ? (($s['aps'] - $s['online']) / $s['aps']) : 0;
-            if ($offPct >= 0.25 && in_array($s['sev'], ['high', 'disaster'], true)) {
-                $s['kind'] = 'outage';
-            }
-            unset($s['_hostids']);
-            $sitesOut[] = $s;
-        }
-        usort($sitesOut, fn($a, $b) => self::sevRank($b['sev']) <=> self::sevRank($a['sev']) ?: strcmp($a['name'], $b['name']));
-
-        // Step 5: AP totals.
-        //
-        //   total    = every AP host in Site/Wireless/* (incl. disabled)
-        //   online   = main interface available=1 (or in maintenance)
-        //   offline  = main interface available=2 (unreachable)
-        //   critical = has open high-or-disaster problem
-        //   idle     = enabled but availability unknown (=0), neither up nor down
-        //
-        // Disabled hosts (status=1) don't contribute to online/offline — they
-        // sit in the leftover slot so the totals still add up to `total`.
-        $total = count($hostids);
-        $online = $offline = $critical = $idle = 0;
-        foreach ($hostids as $hid) {
-            $h = $hosts[$hid];
-            $state = self::hostReachState($h);
-            if ($state === 'online')       $online++;
-            elseif ($state === 'offline')  $offline++;
-            elseif ($state === 'idle')     $idle++;
-            // 'disabled' falls through — not counted
-
-            $w = self::worstSev($problemByHost[$hid] ?? []);
-            if (in_array($w, ['high', 'disaster'], true)) $critical++;
-        }
-        $apTotals = [
-            'total'    => $total,
-            'online'   => $online,
-            'offline'  => $offline,
-            'critical' => $critical,
-            'idle'     => $idle,
-        ];
-
-        // Step 6: top problem APs — flatten, sort by severity then age (newest
-        // worst first), take 8.
-        $problemAps = [];
-        foreach ($hostids as $hid) {
-            foreach ($problemByHost[$hid] ?? [] as $p) {
-                $clock = (int) $p['clock'];
-                $age   = max(0, time() - $clock);
-                $problemAps[] = [
-                    'ap'      => $hostNames[$hid],
-                    'hostid'  => (string) $hid,
-                    'site'    => self::siteIdFor($hosts[$hid]),
-                    'model'   => (string) ($hosts[$hid]['inventory']['model'] ?? '—'),
-                    'reason'  => (string) $p['name'],
-                    'sev'     => self::zabbixSevToLabel((int) $p['severity']),
-                    'util2'   => 0,
-                    'util5'   => 0,
-                    'clients' => 0,
-                    'age'     => sprintf('%02d:%02d:%02d', intdiv($age, 3600), intdiv($age % 3600, 60), $age % 60),
-                    '_clock'  => $clock,
-                    '_sevr'   => self::sevRank(self::zabbixSevToLabel((int) $p['severity'])),
-                ];
-            }
-        }
-        usort($problemAps, fn($a, $b) => $b['_sevr'] <=> $a['_sevr'] ?: $b['_clock'] <=> $a['_clock']);
-        $problemAps = array_slice($problemAps, 0, 8);
-        foreach ($problemAps as &$p) { unset($p['_clock'], $p['_sevr']); }
-        unset($p);
-
-        return [
-            'hostids'    => $hostids,
-            'hostNames'  => $hostNames,
-            'apTotals'   => $apTotals,
-            'sites'      => $sitesOut,
-            'problemAps' => $problemAps,
-        ];
-    }
-
-    /** Open + recently-resolved problems across a list of XIQ host IDs. */
-    private static function collectProblemsForHosts(array $hostids): array {
-        if (!$hostids) return [];
-        return API::Problem()->get([
-            'output'    => ['eventid', 'name', 'severity', 'clock', 'r_eventid', 'r_clock', 'acknowledged'],
-            'hostids'   => $hostids,
-            'recent'    => true,
-            'time_from' => time() - 24 * 3600,
-            'sortfield' => ['eventid'],
-            'sortorder' => 'DESC',
-            'limit'     => 200,
-        ]) ?: [];
-    }
-
-    /** Recent events for the events stream (top 12, newest first). */
-    private static function collectEvents(array $hostids, array $hostNames): array {
-        if (!$hostids) return [];
-        $problems = API::Problem()->get([
-            'output'    => ['eventid', 'name', 'severity', 'clock'],
-            'hostids'   => $hostids,
-            'recent'    => true,
-            'time_from' => time() - 3600,
-            'sortfield' => ['eventid'],
-            'sortorder' => 'DESC',
-            'limit'     => 50,
-        ]) ?: [];
-        if (!$problems) return [];
-
-        $events = API::Event()->get([
-            'output'      => ['eventid'],
-            'eventids'    => array_column($problems, 'eventid'),
-            'selectHosts' => ['hostid']
-        ]) ?: [];
-        $hostByEvent = [];
-        foreach ($events as $ev) {
-            $first = $ev['hosts'][0] ?? null;
-            if ($first) $hostByEvent[(string) $ev['eventid']] = (string) $first['hostid'];
-        }
-
-        $out = [];
-        foreach ($problems as $p) {
-            $hid = $hostByEvent[(string) $p['eventid']] ?? null;
-            if ($hid === null) continue;
-            $out[] = [
-                'ts'     => date('H:i:s', (int) $p['clock']),
-                'source' => 'zbx',
-                'host'   => $hostNames[$hid] ?? $hid,
-                'msg'    => 'Problem:',
-                'obj'    => (string) $p['name'],
-                'sev'    => self::zabbixSevToLabel((int) $p['severity']),
-            ];
-            if (count($out) >= 12) break;
-        }
-        return $out;
-    }
+    // ── Shared helpers ──────────────────────────────────────────────────────
 
     private static function zabbixSevToLabel(int $sev): string {
         return [0 => 'info', 1 => 'info', 2 => 'warning', 3 => 'warning', 4 => 'high', 5 => 'disaster'][$sev] ?? 'info';
@@ -549,77 +549,7 @@ class ActionXiqData extends ActionDataBase {
         return ['ok' => 0, 'info' => 1, 'warning' => 2, 'high' => 3, 'disaster' => 4][$label] ?? 0;
     }
 
-    private static function worstSev(array $problems): string {
-        $worst = 'ok';
-        foreach ($problems as $p) {
-            $lbl = self::zabbixSevToLabel((int) $p['severity']);
-            if (self::sevRank($lbl) > self::sevRank($worst)) $worst = $lbl;
-        }
-        return $worst;
-    }
-
-    /**
-     * Classify a host as online | offline | idle | disabled.
-     *
-     *   online   — main interface available=1, OR host in maintenance
-     *              (maintenance suppresses problems; don't show as offline)
-     *   offline  — main interface available=2
-     *   idle     — enabled but availability unknown (0) on all interfaces
-     *   disabled — host.status=1 (operator-disabled)
-     *
-     * If no interfaces are present (template-only, custom checks) we fall
-     * back to enabled→idle / disabled→disabled so the host isn't silently
-     * dropped from the total.
-     */
-    private static function hostReachState(array $host): string {
-        if ((int) $host['status'] !== 0) return 'disabled';
-        if ((int) ($host['maintenance_status'] ?? 0) === 1) return 'online';
-
-        $sawAvailable = false;
-        $sawUnavailable = false;
-        foreach ($host['interfaces'] ?? [] as $iface) {
-            // Prefer the main interface, but consider all of them — an SNMP
-            // AP with a secondary Agent interface should still count online if
-            // either is reachable.
-            $a = (int) ($iface['available'] ?? 0);
-            if ($a === 1) $sawAvailable = true;
-            if ($a === 2) $sawUnavailable = true;
-        }
-        if ($sawAvailable)   return 'online';
-        if ($sawUnavailable) return 'offline';
-        return 'idle';
-    }
-
-    private static function isHostReachable(array $host): bool {
-        $s = self::hostReachState($host);
-        return $s === 'online';
-    }
-
-    private static function siteIdFor(array $host): string {
-        $name = self::schoolNameFor($host);
-        return $name === '' ? '—' : self::siteIdFromName($name);
-    }
-
-    /**
-     * Walk the host's groups for one named Site/Wireless/<schoolname>/... and
-     * return the schoolname segment. Returns '' if no matching group is found.
-     */
-    private static function schoolNameFor(array $host): string {
-        foreach ($host['hostgroups'] ?? [] as $g) {
-            $name = (string) $g['name'];
-            if (!str_starts_with($name, self::SITE_PREFIX)) continue;
-            $rest = substr($name, strlen(self::SITE_PREFIX));
-            $segments = explode('/', $rest, 2);
-            $school = trim($segments[0] ?? '');
-            if ($school !== '') return $school;
-        }
-        return '';
-    }
-
     private static function siteIdFromName(string $name): string {
-        // Take the leading uppercase letters of significant words (drops "the",
-        // "of", "for"); fall back to first 3 alphanumerics. "Bryant High School"
-        // → "BHS"; "Tuscaloosa Magnet Elementary" → "TME".
         $stopwords = ['the', 'of', 'for', 'and', 'a', 'an'];
         $initials = '';
         foreach (preg_split('/[\s\-_\/]+/', $name) as $word) {
@@ -633,186 +563,28 @@ class ActionXiqData extends ActionDataBase {
         return $alnum === '' ? 'SITE' : substr($alnum, 0, 3);
     }
 
-    /** Shape consumed by xiq-bridge.jsx — also used by ActionXiq for SSR boot. */
-    public static function syntheticPayload(): array {
-        return [
-            'totals'      => self::totals(),
-            'sites'       => self::sites(),
-            'bands'       => self::bands(),
-            'ssids'       => self::ssids(),
-            'problemAps'  => self::problemAps(),
-            'channelGrid' => self::channelGrid(),
-            'clientMix'   => self::clientMix(),
-            'throughput'  => self::throughput(),
-            'firmware'    => self::firmware(),
-            'roaming'     => self::roaming(),
-            'events'      => self::events()
-        ];
+    private static function normalizeOs(string $raw): string {
+        $s = strtoupper(trim($raw));
+        if ($s === '') return 'Other';
+        if (str_contains($s, 'CHROME'))                                                                  return 'ChromeOS';
+        if (str_contains($s, 'WIN'))                                                                     return 'Windows';
+        if (str_contains($s, 'IPAD') || str_contains($s, 'IPHONE') || str_contains($s, 'IOS'))           return 'iPadOS';
+        if (str_contains($s, 'MAC') || str_contains($s, 'OSX'))                                          return 'macOS';
+        if (str_contains($s, 'ANDROID'))                                                                 return 'Android';
+        if (str_contains($s, 'LINUX'))                                                                   return 'Linux';
+        return ucfirst(strtolower($raw));
     }
 
-    public static function totals(): array {
-        return [
-            'aps'         => ['total' => 1184, 'online' => 1158, 'offline' => 18, 'critical' => 4, 'idle' => 4],
-            'clients'     => ['total' => 9264, 'dot11ax' => 6418, 'dot11ac' => 2310, 'legacy' => 536],
-            'throughput'  => ['agg_gbps' => 14.62, 'peak_gbps' => 22.41, 'ingress_gbps' => 9.18, 'egress_gbps' => 5.44],
-            'ssids'       => ['total' => 8, 'broadcast' => 6],
-            'rfHealth'    => ['score' => 86, 'target' => 90],
-            'firmware'    => ['compliant' => 1138, 'behind' => 41, 'ahead' => 5, 'target' => '32.7.0.5'],
-            'controllers' => ['region' => 'us-east-2', 'instance' => 'xiq-tcs-prod', 'lastSync' => '12s ago']
-        ];
-    }
-
-    private static function sites(): array {
-        return [
-            ['id' => 'BHS', 'name' => 'Bryant High School',         'aps' => 96, 'online' => 93, 'util' => 71, 'clients' => 1124, 'sev' => 'warning',  'top' => 'BHS-23-Cafe LAN down'],
-            ['id' => 'CHS', 'name' => 'Central High School',        'aps' => 84, 'online' => 83, 'util' => 64, 'clients' =>  982, 'sev' => 'warning',  'top' => 'CHS-LIB-AP-12 roam failures'],
-            ['id' => 'NRH', 'name' => 'Northridge High School',     'aps' => 78, 'online' => 78, 'util' => 58, 'clients' =>  844, 'sev' => 'info',     'top' => '—'],
-            ['id' => 'PHS', 'name' => 'Paul W. Bryant Middle',      'aps' => 54, 'online' => 53, 'util' => 52, 'clients' =>  612, 'sev' => 'info',     'top' => 'PHS-AP-Lib-03 firmware drift'],
-            ['id' => 'ECS', 'name' => 'Eastwood Middle School',     'aps' => 48, 'online' => 48, 'util' => 41, 'clients' =>  481, 'sev' => 'ok',       'top' => '—'],
-            ['id' => 'WMS', 'name' => 'Westlawn Middle School',     'aps' => 46, 'online' => 45, 'util' => 47, 'clients' =>  466, 'sev' => 'info',     'top' => '—'],
-            ['id' => 'TMS', 'name' => 'Tuscaloosa Magnet Middle',   'aps' => 40, 'online' => 40, 'util' => 38, 'clients' =>  402, 'sev' => 'ok',       'top' => '—'],
-            ['id' => 'ALV', 'name' => 'Alberta Elementary',         'aps' => 32, 'online' => 32, 'util' => 44, 'clients' =>  281, 'sev' => 'ok',       'top' => '—'],
-            ['id' => 'AED', 'name' => 'Arcadia Elementary',         'aps' => 28, 'online' => 28, 'util' => 35, 'clients' =>  244, 'sev' => 'ok',       'top' => '—'],
-            ['id' => 'CRS', 'name' => 'Central Elementary',         'aps' => 32, 'online' => 21, 'util' => 18, 'clients' =>   94, 'sev' => 'disaster', 'top' => '11 APs unreachable · uplink to TCS-CO down', 'kind' => 'outage'],
-            ['id' => 'MTV', 'name' => 'Martin Luther King Jr Elem', 'aps' => 26, 'online' => 26, 'util' => 32, 'clients' =>  204, 'sev' => 'ok',       'top' => '—'],
-            ['id' => 'OAK', 'name' => 'Oakdale Elementary',         'aps' => 24, 'online' => 24, 'util' => 39, 'clients' =>  198, 'sev' => 'info',     'top' => '—'],
-            ['id' => 'RCK', 'name' => 'Rock Quarry Elementary',     'aps' => 26, 'online' => 26, 'util' => 36, 'clients' =>  214, 'sev' => 'ok',       'top' => '—'],
-            ['id' => 'SKL', 'name' => 'Skyland Elementary',         'aps' => 22, 'online' => 22, 'util' => 33, 'clients' =>  176, 'sev' => 'ok',       'top' => '—'],
-            ['id' => 'STA', 'name' => 'Stafford Elementary',        'aps' => 24, 'online' => 23, 'util' => 49, 'clients' =>  202, 'sev' => 'warning',  'top' => 'STA-AP-Gym-01 high 2.4 GHz noise'],
-            ['id' => 'TKM', 'name' => 'Tuscaloosa Magnet Elem',     'aps' => 28, 'online' => 28, 'util' => 41, 'clients' =>  236, 'sev' => 'ok',       'top' => '—'],
-            ['id' => 'UPL', 'name' => 'University Place Elem',      'aps' => 26, 'online' => 26, 'util' => 40, 'clients' =>  208, 'sev' => 'ok',       'top' => '—'],
-            ['id' => 'VWS', 'name' => 'Verner Elementary',          'aps' => 22, 'online' => 22, 'util' => 31, 'clients' =>  172, 'sev' => 'ok',       'top' => '—'],
-            ['id' => 'WDS', 'name' => 'Woodland Forrest Elem',      'aps' => 22, 'online' => 22, 'util' => 37, 'clients' =>  184, 'sev' => 'ok',       'top' => '—'],
-            ['id' => 'TCT', 'name' => 'Tuscaloosa Career & Tech',   'aps' => 42, 'online' => 42, 'util' => 48, 'clients' =>  411, 'sev' => 'info',     'top' => '—'],
-            ['id' => 'AOL', 'name' => 'Tuscaloosa Online',          'aps' =>  6, 'online' =>  6, 'util' => 12, 'clients' =>   38, 'sev' => 'ok',       'top' => '—'],
-            ['id' => 'OAS', 'name' => 'Oak Hill Special Ed',        'aps' => 12, 'online' => 12, 'util' => 28, 'clients' =>   84, 'sev' => 'ok',       'top' => '—'],
-            ['id' => 'TCS', 'name' => 'TCS Central Office',         'aps' => 64, 'online' => 63, 'util' => 55, 'clients' =>  584, 'sev' => 'warning',  'top' => 'Auth-server timeout (PF radius)'],
-            ['id' => 'TCO', 'name' => 'Operations / Warehouse',     'aps' => 18, 'online' => 18, 'util' => 22, 'clients' =>   96, 'sev' => 'ok',       'top' => '—'],
-            ['id' => 'TDC', 'name' => 'Datacenter (CO Annex)',      'aps' =>  8, 'online' =>  8, 'util' => 18, 'clients' =>   41, 'sev' => 'ok',       'top' => '—'],
-            ['id' => 'TBS', 'name' => 'Bus Operations',             'aps' => 12, 'online' => 12, 'util' => 26, 'clients' =>   86, 'sev' => 'ok',       'top' => '—'],
-        ];
-    }
-
-    private static function bands(): array {
-        return [
-            ['id' => '5',   'label' => '5 GHz',      'aps' => 1184, 'clients' => 6840, 'util' => 58, 'noise' => -91, 'saturated' => 47,  'color' => 'var(--ext)',
-                'spark' => [44,46,48,52,55,58,60,61,59,58,57,56,55,57,60,62,63,61,58,55,52,50,48,46]],
-            ['id' => '2_4', 'label' => '2.4 GHz',    'aps' => 1184, 'clients' => 1604, 'util' => 71, 'noise' => -84, 'saturated' => 128, 'color' => 'var(--warn)',
-                'spark' => [62,64,66,69,71,73,74,75,74,72,71,70,69,71,72,74,75,73,71,68,66,64,62,60]],
-            ['id' => '6',   'label' => '6 GHz (6E)', 'aps' => 286,  'clients' =>  820, 'util' => 22, 'noise' => -94, 'saturated' => 0,   'color' => 'var(--ok)',
-                'spark' => [12,14,15,17,20,22,24,25,24,23,22,21,20,22,24,26,28,27,25,22,20,18,17,15]],
-        ];
-    }
-
-    private static function ssids(): array {
-        return [
-            ['id' => 'tcs-staff',    'label' => 'tcs-staff',    'auth' => '802.1X · EAP-TLS',     'vlan' => 10, 'clients' => 2284, 'success' => 99.7, 'throughput' => 5.84, 'role' => 'faculty'],
-            ['id' => 'tcs-students', 'label' => 'tcs-students', 'auth' => '802.1X · PEAP-MSCHAP', 'vlan' => 20, 'clients' => 5102, 'success' => 98.3, 'throughput' => 6.91, 'role' => 'student'],
-            ['id' => 'tcs-byod',     'label' => 'tcs-byod',     'auth' => 'PSK · onboarded',      'vlan' => 50, 'clients' => 1184, 'success' => 97.1, 'throughput' => 1.62, 'role' => 'byod'],
-            ['id' => 'tcs-guest',    'label' => 'tcs-guest',    'auth' => 'Captive · PF portal',  'vlan' => 60, 'clients' =>  394, 'success' => 94.6, 'throughput' => 0.71, 'role' => 'guest'],
-            ['id' => 'tcs-av',       'label' => 'tcs-av',       'auth' => 'PSK · static',         'vlan' => 70, 'clients' =>  142, 'success' => 99.9, 'throughput' => 0.18, 'role' => 'av'],
-            ['id' => 'tcs-voice',    'label' => 'tcs-voice',    'auth' => '802.1X · EAP-TLS',     'vlan' => 30, 'clients' =>  118, 'success' => 99.6, 'throughput' => 0.09, 'role' => 'voip'],
-            ['id' => 'tcs-iot',      'label' => 'tcs-iot',      'auth' => 'PSK · scoped',         'vlan' => 80, 'clients' =>   34, 'success' => 99.1, 'throughput' => 0.02, 'role' => 'byod'],
-            ['id' => 'tcs-mgmt',     'label' => 'tcs-mgmt',     'auth' => '802.1X · cert',        'vlan' =>  4, 'clients' =>    6, 'success' => 100.0,'throughput' => 0.01, 'role' => 'av', 'hidden' => true],
-        ];
-    }
-
-    private static function problemAps(): array {
-        return [
-            ['ap' => 'BHS-23-Cafe',    'site' => 'BHS', 'model' => 'AP4000',  'reason' => 'LAN uplink down',                  'sev' => 'high',     'util2' => 0,  'util5' => 0,  'clients' => 0,  'age' => '00:14:33'],
-            ['ap' => 'CRS-01-Office',  'site' => 'CRS', 'model' => 'AP3000x', 'reason' => 'Unreachable via cloud broker',     'sev' => 'disaster', 'util2' => 0,  'util5' => 0,  'clients' => 0,  'age' => '00:04:11'],
-            ['ap' => 'CRS-04-Hall',    'site' => 'CRS', 'model' => 'AP3000x', 'reason' => 'Unreachable via cloud broker',     'sev' => 'disaster', 'util2' => 0,  'util5' => 0,  'clients' => 0,  'age' => '00:04:11'],
-            ['ap' => 'CRS-Gym-Center', 'site' => 'CRS', 'model' => 'AP4000',  'reason' => 'Unreachable via cloud broker',     'sev' => 'disaster', 'util2' => 0,  'util5' => 0,  'clients' => 0,  'age' => '00:04:11'],
-            ['ap' => 'BHS-56-Hallway', 'site' => 'BHS', 'model' => 'AP4000',  'reason' => '5 GHz util > 75% (sustained 12m)', 'sev' => 'warning',  'util2' => 38, 'util5' => 81, 'clients' => 64, 'age' => '00:42:18'],
-            ['ap' => 'CHS-LIB-AP-12',  'site' => 'CHS', 'model' => 'AP4000',  'reason' => 'Client roam failure rate > 4%',    'sev' => 'warning',  'util2' => 41, 'util5' => 62, 'clients' => 48, 'age' => '00:48:09'],
-            ['ap' => 'STA-AP-Gym-01',  'site' => 'STA', 'model' => 'AP410C',  'reason' => '2.4 GHz noise floor -78 dBm',      'sev' => 'warning',  'util2' => 88, 'util5' => 44, 'clients' => 22, 'age' => '01:08:42'],
-            ['ap' => 'PHS-AP-Lib-03',  'site' => 'PHS', 'model' => 'AP410C',  'reason' => 'Firmware drift (32.7.0.5 avail)',  'sev' => 'info',     'util2' => 32, 'util5' => 41, 'clients' => 28, 'age' => '01:38:02'],
-        ];
-    }
-
-    private static function channelGrid(): array {
-        return [
-            'sites'    => ['BHS','CHS','NRH','PHS','TCS','TCT','CRS','STA'],
-            'channels' => [36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 149, 153, 157, 161],
-            'matrix'   => [
-                [62, 71, 58, 64, 48, 41, 52, 55, 28, 31, 33, 34, 67, 72, 64, 58],
-                [54, 62, 51, 57, 41, 38, 44, 48, 22, 24, 26, 28, 61, 64, 58, 52],
-                [44, 51, 42, 47, 33, 31, 36, 38, 18, 19, 21, 22, 49, 52, 47, 42],
-                [38, 44, 36, 40, 28, 26, 31, 32, 14, 16, 18, 19, 42, 45, 40, 36],
-                [48, 56, 46, 52, 38, 34, 41, 42, 19, 21, 24, 25, 54, 58, 52, 47],
-                [42, 49, 40, 45, 32, 29, 35, 36, 16, 18, 20, 22, 47, 50, 45, 40],
-                [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0],
-                [72, 68, 64, 71, 51, 44, 56, 58, 32, 34, 36, 38, 74, 78, 71, 64],
-            ]
-        ];
-    }
-
-    private static function clientMix(): array {
-        return [
-            'standards' => [
-                ['id' => 'ax',     'label' => 'Wi-Fi 6 / 6E (ax)', 'count' => 6418, 'pct' => 69.3, 'color' => 'var(--ext)'],
-                ['id' => 'ac',     'label' => 'Wi-Fi 5 (ac)',      'count' => 2310, 'pct' => 24.9, 'color' => 'var(--info)'],
-                ['id' => 'n',      'label' => 'Wi-Fi 4 (n)',       'count' =>  428, 'pct' =>  4.6, 'color' => 'var(--warn)'],
-                ['id' => 'legacy', 'label' => 'Legacy a/b/g',      'count' =>  108, 'pct' =>  1.2, 'color' => 'var(--err)'],
-            ],
-            'os' => [
-                ['id' => 'chrome',  'label' => 'ChromeOS',  'count' => 4862, 'pct' => 52.5],
-                ['id' => 'win',     'label' => 'Windows',   'count' => 1718, 'pct' => 18.5],
-                ['id' => 'ios',     'label' => 'iPadOS',    'count' => 1284, 'pct' => 13.9],
-                ['id' => 'macos',   'label' => 'macOS',     'count' =>  642, 'pct' =>  6.9],
-                ['id' => 'android', 'label' => 'Android',   'count' =>  482, 'pct' =>  5.2],
-                ['id' => 'other',   'label' => 'Other',     'count' =>  276, 'pct' =>  3.0],
-            ]
-        ];
-    }
-
-    private static function throughput(): array {
-        return [
-            2.1, 1.8, 1.4, 1.2, 1.1, 1.3, 2.6, 5.8, 11.4, 17.2, 19.8, 21.4,
-            22.1, 18.6, 16.4, 19.1, 21.8, 14.8, 9.4, 6.2, 4.4, 3.6, 2.8, 2.2
-        ];
-    }
-
-    private static function firmware(): array {
-        return [
-            'versions' => [
-                ['v' => '32.7.0.7', 'count' =>   84, 'status' => 'ahead',  'note' => 'early-ring (BHS)'],
-                ['v' => '32.7.0.5', 'count' => 1054, 'status' => 'target', 'note' => 'fleet target'],
-                ['v' => '32.7.0.3', 'count' =>   34, 'status' => 'behind', 'note' => 'scheduled May 18'],
-                ['v' => '32.6.4.1', 'count' =>    7, 'status' => 'behind', 'note' => 'needs window'],
-                ['v' => '—',        'count' =>    5, 'status' => 'ahead',  'note' => 'lab / spare'],
-            ]
-        ];
-    }
-
-    private static function roaming(): array {
-        return [
-            'buckets' => [
-                ['range' => '< 20 ms', 'count' => 7124, 'color' => 'var(--ok)'],
-                ['range' => '20–50',   'count' => 1284, 'color' => 'var(--ok)'],
-                ['range' => '50–120',  'count' =>  514, 'color' => 'var(--warn)'],
-                ['range' => '120–250', 'count' =>  198, 'color' => 'var(--warn)'],
-                ['range' => '250+',    'count' =>   86, 'color' => 'var(--err)'],
-                ['range' => 'Failed',  'count' =>   58, 'color' => 'var(--err)'],
-            ],
-            'rate24h' => 0.62
-        ];
-    }
-
-    private static function events(): array {
-        return [
-            ['ts' => '10:14:08', 'source' => 'ext', 'host' => 'BHS-23-Cafe',       'msg' => 'Device disconnected:', 'obj' => 'no LAN keepalive (12s)',           'sev' => 'high'],
-            ['ts' => '10:13:51', 'source' => 'ext', 'host' => 'CRS-04-Hall',       'msg' => 'Device unreachable:',  'obj' => 'broker timeout (60s)',             'sev' => 'disaster'],
-            ['ts' => '10:13:22', 'source' => 'pf',  'host' => 'F4:5C:89:0B:32:71', 'msg' => 'RADIUS reject:',       'obj' => 'unknown CA on tcs-staff',          'sev' => 'warning'],
-            ['ts' => '10:12:08', 'source' => 'ext', 'host' => 'STA-AP-Gym-01',     'msg' => 'RF event:',            'obj' => '2.4 GHz noise floor -78 dBm (12m)','sev' => 'warning'],
-            ['ts' => '10:11:47', 'source' => 'ext', 'host' => 'BHS-56-Hallway',    'msg' => 'Channel change:',      'obj' => '5 GHz 149 → 157 (CCA 81%)',        'sev' => 'info'],
-            ['ts' => '10:10:24', 'source' => 'ext', 'host' => 'CHS-LIB-AP-12',     'msg' => 'Roam anomaly:',        'obj' => '13 clients · 4.2% fail rate',      'sev' => 'warning'],
-            ['ts' => '10:09:08', 'source' => 'ext', 'host' => 'NRH-ACC-04',        'msg' => 'Client joined:',       'obj' => 'iPad · tcs-staff · -54 dBm',       'sev' => 'ok'],
-            ['ts' => '10:08:13', 'source' => 'ext', 'host' => 'PHS-AP-Lib-03',     'msg' => 'Firmware drift:',      'obj' => '32.7.0.5 → 32.7.0.7 available',    'sev' => 'info'],
-            ['ts' => '10:07:42', 'source' => 'ext', 'host' => 'TCS-AD-Conf-A',     'msg' => 'Capacity:',            'obj' => '76 clients on single radio (5 GHz)','sev' => 'info'],
-            ['ts' => '10:06:31', 'source' => 'ext', 'host' => 'CRS-CORE-01',       'msg' => 'Upstream:',            'obj' => 'uplink Te1/49 to TCS-CO down',     'sev' => 'disaster'],
-            ['ts' => '10:05:18', 'source' => 'ext', 'host' => 'BHS-Gym-N-02',      'msg' => 'Mesh formed:',         'obj' => 'backup link 5 GHz · -68 dBm',      'sev' => 'ok'],
-            ['ts' => '10:04:02', 'source' => 'pf',  'host' => 'k.davis@tcs',       'msg' => 'EAP-TLS success:',     'obj' => 'BHS-56-Hallway · -52 dBm',         'sev' => 'ok'],
-        ];
+    private static function compareSemver(string $a, string $b): int {
+        if ($a === $b) return 0;
+        $pa = array_map('intval', preg_split('/[.\-_]/', $a) ?: []);
+        $pb = array_map('intval', preg_split('/[.\-_]/', $b) ?: []);
+        $len = max(count($pa), count($pb));
+        for ($i = 0; $i < $len; $i++) {
+            $x = $pa[$i] ?? 0;
+            $y = $pb[$i] ?? 0;
+            if ($x !== $y) return $x <=> $y;
+        }
+        return strcmp($a, $b);
     }
 }

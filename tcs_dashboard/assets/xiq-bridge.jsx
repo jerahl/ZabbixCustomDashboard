@@ -30,6 +30,10 @@
             const v = payload[src];
             window[dst] = (v !== undefined && v !== null) ? v : (window[dst] || fallback);
         }
+        // Loading flag — true on the SSR boot (empty arrays), flips false on
+        // the first successful refresh. Widgets read this to choose between
+        // empty-state and spinner rendering.
+        window.XIQ_LOADING = !!payload.loading;
         // Banner state — App renders if non-null. error wins over warning so
         // the user sees the most important condition.
         window.XIQ_BANNER = payload.error

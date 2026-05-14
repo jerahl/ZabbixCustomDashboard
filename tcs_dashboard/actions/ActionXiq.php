@@ -24,11 +24,10 @@ class ActionXiq extends ActionBase {
     }
 
     protected function doAction(): void {
-        // SSR boot — first paint renders against the same synthetic payload
-        // tcs.xiq.data serves, so the page is fully populated before the
-        // bridge's async refresh fires. When ActionXiqData later swaps in
-        // real XIQ calls the boot snapshot stays in lock-step automatically.
-        $boot = ActionXiqData::syntheticPayload() + ['async' => true];
+        // SSR boot — an empty shell with loading=true. The bridge fetches the
+        // real rollup from tcs.xiq.data immediately after first paint; widgets
+        // with no data yet (APs by site) show a loading indicator until then.
+        $boot = ActionXiqData::emptyPayload() + ['async' => true];
 
         $data = [
             'title' => _('TCS Wireless · XIQ Status'),

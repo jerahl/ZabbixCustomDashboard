@@ -45,6 +45,21 @@ const xiqSev = {
   disaster: { bg: "rgba(242,95,92,0.28)",   bd: "var(--err)",            fg: "#ffd0cf"     },
 };
 
+// ───────── Loading / empty state for a card ─────────
+const CardLoading = ({ label, spinning = true }) => (
+  <div style={{
+    display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+    gap: 12, padding: "40px 14px", color: "var(--muted)", fontSize: 12
+  }}>
+    {spinning ? (
+      <div className="refresh-ring" style={{ width: 22, height: 22, borderWidth: 2.5 }} />
+    ) : (
+      <Icon name="alert" size={18} />
+    )}
+    <div>{label}</div>
+  </div>
+);
+
 // Heat color for the channel utilization grid: 0–100 → blue→amber→red.
 const heatColor = (v) => {
   if (v <= 0) return null;
@@ -184,38 +199,42 @@ const APSiteGrid = ({ filter, setFilter }) => {
         </div>
       </div>
       <div className="card-b">
-        <div className="apsite-grid">
-          {sites.map(s => {
-            const c = xiqSev[s.sev] || xiqSev.ok;
-            const off = s.aps - s.online;
-            const utilColor = s.util > 70 ? "var(--err)" : s.util > 55 ? "var(--warn)" : "var(--ok)";
-            return (
-              <div
-                key={s.id}
-                className={"apsite-tile" + (s.kind === "outage" ? " pulse" : "")}
-                style={{ background: c.bg, borderColor: c.bd }}
-                title={`${s.name} · ${s.online}/${s.aps} online · ${s.clients} clients · util ${s.util}%`}
-              >
-                <div className="apsite-h">
-                  <span className="apsite-id" style={{ color: c.fg }}>{s.id}</span>
-                  <span className="apsite-aps">
-                    {off > 0 ? (
-                      <><span className="off">{off}↓</span> <span style={{ color: "var(--muted)" }}>/ {s.aps}</span></>
-                    ) : (
-                      <span style={{ color: c.fg }}>{s.aps}</span>
-                    )}
-                  </span>
+        {XIQ_SITES.length === 0 ? (
+          <CardLoading label={window.XIQ_LOADING ? "Loading AP fleet from Zabbix…" : "No APs found in the Site/Wireless/* groups."} spinning={!!window.XIQ_LOADING} />
+        ) : (
+          <div className="apsite-grid">
+            {sites.map(s => {
+              const c = xiqSev[s.sev] || xiqSev.ok;
+              const off = s.aps - s.online;
+              const utilColor = s.util > 70 ? "var(--err)" : s.util > 55 ? "var(--warn)" : "var(--ok)";
+              return (
+                <div
+                  key={s.id}
+                  className={"apsite-tile" + (s.kind === "outage" ? " pulse" : "")}
+                  style={{ background: c.bg, borderColor: c.bd }}
+                  title={`${s.name} · ${s.online}/${s.aps} online · ${s.clients} clients · util ${s.util}%`}
+                >
+                  <div className="apsite-h">
+                    <span className="apsite-id" style={{ color: c.fg }}>{s.id}</span>
+                    <span className="apsite-aps">
+                      {off > 0 ? (
+                        <><span className="off">{off}↓</span> <span style={{ color: "var(--muted)" }}>/ {s.aps}</span></>
+                      ) : (
+                        <span style={{ color: c.fg }}>{s.aps}</span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="apsite-name">{s.name}</div>
+                  <div className="apsite-util-row">
+                    <div className="apsite-util-bar"><div style={{ width: `${s.util}%`, background: utilColor }} /></div>
+                    <span>{s.util}%</span>
+                  </div>
+                  <div className="apsite-clients">{s.clients.toLocaleString()} clients</div>
                 </div>
-                <div className="apsite-name">{s.name}</div>
-                <div className="apsite-util-row">
-                  <div className="apsite-util-bar"><div style={{ width: `${s.util}%`, background: utilColor }} /></div>
-                  <span>{s.util}%</span>
-                </div>
-                <div className="apsite-clients">{s.clients.toLocaleString()} clients</div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
       <div className="sites-legend">
         {[["disaster","Disaster"],["high","High"],["warning","Warning"],["info","Info"],["ok","OK"]].map(([k,l]) => (
