@@ -27,7 +27,7 @@ class ActionXiqData extends ActionDataBase {
 
     /** Site/Wireless/* + target=xiq host discovery is cached this many seconds. */
     private const FLEET_CACHE_TTL = 30;
-    private const FLEET_CACHE_KEY = 'tcs_dashboard:xiq_fleet:v2';
+    private const FLEET_CACHE_KEY = 'tcs_dashboard:xiq_fleet:v3';
 
     /** Host group prefix used to discover wireless APs and their site bucket. */
     private const SITE_PREFIX = 'Site/Wireless/';
@@ -105,10 +105,14 @@ class ActionXiqData extends ActionDataBase {
 
         // Step 2: hosts in any Site/Wireless/* group. The path prefix already
         // qualifies these as wireless APs — no extra tag filter required.
+        // selectInterfaces brings the per-interface `available` flag we need
+        // to tell reachable hosts (1) from unreachable (2) — host.status by
+        // itself only indicates monitored/disabled, not up/down.
         $hosts = API::Host()->get([
-            'output'           => ['hostid', 'host', 'name', 'status', 'maintenance_status'],
+            'output'           => ['hostid', 'host', 'name', 'status', 'maintenance_status', 'active_available'],
             'selectHostGroups' => ['groupid', 'name'],
             'selectInventory'  => ['model'],
+            'selectInterfaces' => ['interfaceid', 'main', 'type', 'available'],
             'groupids'         => $groupids,
             'preservekeys'     => true
         ]) ?: [];
@@ -168,8 +172,7 @@ class ActionXiqData extends ActionDataBase {
             ];
 
             $sites[$siteName]['aps']++;
-            $isOnline = ((int) $h['status'] === 0) && ((int) ($h['maintenance_status'] ?? 0) === 0);
-            if ($isOnline) $sites[$siteName]['online']++;
+            if (self::isHostReachable($h)) $sites[$siteName]['online']++;
 
             $sites[$siteName]['_hostids'][] = $hid;
 
@@ -200,25 +203,35 @@ class ActionXiqData extends ActionDataBase {
         }
         usort($sitesOut, fn($a, $b) => self::sevRank($b['sev']) <=> self::sevRank($a['sev']) ?: strcmp($a['name'], $b['name']));
 
-        // Step 5: AP totals — total / online / offline / critical (high-or-worse
-        // open problem) / idle (no problems and no recent metric — approximated
-        // as the leftover slot for now since we don't poll a "last data" item).
-        $total    = count($hostids);
-        $online   = 0;
-        $critical = 0;
+        // Step 5: AP totals.
+        //
+        //   total    = every AP host in Site/Wireless/* (incl. disabled)
+        //   online   = main interface available=1 (or in maintenance)
+        //   offline  = main interface available=2 (unreachable)
+        //   critical = has open high-or-disaster problem
+        //   idle     = enabled but availability unknown (=0), neither up nor down
+        //
+        // Disabled hosts (status=1) don't contribute to online/offline — they
+        // sit in the leftover slot so the totals still add up to `total`.
+        $total = count($hostids);
+        $online = $offline = $critical = $idle = 0;
         foreach ($hostids as $hid) {
             $h = $hosts[$hid];
-            if ((int) $h['status'] === 0 && (int) ($h['maintenance_status'] ?? 0) === 0) $online++;
+            $state = self::hostReachState($h);
+            if ($state === 'online')       $online++;
+            elseif ($state === 'offline')  $offline++;
+            elseif ($state === 'idle')     $idle++;
+            // 'disabled' falls through — not counted
+
             $w = self::worstSev($problemByHost[$hid] ?? []);
             if (in_array($w, ['high', 'disaster'], true)) $critical++;
         }
-        $offline = max(0, $total - $online);
         $apTotals = [
             'total'    => $total,
             'online'   => $online,
             'offline'  => $offline,
             'critical' => $critical,
-            'idle'     => 0,
+            'idle'     => $idle,
         ];
 
         // Step 6: top problem APs — flatten, sort by severity then age (newest
@@ -328,6 +341,43 @@ class ActionXiqData extends ActionDataBase {
             if (self::sevRank($lbl) > self::sevRank($worst)) $worst = $lbl;
         }
         return $worst;
+    }
+
+    /**
+     * Classify a host as online | offline | idle | disabled.
+     *
+     *   online   — main interface available=1, OR host in maintenance
+     *              (maintenance suppresses problems; don't show as offline)
+     *   offline  — main interface available=2
+     *   idle     — enabled but availability unknown (0) on all interfaces
+     *   disabled — host.status=1 (operator-disabled)
+     *
+     * If no interfaces are present (template-only, custom checks) we fall
+     * back to enabled→idle / disabled→disabled so the host isn't silently
+     * dropped from the total.
+     */
+    private static function hostReachState(array $host): string {
+        if ((int) $host['status'] !== 0) return 'disabled';
+        if ((int) ($host['maintenance_status'] ?? 0) === 1) return 'online';
+
+        $sawAvailable = false;
+        $sawUnavailable = false;
+        foreach ($host['interfaces'] ?? [] as $iface) {
+            // Prefer the main interface, but consider all of them — an SNMP
+            // AP with a secondary Agent interface should still count online if
+            // either is reachable.
+            $a = (int) ($iface['available'] ?? 0);
+            if ($a === 1) $sawAvailable = true;
+            if ($a === 2) $sawUnavailable = true;
+        }
+        if ($sawAvailable)   return 'online';
+        if ($sawUnavailable) return 'offline';
+        return 'idle';
+    }
+
+    private static function isHostReachable(array $host): bool {
+        $s = self::hostReachState($host);
+        return $s === 'online';
     }
 
     private static function siteIdFor(array $host): string {
