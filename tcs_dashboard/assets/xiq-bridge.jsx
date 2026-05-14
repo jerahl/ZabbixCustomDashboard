@@ -51,24 +51,42 @@
 
     const URL_DATA = window.TCS_XIQ_DATA_URL || "zabbix.php?action=tcs.xiq.data";
 
-    async function fetchData() {
+    async function fetchOnce(suffix, label) {
+        const url = URL_DATA + suffix;
         try {
-            const resp = await fetch(URL_DATA, {
+            const resp = await fetch(url, {
                 credentials: "same-origin",
                 headers: { "Accept": "application/json" }
             });
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const j = await resp.json();
             apply(j || {});
-            console.info("[tcs] xiq data refreshed:",
+            console.info("[tcs] " + label + " refresh:",
                 (j.sites || []).length, "site(s),",
                 ((j.totals && j.totals.aps && j.totals.aps.total) || 0), "AP(s)");
+            return j;
         } catch (e) {
-            console.error("[tcs] xiq data fetch failed:", e, "url:", URL_DATA);
+            console.error("[tcs] " + label + " fetch failed:", e, "url:", url);
+            return null;
         }
     }
 
-    console.info("[tcs] fetching XIQ snapshot…");
+    // Two-stage refresh on FIRST load: render Zabbix-side fleet immediately
+    // (fast), then enrich with XIQ overlays (slow). On subsequent polls just
+    // fetch the full payload to avoid a flicker where XIQ fields briefly
+    // reset to zero between the zbx response and the xiq response.
+    let firstLoad = true;
+    async function fetchData() {
+        if (firstLoad) {
+            firstLoad = false;
+            await fetchOnce("&source=zbx", "zbx");
+            fetchOnce("", "xiq+zbx");
+        } else {
+            fetchOnce("", "xiq+zbx");
+        }
+    }
+
+    console.info("[tcs] fetching Zabbix fleet snapshot first, XIQ enrichment to follow…");
     fetchData();
 
     // Auto-refresh every 30s. Skip when the tab is hidden so a backgrounded

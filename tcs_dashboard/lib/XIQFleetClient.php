@@ -82,51 +82,6 @@ final class XIQFleetClient {
     }
 
     /**
-     * Whole-fleet wireless usage & capacity grid. ONE call per page returns
-     * up to 100 APs each with:
-     *
-     *   device_id, hostname, mac_address, site, building, floor,
-     *   radio_5g_utilization_score (0–100),
-     *   wifi1_noise (dBm),
-     *   wifi1_interference_score, wifi1_packet_loss, wifi1_retry_score,
-     *   healthy_clients, unhealthy_clients,
-     *   has_usage_capacity_issue, link_error5g
-     *
-     * Eliminates the need to sample /d360/wireless/interfaces-graph per AP —
-     * we get exact fleet-wide 5 GHz util / noise / saturation in O(pages).
-     *
-     * POST endpoint with a body filter (we pass {} to fetch the whole fleet).
-     */
-    public function getUsageCapacityGrid(int $cacheTtl = 120, string $sortField = 'RADIO_5G_UTILIZATION_SCORE'): array {
-        $bucket = 'ucGrid_' . $sortField;
-        return $this->cached($bucket, $cacheTtl, function () use ($sortField) {
-            $all  = [];
-            $page = 1;
-            do {
-                $query = [
-                    'page'      => $page,
-                    'limit'     => self::PAGE_LIMIT,
-                    'sortField' => $sortField,
-                    'sortOrder' => 'DESC',
-                ];
-                $resp = $this->postJson('/dashboard/wireless/usage-capacity/grid', $query, new \stdClass());
-                $rows = $resp['data'] ?? [];
-                if (!is_array($rows) || !$rows) break;
-                foreach ($rows as $r) $all[] = $r;
-                $totalPages = (int) ($resp['total_pages'] ?? 0);
-                if ($totalPages > 0) {
-                    if ($page >= $totalPages) break;
-                } elseif (count($rows) < self::PAGE_LIMIT) {
-                    break;
-                }
-                $page++;
-                if ($page > self::MAX_PAGES) break;
-            } while (true);
-            return $all;
-        });
-    }
-
-    /**
      * Per-AP current wireless interface snapshot.
      *
      * GET /d360/wireless/interfaces-stats — returns wifi0/wifi1/wifi2, each

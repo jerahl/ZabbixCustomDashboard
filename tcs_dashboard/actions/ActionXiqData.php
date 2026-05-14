@@ -41,7 +41,7 @@ class ActionXiqData extends ActionDataBase {
     /** APCu cache for d360 sampling — 5 minutes; the data changes slowly and
      *  every call counts against the 7,500-req/hr XIQ quota. */
     private const D360_CACHE_TTL = 300;
-    private const D360_CACHE_KEY = 'tcs_dashboard:xiq_d360:v3';
+    private const D360_CACHE_KEY = 'tcs_dashboard:xiq_d360:v4';
 
     /** How many sites to sample for the channel heatmap. Fleet util / noise
      *  pull the whole fleet (paged); only the heatmap is sampled. */
@@ -54,10 +54,16 @@ class ActionXiqData extends ActionDataBase {
     private const AP_HOST_TAG = ['tag' => 'target', 'value' => 'xiq'];
 
     protected function checkInput(): bool {
-        return $this->validateInput([]);
+        return $this->validateInput(['source' => 'string']);
     }
 
     protected function doAction(): void {
+        // ?source=zbx → Zabbix layers only (fast, no XIQ calls)
+        // ?source=xiq → run XIQ overlays too (slow, blocks on XIQ)
+        // (default) — both, for backward compat
+        $source  = $this->getInput('source', '');
+        $skipXiq = ($source === 'zbx');
+
         $payload = self::emptyPayload();
         $fleet   = ['devices' => [], 'sites' => []];
 
@@ -95,6 +101,16 @@ class ActionXiqData extends ActionDataBase {
             $payload['totals']['aps']['critical'] = $problemCtx['criticalCount'];
         } catch (\Throwable $e) {
             error_log('[tcs_dashboard] xiq.data problems: ' . $e->getMessage());
+        }
+
+        // Skip the slow XIQ-side layers when the bridge asked for zbx-only.
+        if ($skipXiq) {
+            $payload['ts']      = time();
+            $payload['partial'] = 'zbx';
+            $this->setResponse(new CControllerResponseData([
+                'main_block' => json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE)
+            ]));
+            return;
         }
 
         // Layer 3: XIQ direct call for what Zabbix does NOT collect — per-client
@@ -682,24 +698,21 @@ class ActionXiqData extends ActionDataBase {
     // ── Layer 4: d360 sampling (RF util / noise / channel grid) ─────────────
 
     /**
-     * Populate bands[5].{util,noise,saturated,spark} and channelGrid from XIQ.
+     * Populate bands[5].{util,saturated} and channelGrid from XIQ.
      *
-     * Two endpoints (confirmed shapes per the XIQ OpenAPI spec):
+     * The /dashboard/wireless/usage-capacity/grid endpoint requires the
+     * "Dashboard" API scope which our deployment token doesn't have (XIQ
+     * returns 403 AUTH_ACCESS_DENIED), so we fall back to per-AP sampling
+     * of /d360/wireless/interfaces-stats — accessible with the same token
+     * we already use for /clients/active.
      *
-     *   1. POST /dashboard/wireless/usage-capacity/grid — paged fleet-wide
-     *      list with radio_5g_utilization_score and wifi1_noise per AP.
-     *      Drives band 5 GHz util (mean), noise (mean), saturated (count
-     *      with util > 75) across the WHOLE fleet — no sampling.
-     *      Cost: ceil(879/100) = 9 calls per cache miss.
+     * Sampling: one rep AP per top {@see self::D360_SITE_SAMPLE} sites.
+     * That gives 8 calls per cache miss for the full picture (band util +
+     * channel grid), all from one endpoint. APCu-cached for 5 minutes.
      *
-     *   2. GET /d360/wireless/interfaces-stats?deviceId=... — per-AP wifi1
-     *      snapshot (channel, channel_utilization). Sampled per top-N site
-     *      to fill the channel heatmap rows. Cost: 8 calls per cache miss.
-     *
-     * APCu-cached for 5 min so a hot dashboard refresh costs zero XIQ
-     * calls. Throughput is NOT in the spec for wireless — we leave the
-     * ThroughputStrip in its "not yet wired" state until a wireless-
-     * throughput endpoint shows up.
+     * Noise floor isn't on the interfaces-stats payload (the spec's
+     * XiqWirelessWifi schema doesn't include noise), so bands[5].noise
+     * stays at 0 until we get scope for the grid endpoint.
      */
     private static function overlayXiqD360(array &$payload, string $token, array $fleet): void {
         if (function_exists('apcu_fetch')) {
@@ -710,25 +723,7 @@ class ActionXiqData extends ActionDataBase {
             }
         }
 
-        $aggregate = ['band5' => null, 'channelGrid' => null];
-
-        // ── Layer 4a: fleet-wide usage & capacity grid ──────────────────────
-        try {
-            $fleetClient = XIQFleetClient::fromToken($token);
-            $rows = $fleetClient->getUsageCapacityGrid(0); // we cache outside
-            if ($rows) {
-                $aggregate['band5'] = self::aggregateBandFromGrid($rows);
-            }
-        } catch (\Throwable $e) {
-            error_log('[tcs_dashboard] usage-capacity grid: ' . $e->getMessage());
-        }
-
-        // ── Layer 4b: per-site channel sampling for the heatmap ────────────
-        try {
-            $aggregate['channelGrid'] = self::sampleChannelGrid($token, $fleet);
-        } catch (\Throwable $e) {
-            error_log('[tcs_dashboard] channel grid sample: ' . $e->getMessage());
-        }
+        $aggregate = self::sampleD360($token, $fleet);
 
         if (function_exists('apcu_store')) {
             apcu_store(self::D360_CACHE_KEY, $aggregate, self::D360_CACHE_TTL);
@@ -737,49 +732,13 @@ class ActionXiqData extends ActionDataBase {
     }
 
     /**
-     * Aggregate band 5 GHz health from the full usage-capacity grid.
-     * Fields per row (per XIQ spec):
-     *   radio_5g_utilization_score: 0–100
-     *   wifi1_noise: dBm
-     *   has_usage_capacity_issue: bool
+     * Sample one AP per top-N site via /d360/wireless/interfaces-stats and
+     * project into both bands[5] (util/saturated) and channelGrid.
      */
-    private static function aggregateBandFromGrid(array $rows): array {
-        $utilSum = 0; $utilN = 0;
-        $noiseSum = 0; $noiseN = 0;
-        $saturated = 0;
-        $issues = 0;
-        foreach ($rows as $r) {
-            if (!is_array($r)) continue;
-            if (isset($r['radio_5g_utilization_score'])) {
-                $u = (int) $r['radio_5g_utilization_score'];
-                $utilSum += $u; $utilN++;
-                if ($u > 75) $saturated++;
-            }
-            if (isset($r['wifi1_noise'])) {
-                $n = (int) $r['wifi1_noise'];
-                if ($n !== 0) { $noiseSum += $n; $noiseN++; }
-            }
-            if (!empty($r['has_usage_capacity_issue'])) $issues++;
-        }
-        return [
-            'util'      => $utilN  > 0 ? (int) round($utilSum / $utilN) : 0,
-            'noise'     => $noiseN > 0 ? (int) round($noiseSum / $noiseN) : 0,
-            'saturated' => $saturated,
-            'spark'     => array_fill(0, 24, 0), // no time series in this endpoint
-            'issues'    => $issues,
-            'n'         => $utilN,
-        ];
-    }
-
-    /**
-     * Sample one AP per top-N site, call /d360/wireless/interfaces-stats
-     * and read wifi1.{channel,channel_utilization}. Build a heatmap row
-     * per sampled site.
-     */
-    private static function sampleChannelGrid(string $token, array $fleet): array {
+    private static function sampleD360(string $token, array $fleet): array {
         $fleetClient = XIQFleetClient::fromToken($token);
 
-        // Group by site, rank by AP count, take top N.
+        // Group online APs by site, rank by AP count, take top N.
         $bySite = [];
         foreach ($fleet['devices'] as $d) {
             if (($d['xiqId'] ?? 0) <= 0)             continue;
@@ -814,8 +773,22 @@ class ActionXiqData extends ActionDataBase {
             }
         }
 
-        // Build the channel union (sorted) so the heatmap columns are exactly
-        // the channels we actually saw.
+        // ── Band 5 GHz aggregate from the samples ───────────────────────────
+        $utilSum = 0; $utilN = 0; $sat = 0;
+        foreach ($samples as $s) {
+            if ($s['util'] === null) continue;
+            $utilSum += $s['util']; $utilN++;
+            if ($s['util'] > 75) $sat++;
+        }
+        $band5 = [
+            'util'      => $utilN > 0 ? (int) round($utilSum / $utilN) : 0,
+            'noise'     => 0,        // not exposed by interfaces-stats
+            'saturated' => $sat,
+            'spark'     => array_fill(0, 24, 0),
+            'n'         => $utilN,
+        ];
+
+        // ── Channel grid: actual channels seen, one row per sampled site ────
         $channels = [];
         foreach ($samples as $s) if ($s['channel'] !== null) $channels[$s['channel']] = true;
         $channels = array_keys($channels);
@@ -823,7 +796,6 @@ class ActionXiqData extends ActionDataBase {
         if (!$channels) {
             $channels = [36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 149, 153, 157, 161];
         }
-
         $sites = []; $matrix = [];
         foreach ($samples as $s) {
             $row = array_fill(0, count($channels), 0);
@@ -834,7 +806,11 @@ class ActionXiqData extends ActionDataBase {
             $sites[]  = self::siteIdFromName($s['building']);
             $matrix[] = $row;
         }
-        return ['sites' => $sites, 'channels' => $channels, 'matrix' => $matrix];
+
+        return [
+            'band5'       => $band5,
+            'channelGrid' => ['sites' => $sites, 'channels' => $channels, 'matrix' => $matrix],
+        ];
     }
 
     /** Merge a d360 aggregate into the payload shape the React side reads. */
