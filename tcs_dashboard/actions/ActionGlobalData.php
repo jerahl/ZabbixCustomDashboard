@@ -264,12 +264,18 @@ class ActionGlobalData extends ActionDataBase {
         // site's tile by N.
         $debug_by_site = [];
         $excluded_problems = 0;
+        $unmapped_problems = 0;
         foreach ($problems as $p) {
             $sev = (int) $p['severity'];
             $hosts_on_trigger = $p['hosts'] ?? [];
+            // Match by host technical name too — the aggregator may not be
+            // in host.get if it's filtered out by monitored_hosts, in which
+            // case the hostid-based excluded_hostids map is empty.
             $all_excluded = $hosts_on_trigger !== [] && array_reduce(
                 $hosts_on_trigger,
-                fn($acc, $h) => $acc && isset($excluded_hostids[(string) $h['hostid']]),
+                fn($acc, $h) => $acc
+                    && (isset($excluded_hostids[(string) $h['hostid']])
+                        || in_array($h['host'] ?? '', self::HEATMAP_EXCLUDE_HOSTS, true)),
                 true
             );
             if ($all_excluded) {
@@ -280,6 +286,23 @@ class ActionGlobalData extends ActionDataBase {
             foreach ($hosts_on_trigger as $h) {
                 $sid = $host_to_site[(string) $h['hostid']] ?? null;
                 if ($sid !== null) $touched[$sid] = true;
+            }
+            // Trigger references hosts that host.get didn't return (template
+            // host, disabled, suppressed, etc.). Surface them under the
+            // Unassigned tile rather than silently dropping — the operator
+            // needs to see the alert, not lose it.
+            if (!$touched) {
+                $unmapped_problems++;
+                if (!isset($sites['unassigned'])) {
+                    $sites['unassigned'] = [
+                        'id'       => 'unassigned',
+                        'name'     => 'Unassigned',
+                        'hosts'    => 0,
+                        'problems' => 0,
+                        '_sev'     => -1
+                    ];
+                }
+                $touched['unassigned'] = true;
             }
             foreach (array_keys($touched) as $sid) {
                 $sites[$sid]['problems']++;
@@ -314,6 +337,7 @@ class ActionGlobalData extends ActionDataBase {
                 'hosts'    => self::HEATMAP_EXCLUDE_HOSTS,
                 'problems' => $excluded_problems
             ],
+            'unmapped_to_unassigned' => $unmapped_problems,
             'by_site'                => $debug_by_site
         ];
 
