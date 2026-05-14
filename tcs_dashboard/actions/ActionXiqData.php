@@ -92,7 +92,7 @@ class ActionXiqData extends ActionDataBase {
         if ($token === null) {
             $payload['sources']['xiq'] = 'no-token';
             $payload['warning']        = $payload['warning']
-                ?? 'XIQ direct queries skipped — {$XIQ_TOKEN} macro is not set. Client mix / SSID counts are unavailable.';
+                ?? 'XIQ direct queries skipped — set global macro {$XIQ_API_TOKEN} (non-secret) for client mix / SSID counts. The host-scoped {$XIQ_TOKEN} is SECRET_TEXT and not readable from the dashboard.';
         } else {
             try {
                 self::overlayXiqClients($payload, $token);
@@ -418,27 +418,24 @@ class ActionXiqData extends ActionDataBase {
 
     // ── Layer 3: XIQ direct (per-client breakdown only) ─────────────────────
 
-    /** Returns the {$XIQ_TOKEN} global macro value, or null when unset/empty. */
+    /**
+     * Returns the XIQ API token from a global Zabbix macro, or null when unset.
+     *
+     * The template ships {$XIQ_TOKEN} on the fleet host as SECRET_TEXT — Zabbix
+     * masks SECRET_TEXT values when read via UserMacro.get, so we can't pull
+     * it from the host scope. Use a separate non-secret global macro
+     * {$XIQ_API_TOKEN} for read-side consumers like this dashboard. Falls back
+     * to a global {$XIQ_TOKEN} only if someone set the non-secret version
+     * under that name.
+     */
     private static function xiqToken(): ?string {
-        // Try the global macro first (per template hint); also accept the
-        // older {$XIQ_API_TOKEN} name in case operators set that one.
-        foreach (['{$XIQ_TOKEN}', '{$XIQ_API_TOKEN}'] as $name) {
+        foreach (['{$XIQ_API_TOKEN}', '{$XIQ_TOKEN}'] as $name) {
             $rows = API::UserMacro()->get([
                 'output'      => ['macro', 'value'],
                 'globalmacro' => true,
                 'filter'      => ['macro' => $name],
             ]) ?: [];
             $v = trim((string) ($rows[0]['value'] ?? ''));
-            if ($v !== '') return $v;
-        }
-        // Fall back: pull from any host macro on the XIQ fleet host
-        // (the template ships {$XIQ_TOKEN} as a host macro, not a global).
-        $rows = API::UserMacro()->get([
-            'output' => ['macro', 'value', 'hostid'],
-            'filter' => ['macro' => '{$XIQ_TOKEN}'],
-        ]) ?: [];
-        foreach ($rows as $r) {
-            $v = trim((string) ($r['value'] ?? ''));
             if ($v !== '') return $v;
         }
         return null;
