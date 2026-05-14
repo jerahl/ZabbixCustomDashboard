@@ -315,8 +315,17 @@ const ProblemAPList = () => (
       const c = xiqSev[p.sev] || xiqSev.info;
       const u2cls = p.util2 > 75 ? "err" : p.util2 > 55 ? "warn" : "";
       const u5cls = p.util5 > 75 ? "err" : p.util5 > 55 ? "warn" : "";
+      // Click anywhere on the row to navigate to AP Detail. Only render the
+      // row as a link when we have a hostid (live data) — synthetic rows
+      // don't carry one and would otherwise produce a broken link.
+      const apDetailUrl = p.hostid
+        ? `${(window.TCS_NAV && window.TCS_NAV.apDetail) || "zabbix.php?action=tcs.dashboard.view"}&hostid=${encodeURIComponent(p.hostid)}`
+        : null;
+      const rowProps = apDetailUrl
+        ? { onClick: () => { window.location.href = apDetailUrl; }, style: { cursor: "pointer" }, title: `Open ${p.ap} detail` }
+        : {};
       return (
-        <div className="pap-row" key={i}>
+        <div className="pap-row" key={i} {...rowProps}>
           <div className="pap-main">
             <div className="pap-head">
               <Sev level={p.sev} />

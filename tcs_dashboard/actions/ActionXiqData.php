@@ -27,7 +27,7 @@ class ActionXiqData extends ActionDataBase {
 
     /** Site/Wireless/* + target=xiq host discovery is cached this many seconds. */
     private const FLEET_CACHE_TTL = 30;
-    private const FLEET_CACHE_KEY = 'tcs_dashboard:xiq_fleet:v3';
+    private const FLEET_CACHE_KEY = 'tcs_dashboard:xiq_fleet:v4';
 
     /** Host group prefix used to discover wireless APs and their site bucket. */
     private const SITE_PREFIX = 'Site/Wireless/';
@@ -243,6 +243,7 @@ class ActionXiqData extends ActionDataBase {
                 $age   = max(0, time() - $clock);
                 $problemAps[] = [
                     'ap'      => $hostNames[$hid],
+                    'hostid'  => (string) $hid,
                     'site'    => self::siteIdFor($hosts[$hid]),
                     'model'   => (string) ($hosts[$hid]['inventory']['model'] ?? '—'),
                     'reason'  => (string) $p['name'],

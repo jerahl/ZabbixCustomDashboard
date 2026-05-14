@@ -59,6 +59,17 @@
     console.info("[tcs] fetching XIQ snapshot…");
     fetchData();
 
+    // Auto-refresh every 30s. Skip when the tab is hidden so a backgrounded
+    // dashboard doesn't keep hammering the Zabbix server. Server-side caches
+    // for 30s anyway, so this is the natural cadence.
+    const REFRESH_MS = 30_000;
+    setInterval(() => {
+        if (document.visibilityState === "visible") fetchData();
+    }, REFRESH_MS);
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") fetchData();
+    });
+
     // Expose a manual refresh hook for the Tweaks "Refresh now" button.
     window.tcsXiqRefresh = fetchData;
 })();
