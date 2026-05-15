@@ -126,6 +126,23 @@ final class XIQFleetClient {
     }
 
     /**
+     * Per-client byte usage over a fixed window.
+     *
+     * GET /clients/usage?clientIds=…&clientIds=…&startTime=ms&endTime=ms
+     * Returns: [{ client_id, usage }] where `usage` is total bytes in window.
+     *
+     * Note: OpenAPI emits clientIds as `style: form, explode: true` — repeated
+     * `clientIds=1&clientIds=2` query params, NOT the PHP-default
+     * `clientIds[]=1`. We build the query string by hand to match.
+     */
+    public function getClientsUsage(array $clientIds, int $startTimeMs, int $endTimeMs): array {
+        if (!$clientIds) return [];
+        $parts = ['startTime=' . $startTimeMs, 'endTime=' . $endTimeMs];
+        foreach ($clientIds as $id) $parts[] = 'clientIds=' . (int) $id;
+        return $this->getRaw('/clients/usage?' . implode('&', $parts));
+    }
+
+    /**
      * Per-AP current wireless interface snapshot.
      *
      * GET /d360/wireless/interfaces-stats — returns wifi0/wifi1/wifi2, each
@@ -193,6 +210,26 @@ final class XIQFleetClient {
     /** @return array<string, mixed> */
     public function getJson(string $path, array $query): array {
         return $this->request('GET', $path, $query, null);
+    }
+
+    /**
+     * GET with a pre-built `path?query` string. Use when array params need
+     * a non-PHP-default encoding (e.g. repeated keys without `[]`).
+     */
+    public function getRaw(string $pathAndQuery): array {
+        $url = self::BASE_URL . $pathAndQuery;
+        $ch  = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_HTTPHEADER     => [
+                'Authorization: Bearer ' . $this->token,
+                'Accept: application/json',
+            ],
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HEADER         => true,
+            CURLOPT_TIMEOUT        => self::HTTP_TIMEOUT,
+            CURLOPT_FOLLOWLOCATION => false,
+        ]);
+        return $this->execAndParse($ch, $pathAndQuery);
     }
 
     /** @return array<string, mixed> */
