@@ -177,22 +177,65 @@ class ActionSwitches extends ActionBase {
      * @return array<int, array<string, mixed>>
      */
     private function collectFleet(): array {
-        // Per-request page loads (and every navigator click — tcsNavigateSwitch
-        // does a full page reload) pay the full discovery cost. Cache for 30s
-        // in APCu so the navigator feels instant; counters lag by ≤30s, which
-        // is far below the underlying SNMP poll interval anyway.
-        $cacheKey = 'tcs_dashboard:switch_fleet:v1';
+        // Stale-while-revalidate caching. Fresh hits (<30s) and stale hits
+        // (<5min) both return instantly; stale hits also schedule a background
+        // refresh after the response is flushed so the next request is fresh.
+        // The user sees a sub-millisecond navigator load almost every time.
+        $cacheKey = 'tcs_dashboard:switch_fleet:v2';
+        $softTtl  = 30;
+        $hardTtl  = 300;
+
         if (function_exists('apcu_fetch')) {
             $hit = apcu_fetch($cacheKey, $ok);
-            if ($ok && is_array($hit)) return $hit;
+            if ($ok && is_array($hit) && isset($hit['data'], $hit['ts']) && is_array($hit['data'])) {
+                $age = time() - (int) $hit['ts'];
+                if ($age < $softTtl) {
+                    return $hit['data'];
+                }
+                if ($age < $hardTtl) {
+                    $this->scheduleBackgroundFleetRefresh($cacheKey, $hardTtl);
+                    return $hit['data'];
+                }
+            }
         }
 
         $fleet = $this->collectFleetUncached();
-
-        if (function_exists('apcu_store')) {
-            apcu_store($cacheKey, $fleet, 30);
-        }
+        $this->storeFleetCache($cacheKey, $fleet, $hardTtl);
         return $fleet;
+    }
+
+    private function storeFleetCache(string $cacheKey, array $fleet, int $ttl): void {
+        if (function_exists('apcu_store')) {
+            apcu_store($cacheKey, ['data' => $fleet, 'ts' => time()], $ttl);
+        }
+    }
+
+    /**
+     * Kick off a fleet refresh that runs *after* the response is flushed to
+     * the browser. Guarded by an apcu_add lock so concurrent stale hits don't
+     * all spawn duplicate refreshes (which would just hammer the Zabbix API).
+     */
+    private function scheduleBackgroundFleetRefresh(string $cacheKey, int $ttl): void {
+        $lockKey = $cacheKey . ':refreshing';
+        if (function_exists('apcu_add')) {
+            if (!apcu_add($lockKey, 1, 60)) return; // refresh already in flight
+        }
+
+        register_shutdown_function(function () use ($cacheKey, $ttl, $lockKey) {
+            if (function_exists('fastcgi_finish_request')) {
+                @fastcgi_finish_request();
+            }
+            try {
+                $fleet = $this->collectFleetUncached();
+                $this->storeFleetCache($cacheKey, $fleet, $ttl);
+            } catch (\Throwable $e) {
+                error_log('[tcs_dashboard] background fleet refresh failed: '.$e->getMessage());
+            } finally {
+                if (function_exists('apcu_delete')) {
+                    apcu_delete($lockKey);
+                }
+            }
+        });
     }
 
     /** @return array<int, array<string, mixed>> */
@@ -211,12 +254,15 @@ class ActionSwitches extends ActionBase {
         // is critical — operators typically put the tag on the EXOS template
         // rather than every host individually, and the default host.get tag
         // filter only inspects host-level tags.
+        //
+        // Trimmed compared to the original: no selectInventory, no
+        // selectTags. The navigator only needs name / ip / site bucket;
+        // per-host model + port counters now come from the snapshot endpoint
+        // for the actively selected switch (loaded in parallel).
         $taggedHosts = API::Host()->get([
             'output'           => ['hostid', 'host', 'name', 'status'],
             'selectInterfaces' => ['ip', 'main'],
             'selectHostGroups' => ['groupid', 'name'],
-            'selectInventory'  => ['model'],
-            'selectTags'       => ['tag', 'value'],
             'groupids'         => $groupids,
             'tags'             => [['tag' => 'target', 'value' => 'exos', 'operator' => 1]],
             'evaltype'         => 0,
@@ -227,58 +273,15 @@ class ActionSwitches extends ActionBase {
 
         $hostids = array_keys($taggedHosts);
 
-        // Step 3: stacking items — count per host for the members KPI. The
-        // Extreme EXOS template literally ships the misspelled key
-        // `stacking.memeber[…]` (sic), so we match both forms.
-        $stackingItems = API::Item()->get([
-            'output'      => ['hostid', 'key_'],
-            'hostids'     => $hostids,
-            'search'      => ['key_' => 'stacking.'],
-            'startSearch' => true
-        ]) ?: [];
+        // The original implementation issued three more Item.get calls here:
+        // stacking.member[…], net.if.status[…], snmp.interfaces.poe.dstatus[…].
+        // Across a fleet of N switches with K ports each those returned
+        // 2*N*K rows just to compute counters the host navigator never
+        // displays — they were only used for the *selected* switch's header
+        // pills, which now derive them from the snapshot stack on the client.
+        // Removing them is the bulk of the navigator load-time win.
 
-        $memberCount = [];
-        foreach ($stackingItems as $it) {
-            $k = (string) $it['key_'];
-            if (!preg_match('/^(?:extreme\.)?(?:snmp\.)?stack(?:ing)?\.(?:member|memeber)\[\d+\]$/', $k)) continue;
-            $hid = (string) $it['hostid'];
-            $memberCount[$hid] = ($memberCount[$hid] ?? 0) + 1;
-        }
-
-        // Step 4: port + PoE state for every switch, one item.get per key prefix.
-        $portItems = API::Item()->get([
-            'output'      => ['hostid', 'key_', 'lastvalue'],
-            'hostids'     => $hostids,
-            'search'      => ['key_' => 'net.if.status[ifOperStatus.'],
-            'startSearch' => true
-        ]) ?: [];
-
-        $poeItems = API::Item()->get([
-            'output'      => ['hostid', 'key_', 'lastvalue'],
-            'hostids'     => $hostids,
-            'search'      => ['key_' => 'snmp.interfaces.poe.dstatus['],
-            'startSearch' => true
-        ]) ?: [];
-
-        $counters = [];
-        foreach ($hostids as $hid) {
-            $counters[$hid] = ['ports' => 0, 'up' => 0, 'down' => 0, 'poe' => 0];
-        }
-        foreach ($portItems as $it) {
-            $hid = (string) $it['hostid'];
-            $counters[$hid]['ports']++;
-            $s = (int) $it['lastvalue'];
-            if ($s === 1) $counters[$hid]['up']++;
-            elseif ($s === 2) $counters[$hid]['down']++;
-        }
-        foreach ($poeItems as $it) {
-            $hid = (string) $it['hostid'];
-            if ((int) $it['lastvalue'] === 3) {
-                $counters[$hid]['poe']++;
-            }
-        }
-
-        // Step 5: open problem counts. Hosts metadata already came in step 2.
+        // Open problem counts. Hosts metadata already came in step 2.
         $problems = API::Problem()->get([
             'output'  => ['eventid', 'severity', 'r_eventid', 'objectid'],
             'hostids' => $hostids,
@@ -300,7 +303,7 @@ class ActionSwitches extends ActionBase {
             foreach ($events as $ev) {
                 foreach ($ev['hosts'] ?? [] as $h) {
                     $hid = (string) $h['hostid'];
-                    if (isset($counters[$hid])) {
+                    if (isset($taggedHosts[$hid])) {
                         $problemByHost[$hid] = ($problemByHost[$hid] ?? 0) + 1;
                     }
                 }
@@ -339,18 +342,20 @@ class ActionSwitches extends ActionBase {
                 ];
             }
 
-            $c = $counters[$hid];
+            // ports / up / down / poe / model / members are populated by the
+            // snapshot endpoint for the active switch; keep zero placeholders
+            // here so the React `host` object shape stays stable.
             $row = [
                 'id'       => $h['host'],                 // human-readable, shown in UI
                 'hostid'   => (string) $h['hostid'],      // numeric, used for navigation
                 'name'     => $h['name'],
                 'ip'       => $ip,
-                'model'    => (string) ($h['inventory']['model'] ?? '—'),
-                'members'  => max(1, (int) ($memberCount[$hid] ?? 1)),
-                'ports'    => (int) $c['ports'],
-                'up'       => (int) $c['up'],
-                'down'     => (int) $c['down'],
-                'poe'      => (int) $c['poe'],
+                'model'    => '—',
+                'members'  => 1,
+                'ports'    => 0,
+                'up'       => 0,
+                'down'     => 0,
+                'poe'      => 0,
                 'cpu'      => 0,
                 'mem'      => 0,
                 'temp'     => 0,
