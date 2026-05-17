@@ -573,7 +573,8 @@ body {
 .event .ts { font-family: var(--mono); font-size: 11px; color: var(--muted); }
 .event .src { font-family: var(--mono); font-size: 10px; color: var(--fg-2); padding: 1px 5px; border: 1px solid var(--line); border-radius: 3px; text-align: center; background: var(--bg-2); }
 .event .src.zbx { color: #ff7676; border-color: rgba(217,41,41,0.4); background: rgba(217,41,41,0.08); }
-.event .src.pf { color: #ffd25e; border-color: rgba(245,179,0,0.4); background: rgba(245,179,0,0.08); }
+.event .src.pf  { color: #ffd25e; border-color: rgba(245,179,0,0.4); background: rgba(245,179,0,0.08); }
+.event .src.ext { color: #b6a5ff; border-color: rgba(124,92,255,0.4); background: rgba(124,92,255,0.10); }
 .event .msg { color: var(--fg); }
 .event .obj { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-left: 4px; }
 

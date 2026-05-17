@@ -433,8 +433,6 @@ const ChannelGrid = () => {
           <div style={{ background: heatColor(90) }} />
         </div>
         <span>High</span>
-        <span className="h-spacer" style={{ flex: 1 }} />
-        <span>CRS row empty: cloud broker unreachable</span>
       </div>
     </div>
   );
