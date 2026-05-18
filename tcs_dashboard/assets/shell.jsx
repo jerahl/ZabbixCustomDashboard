@@ -113,9 +113,9 @@ const DeviceSidecar = ({ host }) => {
                    : state === "down" ? "var(--err)"
                    : "var(--muted)";
 
-  const templates = Array.isArray(host.templates) ? host.templates : [];
   const groups    = Array.isArray(host.groups)    ? host.groups    : [];
   const siteLine  = [host.site, host.floor].filter(Boolean).join(" · ");
+  const uplink    = host.pfUplink || null;
 
   return (
     <div className="card device-card-h">
@@ -181,14 +181,19 @@ const DeviceSidecar = ({ host }) => {
       </div>
 
       <div className="dev-h-block dev-h-templates">
-        <div className="label">Zabbix Templates</div>
+        <div className="label">Uplink <SourceBadge src="pf" /></div>
         <div className="v">
-          {templates.length === 0 ? (
-            <span className="muted">none</span>
+          {uplink ? (
+            <>
+              <span className="tpl-chip mono" title={uplink.switchIp ? `Switch IP: ${uplink.switchIp}` : "Switch (per PacketFence locationlog)"}>
+                {uplink.switch || uplink.switchIp || "switch?"}
+              </span>
+              <span className="tpl-chip mono" title={uplink.ifDesc ? `ifDesc: ${uplink.ifDesc}` : "Port"}>
+                {uplink.port || uplink.ifDesc || "port?"}
+              </span>
+            </>
           ) : (
-            templates.slice(0, 4).map((t, i) => (
-              <span key={i} className="tpl-chip">{t}</span>
-            ))
+            <span className="muted">not in PacketFence</span>
           )}
         </div>
       </div>

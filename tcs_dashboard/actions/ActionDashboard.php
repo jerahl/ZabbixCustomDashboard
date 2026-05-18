@@ -106,6 +106,7 @@ class ActionDashboard extends ActionBase {
                 $boot['host']['xiqId']          = $fleet['xiqid']    ?? '';
                 $boot['host']['mac']            = $fleet['mac']      ?? '';
                 $boot['host']['policy']         = $fleet['policy']   ?? '';
+                $boot['host']['pfUplink']       = $this->collectPfApUplink($hostid, (string) ($fleet['mac'] ?? ''));
             }
 
             [$pfClients, $pfAuthFails] = $this->collectPacketFence($hostid, $boot['host']);
@@ -1366,6 +1367,47 @@ class ActionDashboard extends ActionBase {
      * Device key passed to PF is the host's `host` field (typically the
      * switch hostname or AP MAC, which PF stores in locationlog.switch).
      */
+    /**
+     * Look up the AP's current upstream switch + port from PacketFence
+     * locationlogs. Drives the "Uplink" block on the device card (replaces
+     * the old "Zabbix Templates" listing).
+     *
+     * Returns null when PF is unconfigured for the host, the MAC is empty,
+     * or PF has no locationlog entry for this AP. The card renders an
+     * empty state in that case.
+     *
+     * @return array{switch:string,switchIp:string,port:string,ifDesc:string}|null
+     */
+    private function collectPfApUplink(string $hostid, string $apMac): ?array {
+        if ($apMac === '') return null;
+        $macros = $this->resolvePfMacros($hostid);
+        if ($macros === null) return null;
+
+        try {
+            $pf  = PFClient::fromMacros($macros);
+            $loc = $pf->locationFor(strtolower($apMac));
+            if (!is_array($loc)) return null;
+
+            $switch   = (string) ($loc['switch']    ?? '');
+            $switchIp = (string) ($loc['switch_ip'] ?? '');
+            $port     = (string) ($loc['port']      ?? '');
+            $ifDesc   = (string) ($loc['ifDesc']    ?? '');
+            if ($switch === '' && $switchIp === '' && $port === '' && $ifDesc === '') {
+                return null;
+            }
+            return [
+                'switch'   => $switch,
+                'switchIp' => $switchIp,
+                'port'     => $port,
+                'ifDesc'   => $ifDesc,
+            ];
+        }
+        catch (\Throwable $e) {
+            error_log('[tcs_dashboard] PF AP uplink lookup: '.$e->getMessage());
+            return null;
+        }
+    }
+
     private function collectPacketFence(string $hostid, ?array $host): array {
         $macros = $this->resolvePfMacros($hostid);
         if ($macros === null) {
