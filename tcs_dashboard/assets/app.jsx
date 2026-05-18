@@ -7,7 +7,12 @@ const App = () => {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [clientFilter, setClientFilter] = useState("all");
   const [t, setTweak] = useTweaks(window.TWEAK_DEFAULTS);
-  const [activeApId, setActiveApId] = useState(t.selectedAp || "BHS-56-Hallway");
+  // Default to whatever host the server boot-loaded — that's the one whose
+  // data is on the page. Fall back to the tweak-remembered selection or the
+  // first AP in the navigator.
+  const bootHostName = window.ZBX_HOST && window.ZBX_HOST.host;
+  const firstNavAp   = (window.AP_SITES && window.AP_SITES[0] && window.AP_SITES[0].aps && window.AP_SITES[0].aps[0]) || null;
+  const [activeApId, setActiveApId] = useState(bootHostName || t.selectedAp || (firstNavAp && firstNavAp.id) || "");
   const [apQuery, setApQuery] = useState("");
 
   // Resolve the active AP from AP_SITES — fall back to ZBX_HOST defaults
@@ -26,6 +31,16 @@ const App = () => {
     apStatus: activeAp.status,
   };
   const onSelectAp = (ap) => {
+    // When the AP carries a real Zabbix hostid (i.e. came from
+    // boot.apSites, not the synthetic single-host fallback), reload the
+    // page targeting that host so the backend collects its data on the
+    // next paint. Falls back to local-state-only for synthetic rows.
+    if (ap.hostid) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("hostid", ap.hostid);
+      window.location.href = url.toString();
+      return;
+    }
     setActiveApId(ap.id);
     setTweak("selectedAp", ap.id);
   };
@@ -64,9 +79,9 @@ const App = () => {
 
   const TabContent = (
     showSide ? (
-      <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 14 }}>
+      <div>
         <DeviceSidecar host={host} />
-        <div>{TabView}</div>
+        <div style={{ marginTop: 14 }}>{TabView}</div>
       </div>
     ) : TabView
   );
@@ -88,9 +103,17 @@ const App = () => {
                 query={apQuery}
                 setQuery={setApQuery}
               />
-              <div style={{ minWidth: 0 }}>{TabContent}</div>
+              <div style={{ minWidth: 0 }}>
+                {TabContent}
+                <DebugPanel />
+              </div>
             </div>
-          ) : TabContent}
+          ) : (
+            <>
+              {TabContent}
+              <DebugPanel />
+            </>
+          )}
         </div>
       </div>
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}

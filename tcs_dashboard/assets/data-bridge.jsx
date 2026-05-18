@@ -31,10 +31,17 @@
     // Every key the React app reads from window.ZBX_ITEMS. Keep this list in
     // sync with the $key_map in ActionDashboard::collectItems(). If you add
     // a new metric to either side, add it here too.
+    //
+    // Temp, PoE draw, and channel utilization are intentionally absent — the
+    // AP305C SNMP MIBs don't expose temperature or PoE, and channel
+    // utilization would need a separate XIQ d360 API call.
     const EXPECTED_ITEM_KEYS = [
-        "cpu", "memory", "temp", "poeDraw",
-        "uplinkIn", "uplinkOut", "pktLoss", "latency",
-        "noise24", "noise5", "channelUtil24", "channelUtil5"
+        "cpu", "memory", "firmware", "serial", "uptime",
+        "pingUp", "pktLoss", "latency",
+        "uplinkIn", "uplinkOut", "uplinkStatus", "uplinkSpeed",
+        "noise24", "noise5",
+        "channel24", "channel5", "txpower24", "txpower5",
+        "radioRx24", "radioTx24", "radioRx5", "radioTx5"
     ];
 
     const emptyItem = () => ({
@@ -102,6 +109,12 @@
         window.PF_AUTH_FAILS = Array.isArray(b.pfAuthFails) ? b.pfAuthFails : [];
         window.ZBX_EVENTS    = Array.isArray(b.events)      ? b.events      : [];
         window.WIRED_PORTS   = Array.isArray(b.wiredPorts)  ? b.wiredPorts  : [];
+        window.SSIDS         = Array.isArray(b.ssids)       ? b.ssids       : [];
+        window.TCS_CLIENTS_DEBUG = (b.clientsDebug && typeof b.clientsDebug === 'object') ? b.clientsDebug : {};
+        window.PF_ADMIN_BASE = typeof b.pfAdminUrl === 'string' ? b.pfAdminUrl : '';
+        window.ALERTS_DETAIL = (b.alertsDetail && typeof b.alertsDetail === 'object') ? b.alertsDetail : {
+            activeTriggers: [], triggerCount: 0, last24h: { count: 0, bySeverity: {} }, lastFiredAgo: null
+        };
         window.AP_SITES      = buildApSites(b, window.ZBX_HOST);
         window.ALERTS_SUMMARY = b.alerts || {
             associationFailures: 0, authFailures: 0,
@@ -110,8 +123,32 @@
         };
     }
 
+    // Debug state — exposed on window.TCS_DEBUG so the DebugPanel can render
+    // last-fetch info, errors, and the raw boot payload without re-fetching.
+    window.TCS_DEBUG = {
+        bootRaw:      window.ZBX_BOOT,
+        bootApplied:  false,
+        url:          null,
+        lastFetchAt:  null,
+        lastFetchOk:  null,
+        lastError:    null,
+        fetchCount:   0,
+        version:      '1'
+    };
+
+    const recordFetch = (ok, err, payload) => {
+        const d = window.TCS_DEBUG;
+        d.lastFetchAt = new Date().toISOString();
+        d.lastFetchOk = ok;
+        d.lastError   = err ? String(err) : null;
+        d.fetchCount++;
+        if (ok && payload) d.lastPayload = payload;
+        window.dispatchEvent(new CustomEvent('tcs:debug'));
+    };
+
     // Initial paint comes from the server-inlined snapshot.
     applyBoot(window.ZBX_BOOT);
+    window.TCS_DEBUG.bootApplied = true;
 
     // Tweak defaults expected by app.jsx — kept here so we don't have to
     // touch app.jsx at all.
@@ -132,29 +169,77 @@
     const REFRESH_MS = 30_000;
     const hostid = window.ZBX_HOST && window.ZBX_HOST.hostid;
     const url = window.TCS_DATA_URL;
+    window.TCS_DEBUG.url = url ? `${url}&hostid=${hostid || '(none)'}` : '(TCS_DATA_URL not set)';
+
+    const tick = async () => {
+        if (!hostid || !url) {
+            recordFetch(false, !hostid ? "no hostid on host" : "TCS_DATA_URL missing");
+            return;
+        }
+        try {
+            const resp = await fetch(`${url}&hostid=${encodeURIComponent(hostid)}`, {
+                credentials: "same-origin",
+                headers: { "Accept": "application/json" }
+            });
+            if (!resp.ok) {
+                recordFetch(false, `HTTP ${resp.status} ${resp.statusText}`);
+                return;
+            }
+            const fresh = await resp.json();
+            applyBoot({
+                ...(window.ZBX_BOOT || {}),
+                host:       fresh.host       ?? window.ZBX_HOST,
+                items:      fresh.items      ?? {},
+                events:     fresh.events     ?? window.ZBX_EVENTS,
+                alerts:     fresh.alerts     ?? window.ALERTS_SUMMARY,
+                wiredPorts: fresh.wiredPorts ?? window.WIRED_PORTS,
+                ssids:      fresh.ssids      ?? window.SSIDS,
+                pfClients:  fresh.pfClients  ?? window.PF_CLIENTS,
+                alertsDetail: fresh.alertsDetail ?? window.ALERTS_DETAIL
+            });
+            recordFetch(true, null, fresh);
+            window.dispatchEvent(new CustomEvent("tcs:data", { detail: fresh }));
+        } catch (e) {
+            console.warn("[tcs] data refresh failed:", e);
+            recordFetch(false, e);
+        }
+    };
+
+    // Expose a manual refresh so the DebugPanel button works.
+    window.tcsDashboardRefresh = tick;
+
+    // PacketFence per-node write actions (Reevaluate access, Restart
+    // switchport). Same envelope as the switch-page helper of the same
+    // name: returns { ok, message? } on success, { ok:false, error }
+    // otherwise. Backend (tcs.pf.device) is admin-gated.
+    window.tcsPfDeviceAction = async function (mac, op) {
+        const actionUrl = window.TCS_PF_DEVICE_URL;
+        const hostid    = window.ZBX_HOST && window.ZBX_HOST.hostid;
+        if (!actionUrl || !hostid) return { ok: false, error: "endpoint not configured" };
+        if (!mac || !op)           return { ok: false, error: "mac and op required" };
+        // PF API matches MACs case-sensitively in path-style endpoints —
+        // force lowercase here so callers don't have to remember.
+        const pfMac = String(mac).toLowerCase();
+        try {
+            const form = new URLSearchParams({ hostid: String(hostid), mac: pfMac, op: String(op) });
+            const resp = await fetch(actionUrl, {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {
+                    "Accept": "application/json",
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
+                },
+                body: form.toString()
+            });
+            const body = await resp.json().catch(() => ({}));
+            if (!resp.ok) return { ok: false, error: body.error || `HTTP ${resp.status}` };
+            return body;
+        } catch (e) {
+            return { ok: false, error: String(e && e.message ? e.message : e) };
+        }
+    };
 
     if (hostid && url) {
-        const tick = async () => {
-            try {
-                const resp = await fetch(`${url}&hostid=${encodeURIComponent(hostid)}`, {
-                    credentials: "same-origin",
-                    headers: { "Accept": "application/json" }
-                });
-                if (!resp.ok) return;
-                const fresh = await resp.json();
-                applyBoot({
-                    ...(window.ZBX_BOOT || {}),
-                    host:       fresh.host       ?? window.ZBX_HOST,
-                    items:      fresh.items      ?? {},
-                    events:     fresh.events     ?? window.ZBX_EVENTS,
-                    alerts:     fresh.alerts     ?? window.ALERTS_SUMMARY,
-                    wiredPorts: fresh.wiredPorts ?? window.WIRED_PORTS
-                });
-                window.dispatchEvent(new CustomEvent("tcs:data", { detail: fresh }));
-            } catch (e) {
-                console.warn("[tcs] data refresh failed:", e);
-            }
-        };
         setInterval(tick, REFRESH_MS);
     }
 })();
