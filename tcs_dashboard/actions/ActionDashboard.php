@@ -430,33 +430,103 @@ class ActionDashboard extends ActionBase {
     }
 
     private function collectEvents(string $hostid): array {
-        // Zabbix 7.2: sortfield must be 'eventid'; select_acknowledges
-        // dropped in favour of selectAcknowledges (camelCase).
+        // Pull both trigger PROBLEM (value=1) and RECOVERY (value=0) events
+        // so the tab can show the full state timeline, not just opens.
+        // Zabbix 7.2: sortfield must be 'eventid'; selectAcknowledges
+        // (camelCase) replaced the snake_case form.
         $events = API::Event()->get([
-            'output'             => ['eventid', 'name', 'severity', 'clock', 'value'],
+            'output'             => ['eventid', 'name', 'severity', 'clock', 'value', 'r_eventid', 'acknowledged'],
             'hostids'            => [$hostid],
             'sortfield'          => ['eventid'],
             'sortorder'          => 'DESC',
-            'limit'              => 25,
-            'selectAcknowledges' => 'count'
+            'limit'              => 100,
+            'selectAcknowledges' => 'count',
+            'selectTags'         => ['tag', 'value'],
+            'value'              => [0, 1]
         ]) ?: [];
 
+        // Zabbix severity (0–5) → bucket the UI styles.
         $sev_label = [
             0 => 'info', 1 => 'info', 2 => 'warning',
-            3 => 'warning', 4 => 'error', 5 => 'error'
+            3 => 'warning', 4 => 'high', 5 => 'disaster'
         ];
 
+        $today = date('Y-m-d');
         $out = [];
         foreach ($events as $e) {
+            $clock = (int) $e['clock'];
+            $date  = date('Y-m-d', $clock);
+            // Tags from the trigger (model/serial/scope/location etc) make
+            // good object hints. Prefer scope, then ap_serial.
+            $obj = '';
+            foreach (($e['tags'] ?? []) as $t) {
+                if (($t['tag'] ?? '') === 'scope' && !empty($t['value'])) {
+                    $obj = (string) $t['value'];
+                    break;
+                }
+            }
+            if ($obj === '') {
+                foreach (($e['tags'] ?? []) as $t) {
+                    if (($t['tag'] ?? '') === 'ap_serial' && !empty($t['value'])) {
+                        $obj = (string) $t['value'];
+                        break;
+                    }
+                }
+            }
             $out[] = [
-                'ts'       => date('H:i:s', (int) $e['clock']),
+                'eventid'  => (string) $e['eventid'],
+                'ts'       => date('H:i:s', $clock),
+                'date'     => $date,
+                'today'    => $date === $today,
+                'clock'    => $clock,
                 'severity' => $sev_label[(int) $e['severity']] ?? 'info',
                 'source'   => 'Zabbix',
-                'obj'      => '',
-                'msg'      => $e['name']
+                'value'    => (int) $e['value'],          // 1 = problem, 0 = recovery
+                'acked'    => (int) ($e['acknowledged'] ?? 0) === 1,
+                'obj'      => $obj,
+                'msg'      => (string) $e['name']
             ];
         }
-        return $out;
+
+        // Merge PacketFence RADIUS reject events for this AP if PF is wired
+        // — same source field the EventsTab badge consumes. The AP's MAC
+        // is the called_station_id in PF's radius_audit_log, so we ask the
+        // PF client to look up failures keyed by the host's XIQ MAC.
+        $pfMacros = $this->resolvePfMacros($hostid);
+        if ($pfMacros !== null) {
+            $apMac = $this->readHostMacro($hostid, '{$XIQ_MAC}');
+            if ($apMac !== null && $apMac !== '') {
+                try {
+                    $pf   = PFClient::fromMacros($pfMacros);
+                    $fails = $pf->authFailuresForNode($apMac, 25);
+                    foreach ($fails as $f) {
+                        $ts = isset($f['ts']) ? strtotime((string) $f['ts']) : 0;
+                        if ($ts <= 0) $ts = time();
+                        $date = date('Y-m-d', $ts);
+                        $out[] = [
+                            'eventid'  => 'pf-'.($f['mac'] ?? '').'-'.$ts,
+                            'ts'       => date('H:i:s', $ts),
+                            'date'     => $date,
+                            'today'    => $date === $today,
+                            'clock'    => $ts,
+                            'severity' => 'warning',
+                            'source'   => 'PF',
+                            'value'    => 1,
+                            'acked'    => false,
+                            'obj'      => (string) ($f['mac'] ?? ''),
+                            'msg'      => 'RADIUS reject: '.((string) ($f['reason'] ?? 'unknown'))
+                                       .(!empty($f['ssid']) ? ' · '.$f['ssid'] : '')
+                        ];
+                    }
+                } catch (\Throwable $e) {
+                    error_log('[tcs_dashboard] PF authFailures merge: '.$e->getMessage());
+                }
+            }
+        }
+
+        // Merge sort by clock DESC, then eventid DESC to keep determinism.
+        usort($out, fn($a, $b) => $b['clock'] <=> $a['clock'] ?: strcmp($b['eventid'], $a['eventid']));
+        return array_slice($out, 0, 100);
     }
 
     private function collectAlertsSummary(string $hostid): array {

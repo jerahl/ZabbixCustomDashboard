@@ -522,25 +522,82 @@ const ClientRow = ({ c }) => {
 };
 
 // ───────── Events tab ─────────
-const EventsTab = () => (
-  <div className="card">
-    <div className="card-h">
-      <h3>All Events</h3>
-      <div className="h-spacer" />
-      <span className="h-meta">unified Zabbix triggers + PacketFence audit log</span>
-    </div>
-    <div className="events">
-      {window.ZBX_EVENTS.map((e, i) => (
-        <div className="event" key={i}>
-          <div className="ts">{e.ts}</div>
-          <div className={`src ${e.source === "Zabbix" ? "zbx" : "pf"}`}>{e.source === "Zabbix" ? "ZBX" : "PF"}</div>
-          <Sev level={e.severity} />
-          <div className="msg">{e.msg} <span className="obj">· {e.obj}</span></div>
+const EventsTab = () => {
+  const all = Array.isArray(window.ZBX_EVENTS) ? window.ZBX_EVENTS : [];
+  const [filter, setFilter] = React.useState("all");
+  const [src,    setSrc]    = React.useState("all");
+
+  const filtered = all.filter(e => {
+    if (filter === "problems" && e.value !== 1) return false;
+    if (filter === "resolved" && e.value !== 0) return false;
+    if (filter === "unacked"  && (e.value !== 1 || e.acked)) return false;
+    if (src === "zbx" && e.source !== "Zabbix") return false;
+    if (src === "pf"  && e.source !== "PF")     return false;
+    return true;
+  });
+
+  const counts = {
+    problems: all.filter(e => e.value === 1).length,
+    resolved: all.filter(e => e.value === 0).length,
+    unacked:  all.filter(e => e.value === 1 && !e.acked).length
+  };
+
+  return (
+    <div className="card">
+      <div className="card-h">
+        <h3>All Events</h3>
+        <SourceBadge src="zbx" />
+        <SourceBadge src="pf" />
+        <div className="h-spacer" />
+        <span className="h-meta" style={{ marginRight: 12 }}>
+          {all.length} total · {counts.problems} open · {counts.unacked} unacked
+        </span>
+        <div style={{ display: "flex", gap: 4 }}>
+          {[
+            ["all",      `All ${all.length}`],
+            ["problems", `Open ${counts.problems}`],
+            ["unacked",  `Unacked ${counts.unacked}`],
+            ["resolved", `Resolved ${counts.resolved}`]
+          ].map(([k, l]) => (
+            <button key={k} className={`btn sm ${filter === k ? "primary" : "ghost"}`} onClick={() => setFilter(k)}>{l}</button>
+          ))}
+          <span style={{ width: 8 }} />
+          {[["all", "ZBX+PF"], ["zbx", "ZBX"], ["pf", "PF"]].map(([k, l]) => (
+            <button key={k} className={`btn sm ${src === k ? "primary" : "ghost"}`} onClick={() => setSrc(k)}>{l}</button>
+          ))}
         </div>
-      ))}
+      </div>
+      {filtered.length === 0 ? (
+        <div style={{ padding: 30, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
+          {all.length === 0
+            ? "No events recorded for this host."
+            : "No events match the current filters."}
+        </div>
+      ) : (
+        <div className="events">
+          {filtered.map((e) => (
+            <div className="event" key={e.eventid}>
+              <div className="ts" title={`${e.date} ${e.ts}`}>
+                {e.today ? e.ts : <>{e.date}<br/><span style={{ color: "var(--muted)", fontSize: 10 }}>{e.ts}</span></>}
+              </div>
+              <div className={`src ${e.source === "Zabbix" ? "zbx" : "pf"}`}>
+                {e.source === "Zabbix" ? "ZBX" : "PF"}
+              </div>
+              <Sev level={e.severity} />
+              <div className="msg">
+                <span style={{ color: e.value === 0 ? "var(--ok)" : "var(--fg)" }}>{e.msg}</span>
+                {e.obj && <span className="obj"> · {e.obj}</span>}
+                {e.value === 0 && <span className="role-tag faculty" style={{ marginLeft: 8, fontSize: 9, padding: "0 6px" }}>RESOLVED</span>}
+                {e.value === 1 && e.acked  && <span className="role-tag av"      style={{ marginLeft: 8, fontSize: 9, padding: "0 6px" }}>ACKED</span>}
+                {e.value === 1 && !e.acked && <span className="role-tag guest"   style={{ marginLeft: 8, fontSize: 9, padding: "0 6px" }}>OPEN</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
-  </div>
-);
+  );
+};
 
 // ───────── Alerts tab ─────────
 const AlertsTab = () => (
