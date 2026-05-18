@@ -64,6 +64,27 @@ class ActionDashboard extends ActionBase {
             $boot['events']      = $this->collectEvents($hostid);
             $boot['alerts']      = $this->collectAlertsSummary($hostid);
             $boot['wiredPorts']  = $this->collectWiredPorts($hostid);
+
+            // Fold per-AP fields from the XIQ fleet host into the host
+            // record so device card / page header have clients/location/
+            // model/connected without a second backend round trip.
+            if ($boot['host']) {
+                $fleet = $this->resolveXiqFleetFields($hostid, [
+                    'clients', 'building', 'floor', 'location', 'model',
+                    'connected', 'configmismatch', 'xiqid', 'mac', 'policy'
+                ]);
+                $boot['host']['clients']        = (int) ($fleet['clients'] ?? 0);
+                $boot['host']['site']           = $fleet['building'] ?? ($boot['host']['site'] ?? '');
+                $boot['host']['floor']          = $fleet['floor']    ?? ($boot['host']['floor'] ?? '');
+                $boot['host']['location']       = $fleet['location'] ?? '';
+                $boot['host']['model']          = $fleet['model']    ?? ($boot['host']['model'] ?? '');
+                $boot['host']['xiqConnected']   = $fleet['connected']      !== null ? (int) $fleet['connected']      : null;
+                $boot['host']['configMismatch'] = $fleet['configmismatch'] !== null ? (int) $fleet['configmismatch'] : null;
+                $boot['host']['xiqId']          = $fleet['xiqid']    ?? '';
+                $boot['host']['mac']            = $fleet['mac']      ?? '';
+                $boot['host']['policy']         = $fleet['policy']   ?? '';
+            }
+
             [$pfClients, $pfAuthFails] = $this->collectPacketFence($hostid, $boot['host']);
             $boot['pfClients']   = $pfClients;
             $boot['pfAuthFails'] = $pfAuthFails;
@@ -136,27 +157,41 @@ class ActionDashboard extends ActionBase {
 
     private function collectItems(string $hostid): array {
         // Logical metric → matcher. Match modes:
-        //   ['exact',  'system.cpu.util']                — key matches verbatim
-        //   ['prefix', 'xiq.ap.cpu.util[']               — any key starting with prefix
-        //   ['suffix', 'xiq.ap.channel.util[', ',2.4G]'] — prefix AND suffix (band variants)
+        //   ['exact',  'system.cpu.util']             — key matches verbatim
+        //   ['prefix', 'extremeap.channel[']          — any key starting with prefix
+        //   ['suffix', 'extremeap.channel[', '.12]']  — prefix AND suffix
         //
-        // Lifted XIQ template (jerahl/ZabbixExtremeIQ) discovers per-AP items
-        // with {#SERIAL} baked into the key — e.g. xiq.ap.cpu.util[ABC123].
-        // We can't filter on the literal LLD-prototype key, so we match by
-        // prefix and pick the (sole) item that resolved on this host.
+        // These map to items defined in the "Extreme AP via SNMPv2c" template
+        // (per-AP SNMP host, auto-created by the XIQ fleet template's host
+        // prototype) plus the standard ICMP Ping template.
+        //
+        // Radio convention (AP305C): ifIndex 12 = wifi0 (2.4 GHz),
+        // ifIndex 13 = wifi1 (5 GHz). Override by changing the suffix below
+        // if you're running tri-radio hardware.
         $key_map = [
-            'cpu'           => ['prefix', 'xiq.ap.cpu.util['],
-            'memory'        => ['prefix', 'xiq.ap.mem.util['],
-            'temp'          => ['prefix', 'xiq.ap.temp['],
-            'poeDraw'       => ['prefix', 'xiq.ap.poe.draw['],
-            'uplinkIn'      => ['prefix', 'net.if.in['],
-            'uplinkOut'     => ['prefix', 'net.if.out['],
+            'cpu'           => ['exact',  'extremeap.cpu.util'],
+            'memory'        => ['exact',  'extremeap.mem.util'],
+            'firmware'      => ['exact',  'extremeap.firmware.0'],
+            'serial'        => ['exact',  'extremeap.serial.0'],
+            'uptime'        => ['exact',  'system.uptime'],
+            'pingUp'        => ['exact',  'icmpping'],
             'pktLoss'       => ['exact',  'icmppingloss'],
             'latency'       => ['exact',  'icmppingsec'],
-            'noise24'       => ['suffix', 'xiq.ap.noise[',         ',2.4G]'],
-            'noise5'        => ['suffix', 'xiq.ap.noise[',         ',5G]'],
-            'channelUtil24' => ['suffix', 'xiq.ap.channel.util[',  ',2.4G]'],
-            'channelUtil5'  => ['suffix', 'xiq.ap.channel.util[',  ',5G]']
+            'uplinkIn'      => ['exact',  'net.if.in[ifHCInOctets.10]'],
+            'uplinkOut'     => ['exact',  'net.if.out[ifHCOutOctets.10]'],
+            'uplinkStatus'  => ['exact',  'net.if.status[ifOperStatus.10]'],
+            'uplinkSpeed'   => ['exact',  'net.if.speed[ifSpeed.10]'],
+            'noise24'       => ['exact',  'extremeap.noise.wifi0'],
+            'noise5'        => ['exact',  'extremeap.noise.wifi1'],
+            // Per-radio LLD items — ifIndex baked into the key.
+            'channel24'     => ['exact',  'extremeap.channel[12]'],
+            'channel5'      => ['exact',  'extremeap.channel[13]'],
+            'txpower24'     => ['exact',  'extremeap.txpower[12]'],
+            'txpower5'      => ['exact',  'extremeap.txpower[13]'],
+            'radioRx24'     => ['exact',  'extremeap.radio.rxbytes[12]'],
+            'radioTx24'     => ['exact',  'extremeap.radio.txbytes[12]'],
+            'radioRx5'      => ['exact',  'extremeap.radio.rxbytes[13]'],
+            'radioTx5'      => ['exact',  'extremeap.radio.txbytes[13]']
         ];
 
         // Fetch every item on the host once; match in PHP. Cheaper than one
@@ -239,7 +274,6 @@ class ActionDashboard extends ActionBase {
 
     private function collectSystemInfo(string $hostid): array {
         // Each row: [Label, Value, Source]. Source is "zbx" or "ext".
-        // Pull whatever inventory / item values you store. This is illustrative.
         $hosts = API::Host()->get([
             'output'         => ['name', 'host'],
             'selectInventory'=> ['serialno_a', 'model', 'os', 'tag', 'name', 'type'],
@@ -253,13 +287,26 @@ class ActionDashboard extends ActionBase {
         $h   = $hosts[0];
         $inv = $h['inventory'] ?: [];
 
+        // Pull live SNMP values that override stale inventory data.
+        $live = $this->lastValuesByKey($hostid, [
+            'extremeap.serial.0',
+            'extremeap.firmware.0'
+        ]);
+
+        // Pull fleet-side fields if this AP is auto-created by the XIQ
+        // template — the {$XIQ_SERIAL} macro tells us which serial to look
+        // up on the fleet host.
+        $fleet = $this->resolveXiqFleetFields($hostid, ['model', 'building', 'floor', 'location', 'adminstate']);
+
         return [
-            ['Host Name',     $h['host'] ?? '—',                'zbx'],
-            ['Visible Name',  $h['name'] ?? '—',                'zbx'],
-            ['Device Model',  $inv['model']     ?? '—',         'ext'],
-            ['Function',      $inv['type']      ?? '—',         'ext'],
-            ['Serial Number', $inv['serialno_a']?? '—',         'ext'],
-            ['OS / Firmware', $inv['os']        ?? '—',         'ext']
+            ['Host Name',     $h['host'] ?? '—',                                              'zbx'],
+            ['Visible Name',  $h['name'] ?? '—',                                              'zbx'],
+            ['Device Model',  $fleet['model']  ?? ($inv['model'] ?? '—'),                     $fleet['model']  ? 'ext' : 'zbx'],
+            ['Serial Number', $live['extremeap.serial.0']    ?? ($inv['serialno_a'] ?? '—'),  $live['extremeap.serial.0']    ? 'zbx' : 'zbx'],
+            ['Firmware',      $live['extremeap.firmware.0']  ?? ($inv['os']         ?? '—'),  $live['extremeap.firmware.0']  ? 'zbx' : 'zbx'],
+            ['Building',      $fleet['building'] ?? '—',                                       'ext'],
+            ['Floor',         $fleet['floor']    ?? '—',                                       'ext'],
+            ['Admin state',   $fleet['adminstate'] ?? '—',                                     'ext']
         ];
     }
 
@@ -274,11 +321,109 @@ class ActionDashboard extends ActionBase {
             if ((int) $i['main'] === 1) { $primary = $i; break; }
         }
 
+        $live = $this->lastValuesByKey($hostid, [
+            'net.if.status[ifOperStatus.10]',
+            'net.if.speed[ifSpeed.10]'
+        ]);
+
+        $oper_map = [1 => 'up', 2 => 'down', 3 => 'testing', 4 => 'unknown', 5 => 'dormant', 6 => 'notPresent', 7 => 'lowerLayerDown'];
+        $oper_raw = $live['net.if.status[ifOperStatus.10]'] ?? null;
+        $oper     = $oper_raw !== null ? ($oper_map[(int) $oper_raw] ?? (string) $oper_raw) : '—';
+
+        $speed_raw = $live['net.if.speed[ifSpeed.10]'] ?? null;
+        $speed     = $speed_raw !== null ? $this->formatBps((float) $speed_raw) : '—';
+
+        $fleet = $this->resolveXiqFleetFields($hostid, ['mac', 'ip', 'policy']);
+
         return [
-            ['Mgt0 IPv4',   $primary['ip']  ?? '—', 'zbx'],
-            ['DNS Name',    $primary['dns'] ?? '—', 'zbx']
-            // Add gateway/MAC/VLAN rows once you have items or inventory for them.
+            ['Mgt0 IPv4',     $primary['ip']  ?? '—',     'zbx'],
+            ['DNS Name',      $primary['dns'] ?? '—',     'zbx'],
+            ['MAC Address',   $fleet['mac']   ?? '—',     'ext'],
+            ['Uplink eth0',   "$oper · $speed",           'zbx'],
+            ['Network Policy', $fleet['policy'] ?? '—',   'ext']
         ];
+    }
+
+    /**
+     * Get last values for a set of exact item keys on a single host.
+     * Returns ['key' => lastvalue or null].
+     */
+    private function lastValuesByKey(string $hostid, array $keys): array {
+        if (!$keys) return [];
+        $items = API::Item()->get([
+            'output'  => ['key_', 'lastvalue'],
+            'hostids' => [$hostid],
+            'filter'  => ['key_' => $keys]
+        ]) ?: [];
+        $out = array_fill_keys($keys, null);
+        foreach ($items as $it) {
+            $out[$it['key_']] = $it['lastvalue'];
+        }
+        return $out;
+    }
+
+    /** Format bits/sec as a short human string (1.0 Gbps / 100 Mbps / …). */
+    private function formatBps(float $bps): string {
+        if ($bps >= 1e9) return number_format($bps / 1e9, 1).' Gbps';
+        if ($bps >= 1e6) return number_format($bps / 1e6, 0).' Mbps';
+        if ($bps >= 1e3) return number_format($bps / 1e3, 0).' kbps';
+        return number_format($bps, 0).' bps';
+    }
+
+    /**
+     * Cross-join a per-AP SNMP host into the XIQ fleet template. The host
+     * macro {$XIQ_SERIAL} points to the serial; we look up
+     * xiq.ap.<field>[<serial>] items on the fleet host (any host with the
+     * 'Extreme XIQ APs by API' template linked).
+     *
+     * @param string[] $fields  Fleet fields to pull, e.g. ['model','building','floor','clients']
+     * @return array<string, string|null>
+     */
+    private function resolveXiqFleetFields(string $hostid, array $fields): array {
+        $out = array_fill_keys($fields, null);
+
+        // 1. Read the {$XIQ_SERIAL} macro from the per-AP host.
+        $macros = API::UserMacro()->get([
+            'output'  => ['macro', 'value'],
+            'hostids' => [$hostid],
+            'filter'  => ['macro' => ['{$XIQ_SERIAL}']]
+        ]) ?: [];
+        $serial = '';
+        foreach ($macros as $m) {
+            if ($m['macro'] === '{$XIQ_SERIAL}') { $serial = (string) $m['value']; break; }
+        }
+        if ($serial === '') return $out;
+
+        // 2. Find the fleet host (one with the XIQ-by-API template linked).
+        $fleet_hosts = API::Host()->get([
+            'output'                => ['hostid'],
+            'selectParentTemplates' => ['name'],
+            'filter'                => []
+        ]) ?: [];
+        $fleet_hostid = null;
+        foreach ($fleet_hosts as $fh) {
+            foreach ($fh['parentTemplates'] ?? [] as $t) {
+                if (($t['name'] ?? '') === 'Extreme XIQ APs by API') {
+                    $fleet_hostid = $fh['hostid'];
+                    break 2;
+                }
+            }
+        }
+        if ($fleet_hostid === null) return $out;
+
+        // 3. Pull the specific xiq.ap.<field>[<serial>] items on the fleet host.
+        $keys = array_map(fn($f) => "xiq.ap.$f[$serial]", $fields);
+        $items = API::Item()->get([
+            'output'  => ['key_', 'lastvalue'],
+            'hostids' => [$fleet_hostid],
+            'filter'  => ['key_' => $keys]
+        ]) ?: [];
+        foreach ($items as $it) {
+            if (preg_match('/^xiq\.ap\.([^[]+)\[/', $it['key_'], $m) && isset($out[$m[1]])) {
+                $out[$m[1]] = (string) $it['lastvalue'];
+            }
+        }
+        return $out;
     }
 
     private function collectEvents(string $hostid): array {

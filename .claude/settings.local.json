@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(php -l tcs_dashboard/actions/ActionDashboard.php)",
+      "Bash(git rm *)",
+      "Bash(git commit -m 'Drop accidentally-tracked worktree-local Claude settings *)",
+      "Bash(wc -l \"C:/Users/sappleby.TCS/Zabbix/templates/Extreme EXOS by SNMP w POE.yaml\")",
+      "Bash(wc -l \"C:/Users/sappleby.TCS/Downloads/zbx_export_templates \\(1\\).yaml\" \"C:/Users/sappleby.TCS/Downloads/zbx_export_templates \\(2\\).yaml\")"
+    ]
+  }
+}

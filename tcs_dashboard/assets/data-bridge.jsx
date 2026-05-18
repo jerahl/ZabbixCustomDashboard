@@ -31,10 +31,17 @@
     // Every key the React app reads from window.ZBX_ITEMS. Keep this list in
     // sync with the $key_map in ActionDashboard::collectItems(). If you add
     // a new metric to either side, add it here too.
+    //
+    // Temp, PoE draw, and channel utilization are intentionally absent — the
+    // AP305C SNMP MIBs don't expose temperature or PoE, and channel
+    // utilization would need a separate XIQ d360 API call.
     const EXPECTED_ITEM_KEYS = [
-        "cpu", "memory", "temp", "poeDraw",
-        "uplinkIn", "uplinkOut", "pktLoss", "latency",
-        "noise24", "noise5", "channelUtil24", "channelUtil5"
+        "cpu", "memory", "firmware", "serial", "uptime",
+        "pingUp", "pktLoss", "latency",
+        "uplinkIn", "uplinkOut", "uplinkStatus", "uplinkSpeed",
+        "noise24", "noise5",
+        "channel24", "channel5", "txpower24", "txpower5",
+        "radioRx24", "radioTx24", "radioRx5", "radioTx5"
     ];
 
     const emptyItem = () => ({

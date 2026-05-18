@@ -7,6 +7,11 @@ const SectionTitle = ({ children, src }) => (
   </h2>
 );
 
+// Helpers: per-AP SNMP uplink items are in bits/sec — convert to Mbps for
+// display on the Live Telemetry strip. Null-safe.
+const bpsToMbps = (v) => (typeof v === "number" ? +(v / 1e6).toFixed(2) : v);
+const histToMbps = (h) => Array.isArray(h) ? h.map(v => v / 1e6) : h;
+
 // ───────── Overview tab ─────────
 const OverviewTab = ({ density }) => {
   const A = window.ALERTS_SUMMARY || {};
@@ -106,16 +111,16 @@ const OverviewTab = ({ density }) => {
             <span className="h-link">Open in Grafana <Icon name="external" size={11} /></span>
           </div>
           <div className="spark-strip">
-            <SparkCell label="Uplink In"  value={I.uplinkIn.value}  unit="Mbps" data={I.uplinkIn.history}  color="var(--zbx)" />
-            <SparkCell label="Uplink Out" value={I.uplinkOut.value} unit="Mbps" data={I.uplinkOut.history} color="var(--info)" />
-            <SparkCell label="Latency"    value={I.latency.value}   unit="ms"   data={I.latency.history}   color="var(--ok)" />
-            <SparkCell label="Pkt Loss"   value={I.pktLoss.value}   unit="%"    data={I.pktLoss.history}   color="var(--warn)" />
+            <SparkCell label="Uplink In"  value={bpsToMbps((I.uplinkIn || {}).value)}  unit="Mbps" data={histToMbps((I.uplinkIn || {}).history)}  color="var(--zbx)" />
+            <SparkCell label="Uplink Out" value={bpsToMbps((I.uplinkOut|| {}).value)}  unit="Mbps" data={histToMbps((I.uplinkOut|| {}).history)}  color="var(--info)" />
+            <SparkCell label="Latency"    value={(I.latency || {}).value}              unit="ms"   data={(I.latency || {}).history}              color="var(--ok)" />
+            <SparkCell label="Pkt Loss"   value={(I.pktLoss || {}).value}              unit="%"    data={(I.pktLoss || {}).history}              color="var(--warn)" />
           </div>
           <div className="spark-strip" style={{ borderTop: "1px solid var(--line)" }}>
-            <SparkCell label="Ch Util 2.4 GHz" value={I.channelUtil24.value} unit="%" data={I.channelUtil24.history} color="var(--pf)" />
-            <SparkCell label="Ch Util 5 GHz"   value={I.channelUtil5.value}  unit="%" data={I.channelUtil5.history}  color="var(--pf)" />
-            <SparkCell label="Noise 2.4 GHz"   value={I.noise24.value}       unit="dBm" data={I.noise24.history}     color="var(--info)" />
-            <SparkCell label="Noise 5 GHz"     value={I.noise5.value}        unit="dBm" data={I.noise5.history}      color="var(--info)" />
+            <SparkCell label="Noise 2.4 GHz" value={(I.noise24 || {}).value} unit="dBm" data={(I.noise24 || {}).history} color="var(--info)" />
+            <SparkCell label="Noise 5 GHz"   value={(I.noise5  || {}).value} unit="dBm" data={(I.noise5  || {}).history} color="var(--info)" />
+            <SparkCell label="TX Power 2.4"  value={(I.txpower24 || {}).value} unit="dBm" data={(I.txpower24 || {}).history} color="var(--pf)" />
+            <SparkCell label="TX Power 5"    value={(I.txpower5  || {}).value} unit="dBm" data={(I.txpower5  || {}).history} color="var(--pf)" />
           </div>
         </div>
       </div>
@@ -226,8 +231,8 @@ const WirelessTab = () => {
   const host = window.ZBX_HOST || {};
   return (
     <div className="row" style={{ gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-      <RadioCard band="2.4 GHz" util={I.channelUtil24} noise={I.noise24} clients={host.clients24} />
-      <RadioCard band="5 GHz"   util={I.channelUtil5}  noise={I.noise5}  clients={host.clients5} />
+      <RadioCard band="2.4 GHz" channel={I.channel24} txpower={I.txpower24} noise={I.noise24} rxbytes={I.radioRx24} txbytes={I.radioTx24} />
+      <RadioCard band="5 GHz"   channel={I.channel5}  txpower={I.txpower5}  noise={I.noise5}  rxbytes={I.radioRx5}  txbytes={I.radioTx5}  />
       <div className="card" style={{ gridColumn: "1 / -1" }}>
         <div className="card-h">
           <h3>SSIDs Broadcast</h3>
@@ -266,23 +271,30 @@ const WirelessTab = () => {
   );
 };
 
-const RadioCard = ({ band, util, noise, clients }) => {
-  const u = util || {};
-  const n = noise || {};
-  const channel = u.key && /,(\d+G)\]/.test(u.key) ? RegExp.$1 : null;
+const RadioCard = ({ band, channel, txpower, noise, rxbytes, txbytes }) => {
+  const ch = channel || {};
+  const tp = txpower || {};
+  const n  = noise   || {};
+  const rx = rxbytes || {};
+  const tx = txbytes || {};
+  // Bytes/sec → Mbps for display.
+  const bytesToMbps = (v) => (typeof v === "number" ? +(v * 8 / 1e6).toFixed(2) : v);
   return (
     <div className="card">
       <div className="card-h">
         <h3>Radio · {band}</h3>
         <SourceBadge src="zbx" />
         <div className="h-spacer" />
-        <span className="h-meta">{channel ? `band ${channel}` : "live · 30s poll"}</span>
+        <span className="h-meta">
+          ch {ch.value ?? "—"} · {tp.value != null ? `${tp.value} dBm TX` : "TX —"}
+        </span>
       </div>
       <div className="card-b" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <MiniMetric label="Channel Utilization" v={u.value} unit="%" data={u.history} threshold={70} color="var(--pf)" />
-        <MiniMetric label="Noise Floor" v={n.value} unit="dBm" data={n.history} color="var(--info)" />
-        <MiniMetric label="Associated Clients" v={clients} unit="" color="var(--ok)" />
-        <MiniMetric label="Retry Rate" v={null} unit="%" color="var(--warn)" />
+        <MiniMetric label="Channel"        v={ch.value}              unit=""    color="var(--pf)" />
+        <MiniMetric label="TX Power"       v={tp.value}              unit="dBm" data={tp.history} color="var(--pf)" />
+        <MiniMetric label="Noise Floor"    v={n.value}               unit="dBm" data={n.history}  color="var(--info)" />
+        <MiniMetric label="RX Throughput"  v={bytesToMbps(rx.value)} unit="Mbps" data={(rx.history || []).map(v => v * 8 / 1e6)} color="var(--ok)" />
+        <MiniMetric label="TX Throughput"  v={bytesToMbps(tx.value)} unit="Mbps" data={(tx.history || []).map(v => v * 8 / 1e6)} color="var(--zbx)" />
       </div>
     </div>
   );
