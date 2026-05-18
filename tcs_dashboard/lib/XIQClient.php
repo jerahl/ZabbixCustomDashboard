@@ -132,7 +132,10 @@ final class XIQClient
      * response, getClients() logs a truncation warning so we can detect a
      * deployment that needs multi-page support.
      */
-    private const CLIENTS_PAGE_LIMIT = 500;
+    // XIQ enforces limit <= 100 on listActiveClients (400 BAD_REQUEST
+    // otherwise). One page covers a typical AP — multi-page support is a
+    // separate task if a single AP ever exceeds 100 concurrent clients.
+    private const CLIENTS_PAGE_LIMIT = 100;
 
     /** Filesystem cache directory (APCu fallback). */
     private const FS_CACHE_DIR = '/tmp/zabbix_xiq_cache';
