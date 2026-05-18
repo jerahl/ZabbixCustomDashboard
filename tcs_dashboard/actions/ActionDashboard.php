@@ -67,6 +67,16 @@ class ActionDashboard extends ActionBase {
             [$pfClients, $pfAuthFails] = $this->collectPacketFence($hostid, $boot['host']);
             $boot['pfClients']   = $pfClients;
             $boot['pfAuthFails'] = $pfAuthFails;
+
+            // Fold PF client counts into the alerts summary. activeClients is
+            // anything PF currently has in a non-rejected/non-quarantined
+            // posture; tweak the predicate once posture taxonomy is firm.
+            $boot['alerts']['totalClients']  = count($pfClients);
+            $boot['alerts']['activeClients'] = count(array_filter(
+                $pfClients,
+                fn($c) => !in_array(($c['posture'] ?? ''), ['rejected', 'quarantined', 'non-compliant'], true)
+            ));
+            $boot['alerts']['authFailures'] += count($pfAuthFails);
         }
 
         $data = [
@@ -302,6 +312,9 @@ class ActionDashboard extends ActionBase {
     }
 
     private function collectAlertsSummary(string $hostid): array {
+        // Currently-open problems on this host. Zabbix returns resolved
+        // problems too unless we filter on r_eventid; do it in PHP so the
+        // call shape matches what other actions use.
         $problems = API::Problem()->get([
             'output'  => ['eventid', 'name', 'severity', 'r_eventid'],
             'hostids' => [$hostid],
@@ -312,12 +325,53 @@ class ActionDashboard extends ActionBase {
             fn($p) => empty($p['r_eventid']) || (int) $p['r_eventid'] === 0
         );
 
+        // Bucket each open problem by name keyword. A single problem can
+        // only fall into one bucket (first match wins) so the counts on the
+        // Overview tab line up with the trigger list.
+        $assoc = 0;
+        $auth  = 0;
+        $loss  = 0;
+        $other = 0;
+        foreach ($problems as $p) {
+            $name = strtolower((string) ($p['name'] ?? ''));
+            if (str_contains($name, 'associat')) {
+                $assoc++;
+            }
+            elseif (str_contains($name, 'auth') || str_contains($name, 'radius') || str_contains($name, 'eap')) {
+                $auth++;
+            }
+            elseif (str_contains($name, 'packet loss') || str_contains($name, 'icmp') || str_contains($name, 'unreachable')) {
+                $loss++;
+            }
+            elseif ((int) $p['severity'] >= 3) {
+                $other++;
+            }
+        }
+
+        // 24h packet-loss event count: events that ever fired from a packet
+        // loss trigger in the window, resolved or not. Lets the Overview
+        // tile show a meaningful number when current loss is 0%.
+        $loss_events_24h = 0;
+        $events = API::Event()->get([
+            'output'    => ['name', 'value'],
+            'hostids'   => [$hostid],
+            'time_from' => time() - 86400,
+            'value'     => 1, // PROBLEM events only
+            'limit'     => 200
+        ]) ?: [];
+        foreach ($events as $e) {
+            $n = strtolower((string) ($e['name'] ?? ''));
+            if (str_contains($n, 'packet loss') || str_contains($n, 'icmp') || str_contains($n, 'unreachable')) {
+                $loss_events_24h++;
+            }
+        }
+
         return [
-            'associationFailures' => 0,
-            'authFailures'        => 0,
-            'networkIssues'       => count(array_filter($problems, fn($p) => (int) $p['severity'] >= 3)),
-            'packetLoss'          => 0,
-            'totalClients'        => 0,
+            'associationFailures' => $assoc,
+            'authFailures'        => $auth,
+            'networkIssues'       => $assoc + $auth + $loss + $other,
+            'packetLoss'          => $loss_events_24h,
+            'totalClients'        => 0, // populated from PacketFence in caller if wired
             'activeClients'       => 0
         ];
     }

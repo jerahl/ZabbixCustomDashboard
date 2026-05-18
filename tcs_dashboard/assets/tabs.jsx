@@ -9,8 +9,33 @@ const SectionTitle = ({ children, src }) => (
 
 // ───────── Overview tab ─────────
 const OverviewTab = ({ density }) => {
-  const A = window.ALERTS_SUMMARY;
-  const I = window.ZBX_ITEMS;
+  const A = window.ALERTS_SUMMARY || {};
+  const I = window.ZBX_ITEMS || {};
+  const host = window.ZBX_HOST || {};
+
+  // Derive an "issue" tone from a count — anything > 0 is a warning unless
+  // a separate severity hint is provided.
+  const toneFor = (n, warnAt = 1, errAt = 5) =>
+    n >= errAt ? "err" : n >= warnAt ? "warn" : "ok";
+  const iconFor = (n) => (n > 0 ? "alert" : "check");
+
+  const cpu     = I.cpu     || {};
+  const memory  = I.memory  || {};
+  const poe     = I.poeDraw || {};
+  const temp    = I.temp    || {};
+  const pktLoss = I.pktLoss || {};
+
+  const totalClients = (typeof A.totalClients === "number" && A.totalClients > 0)
+    ? A.totalClients : (host.clients ?? 0);
+
+  // Packet-loss live value drives the big tile: <1% ok, <5% warn, else err.
+  const lossPct = typeof pktLoss.value === "number" ? pktLoss.value : null;
+  const lossEvents = typeof A.packetLoss === "number" ? A.packetLoss : 0;
+  const lossTone = lossPct === null ? "muted"
+                 : lossPct >= 5 ? "err"
+                 : lossPct >= 1 ? "warn"
+                 : "ok";
+
   return (
     <div className="overview">
       {/* Health rings + Connectivity issues + Excessive packet loss */}
@@ -23,34 +48,67 @@ const OverviewTab = ({ density }) => {
             <span className="h-meta">polling every 60s · template Extreme AP via SNMPv3</span>
           </div>
           <div className="health-grid">
-            <HealthRing label="CPU Usage"     value={I.cpu.value}    color={I.cpu.value > I.cpu.trigger ? "var(--warn)" : "var(--zbx)"} sub={`prev ${I.cpu.prev}%`} />
-            <HealthRing label="Memory Usage"  value={I.memory.value} color="var(--info)" sub={`peak 78%`} />
-            <HealthRing label="PoE Draw"      value={I.poeDraw.value} max={25.5} color="var(--ok)" unit="W" sub={`of 25.5W`} />
-            <HealthRing label="Temperature"   value={I.temp.value}    max={75} color={I.temp.value > 60 ? "var(--warn)" : "var(--ok)"} unit="°C" sub={`${I.temp.value}°C`} />
+            <HealthRing
+              label="CPU Usage"
+              value={cpu.value}
+              color={cpu.trigger != null && cpu.value > cpu.trigger ? "var(--warn)" : "var(--zbx)"}
+              sub={cpu.prev != null ? `prev ${cpu.prev}%` : "no history"}
+            />
+            <HealthRing
+              label="Memory Usage"
+              value={memory.value}
+              color="var(--info)"
+              sub={memory.history && memory.history.length ? `peak ${Math.max(...memory.history).toFixed(0)}%` : "no history"}
+            />
+            <HealthRing
+              label="PoE Draw"
+              value={poe.value}
+              max={25.5}
+              color="var(--ok)"
+              unit="W"
+              sub="of 25.5 W"
+            />
+            <HealthRing
+              label="Temperature"
+              value={temp.value}
+              max={75}
+              color={temp.value != null && temp.value > 60 ? "var(--warn)" : "var(--ok)"}
+              unit="°C"
+              sub={temp.value != null ? `${Math.round(temp.value)}°C` : "no reading"}
+            />
           </div>
         </div>
 
         <div className="card">
           <div className="card-h">
             <h3>Connectivity Issues</h3>
+            <SourceBadge src="zbx" />
             <SourceBadge src="pf" />
             <div className="h-spacer" />
-            <span className="h-meta">Total Clients: <b style={{ color: "var(--fg)" }}>{A.totalClients}</b></span>
+            <span className="h-meta">Total Clients: <b style={{ color: "var(--fg)" }}>{totalClients.toLocaleString()}</b></span>
           </div>
           <div className="issues">
-            <Issue n={A.associationFailures} label="Association Failures" tone="ok" icon="check" />
-            <Issue n={A.authFailures}        label="Authentication Failures" tone="warn" icon="alert" />
-            <Issue n={A.networkIssues}       label="Network Issues" tone="ok" icon="check" />
+            <Issue n={A.associationFailures ?? 0} label="Association Failures"    tone={toneFor(A.associationFailures ?? 0)} icon={iconFor(A.associationFailures ?? 0)} />
+            <Issue n={A.authFailures        ?? 0} label="Authentication Failures" tone={toneFor(A.authFailures ?? 0)}        icon={iconFor(A.authFailures ?? 0)} />
+            <Issue n={A.networkIssues       ?? 0} label="Network Issues"          tone={toneFor(A.networkIssues ?? 0)}       icon={iconFor(A.networkIssues ?? 0)} />
           </div>
         </div>
 
         <div className="card">
           <div className="card-h">
-            <h3>Excessive Packet Loss</h3>
+            <h3>Packet Loss</h3>
             <SourceBadge src="zbx" />
+            <div className="h-spacer" />
+            <span className="h-meta">ICMP · last 5m</span>
           </div>
           <div className="issues" style={{ gridTemplateColumns: "1fr" }}>
-            <Issue n={0} label="Packet Loss Events (24h)" tone="ok" icon="check" big />
+            <Issue
+              n={lossPct === null ? "—" : `${lossPct.toFixed(1)}%`}
+              label={lossEvents > 0 ? `${lossEvents} loss event${lossEvents === 1 ? "" : "s"} (24h)` : "Loss rate (now)"}
+              tone={lossTone === "muted" ? "ok" : lossTone}
+              icon={lossTone === "ok" || lossTone === "muted" ? "check" : "alert"}
+              big
+            />
           </div>
         </div>
       </div>
@@ -62,7 +120,7 @@ const OverviewTab = ({ density }) => {
             <h3>Live Telemetry</h3>
             <SourceBadge src="zbx" />
             <div className="h-spacer" />
-            <span className="h-meta">last 24h · {I.uplinkIn.history.length} samples</span>
+            <span className="h-meta">last 24h · {((I.uplinkIn && I.uplinkIn.history) || []).length} samples</span>
             <span className="h-link">Open in Grafana <Icon name="external" size={11} /></span>
           </div>
           <div className="spark-strip">
@@ -96,7 +154,7 @@ const OverviewTab = ({ density }) => {
         </div>
 
         <div className="card">
-          <div className="card-h"><h3>Network Information</h3><div className="h-spacer" /><span className="h-meta">SNMPv3 · 172.16.97.59</span></div>
+          <div className="card-h"><h3>Network Information</h3><div className="h-spacer" /><span className="h-meta">{(window.ZBX_HOST && window.ZBX_HOST.ip) ? `SNMPv3 · ${window.ZBX_HOST.ip}` : "SNMPv3"}</span></div>
           <div className="kv">
             {window.NETWORK_INFO.map(([k, v, src]) => (
               <React.Fragment key={k}>
@@ -136,12 +194,20 @@ const OverviewTab = ({ density }) => {
   );
 };
 
-const HealthRing = ({ label, value, color, sub, max = 100, unit = "%" }) => (
-  <div className="health-cell">
-    <Ring value={value} max={max} color={color} label={`${value}${unit === "%" ? "%" : ""}`} sub={unit !== "%" ? `${unit}` : null} />
-    <div className="h-label">{label}</div>
-  </div>
-);
+const HealthRing = ({ label, value, color, sub, max = 100, unit = "%" }) => {
+  const missing = value === null || value === undefined || (typeof value === "number" && Number.isNaN(value));
+  const v = missing ? 0 : value;
+  const display = missing
+    ? "—"
+    : `${typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(1)) : v}${unit === "%" ? "%" : ""}`;
+  return (
+    <div className="health-cell">
+      <Ring value={v} max={max} color={missing ? "var(--muted)" : color} label={display} sub={unit !== "%" && !missing ? unit : null} />
+      <div className="h-label">{label}</div>
+      {sub && <div className="h-sub" style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+};
 
 const Issue = ({ n, label, tone, icon, big }) => (
   <div className={`issue ${tone}`}>
@@ -151,13 +217,26 @@ const Issue = ({ n, label, tone, icon, big }) => (
   </div>
 );
 
-const SparkCell = ({ label, value, unit, data, color }) => (
-  <div className="spark-cell">
-    <div className="lbl">{label}</div>
-    <div className="val">{value}<span className="u">{unit}</span></div>
-    <Sparkline data={data} color={color} width={240} height={30} />
-  </div>
-);
+const SparkCell = ({ label, value, unit, data, color }) => {
+  const missing = value === null || value === undefined || (typeof value === "number" && Number.isNaN(value));
+  const display = missing
+    ? "—"
+    : (typeof value === "number" ? (Number.isInteger(value) ? value : value.toFixed(2)) : value);
+  const hist = Array.isArray(data) ? data : [];
+  return (
+    <div className="spark-cell">
+      <div className="lbl">{label}</div>
+      <div className="val" style={missing ? { color: "var(--muted)" } : {}}>
+        {display}{!missing && <span className="u">{unit}</span>}
+      </div>
+      {hist.length > 0 ? (
+        <Sparkline data={hist} color={color} width={240} height={30} />
+      ) : (
+        <div style={{ height: 30, display: "flex", alignItems: "center", color: "var(--muted)", fontSize: 10 }}>no history</div>
+      )}
+    </div>
+  );
+};
 
 // ───────── Wireless tab ─────────
 const WirelessTab = () => {
