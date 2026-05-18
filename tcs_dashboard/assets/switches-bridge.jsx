@@ -429,18 +429,50 @@
             });
     }
 
-    // Fire both in parallel so they don't queue behind each other.
-    console.info("[tcs] fetching switch fleet + snapshot…");
-    fetchJson(URL_FLEET)
+    /**
+     * Splice {hostid: counters} into SWITCH_SITES rows. Called after the
+     * counters fetch lands — the skeleton already rendered the navigator.
+     */
+    function applyCounters(byHostid) {
+        if (!byHostid || typeof byHostid !== "object") return;
+        const sites = Array.isArray(window.SWITCH_SITES) ? window.SWITCH_SITES : [];
+        let merged = 0;
+        for (const site of sites) {
+            for (const sw of (site.switches || [])) {
+                const c = byHostid[String(sw.hostid || "")];
+                if (!c) continue;
+                Object.assign(sw, c);
+                merged++;
+            }
+        }
+        console.info("[tcs] switch counters merged into", merged, "host(s)");
+    }
+
+    // Two-stage fleet load:
+    //   1) skeleton — sites + hosts + problem counts (drives navigator).
+    //                 Cheap; no per-port item.get.
+    //   2) counters — port / PoE / stacking / model rollup. Heavier; the
+    //                 navigator is already rendered when this lands.
+    // Both run in parallel with the snapshot fetch.
+    console.info("[tcs] fetching switch fleet (skeleton + counters) + snapshot…");
+    fetchJson(URL_FLEET + "&mode=skeleton")
         .then(j => {
             const fleet = Array.isArray(j && j.fleet) ? j.fleet : [];
             applyFleet(fleet);
         })
-        .catch(e => console.error("[tcs] fleet fetch failed:", e, "url:", URL_FLEET))
+        .catch(e => console.error("[tcs] fleet skeleton fetch failed:", e))
         .finally(() => {
             window.SWITCH_LOADING.fleet = false;
             notify("fleet");
         });
+
+    fetchJson(URL_FLEET + "&mode=counters")
+        .then(j => {
+            const c = (j && j.counters && typeof j.counters === "object") ? j.counters : {};
+            applyCounters(c);
+            notify("fleet");
+        })
+        .catch(e => console.error("[tcs] fleet counters fetch failed:", e));
 
     const switchid = host ? String(host.hostid || "") : "";
     if (switchid) {
