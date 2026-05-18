@@ -110,8 +110,32 @@
         };
     }
 
+    // Debug state — exposed on window.TCS_DEBUG so the DebugPanel can render
+    // last-fetch info, errors, and the raw boot payload without re-fetching.
+    window.TCS_DEBUG = {
+        bootRaw:      window.ZBX_BOOT,
+        bootApplied:  false,
+        url:          null,
+        lastFetchAt:  null,
+        lastFetchOk:  null,
+        lastError:    null,
+        fetchCount:   0,
+        version:      '1'
+    };
+
+    const recordFetch = (ok, err, payload) => {
+        const d = window.TCS_DEBUG;
+        d.lastFetchAt = new Date().toISOString();
+        d.lastFetchOk = ok;
+        d.lastError   = err ? String(err) : null;
+        d.fetchCount++;
+        if (ok && payload) d.lastPayload = payload;
+        window.dispatchEvent(new CustomEvent('tcs:debug'));
+    };
+
     // Initial paint comes from the server-inlined snapshot.
     applyBoot(window.ZBX_BOOT);
+    window.TCS_DEBUG.bootApplied = true;
 
     // Tweak defaults expected by app.jsx — kept here so we don't have to
     // touch app.jsx at all.
@@ -132,29 +156,43 @@
     const REFRESH_MS = 30_000;
     const hostid = window.ZBX_HOST && window.ZBX_HOST.hostid;
     const url = window.TCS_DATA_URL;
+    window.TCS_DEBUG.url = url ? `${url}&hostid=${hostid || '(none)'}` : '(TCS_DATA_URL not set)';
+
+    const tick = async () => {
+        if (!hostid || !url) {
+            recordFetch(false, !hostid ? "no hostid on host" : "TCS_DATA_URL missing");
+            return;
+        }
+        try {
+            const resp = await fetch(`${url}&hostid=${encodeURIComponent(hostid)}`, {
+                credentials: "same-origin",
+                headers: { "Accept": "application/json" }
+            });
+            if (!resp.ok) {
+                recordFetch(false, `HTTP ${resp.status} ${resp.statusText}`);
+                return;
+            }
+            const fresh = await resp.json();
+            applyBoot({
+                ...(window.ZBX_BOOT || {}),
+                host:       fresh.host       ?? window.ZBX_HOST,
+                items:      fresh.items      ?? {},
+                events:     fresh.events     ?? window.ZBX_EVENTS,
+                alerts:     fresh.alerts     ?? window.ALERTS_SUMMARY,
+                wiredPorts: fresh.wiredPorts ?? window.WIRED_PORTS
+            });
+            recordFetch(true, null, fresh);
+            window.dispatchEvent(new CustomEvent("tcs:data", { detail: fresh }));
+        } catch (e) {
+            console.warn("[tcs] data refresh failed:", e);
+            recordFetch(false, e);
+        }
+    };
+
+    // Expose a manual refresh so the DebugPanel button works.
+    window.tcsDashboardRefresh = tick;
 
     if (hostid && url) {
-        const tick = async () => {
-            try {
-                const resp = await fetch(`${url}&hostid=${encodeURIComponent(hostid)}`, {
-                    credentials: "same-origin",
-                    headers: { "Accept": "application/json" }
-                });
-                if (!resp.ok) return;
-                const fresh = await resp.json();
-                applyBoot({
-                    ...(window.ZBX_BOOT || {}),
-                    host:       fresh.host       ?? window.ZBX_HOST,
-                    items:      fresh.items      ?? {},
-                    events:     fresh.events     ?? window.ZBX_EVENTS,
-                    alerts:     fresh.alerts     ?? window.ALERTS_SUMMARY,
-                    wiredPorts: fresh.wiredPorts ?? window.WIRED_PORTS
-                });
-                window.dispatchEvent(new CustomEvent("tcs:data", { detail: fresh }));
-            } catch (e) {
-                console.warn("[tcs] data refresh failed:", e);
-            }
-        };
         setInterval(tick, REFRESH_MS);
     }
 })();

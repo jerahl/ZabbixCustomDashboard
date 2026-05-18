@@ -21,8 +21,6 @@ const OverviewTab = ({ density }) => {
 
   const cpu     = I.cpu     || {};
   const memory  = I.memory  || {};
-  const poe     = I.poeDraw || {};
-  const temp    = I.temp    || {};
   const pktLoss = I.pktLoss || {};
 
   const totalClients = (typeof A.totalClients === "number" && A.totalClients > 0)
@@ -47,7 +45,7 @@ const OverviewTab = ({ density }) => {
             <div className="h-spacer" />
             <span className="h-meta">polling every 60s · template Extreme AP via SNMPv3</span>
           </div>
-          <div className="health-grid">
+          <div className="health-grid" style={{ gridTemplateColumns: "repeat(2, 1fr)" }}>
             <HealthRing
               label="CPU Usage"
               value={cpu.value}
@@ -59,22 +57,6 @@ const OverviewTab = ({ density }) => {
               value={memory.value}
               color="var(--info)"
               sub={memory.history && memory.history.length ? `peak ${Math.max(...memory.history).toFixed(0)}%` : "no history"}
-            />
-            <HealthRing
-              label="PoE Draw"
-              value={poe.value}
-              max={25.5}
-              color="var(--ok)"
-              unit="W"
-              sub="of 25.5 W"
-            />
-            <HealthRing
-              label="Temperature"
-              value={temp.value}
-              max={75}
-              color={temp.value != null && temp.value > 60 ? "var(--warn)" : "var(--ok)"}
-              unit="°C"
-              sub={temp.value != null ? `${Math.round(temp.value)}°C` : "no reading"}
             />
           </div>
         </div>

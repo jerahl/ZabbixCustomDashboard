@@ -351,6 +351,165 @@ const Tweaks = ({ t, setTweak }) => (
   </TweaksPanel>
 );
 
+// ───────── Debug panel — surface bridge state when no data is loading ─────────
+const DebugPanel = () => {
+  const [, force] = React.useState(0);
+  const [open, setOpen] = React.useState(true);
+  React.useEffect(() => {
+    const bump = () => force(n => n + 1);
+    window.addEventListener("tcs:debug", bump);
+    window.addEventListener("tcs:data",  bump);
+    return () => {
+      window.removeEventListener("tcs:debug", bump);
+      window.removeEventListener("tcs:data",  bump);
+    };
+  }, []);
+
+  const d = window.TCS_DEBUG || {};
+  const host  = window.ZBX_HOST   || {};
+  const items = window.ZBX_ITEMS  || {};
+  const alerts = window.ALERTS_SUMMARY || {};
+
+  const collections = {
+    SYSTEM_INFO:  Array.isArray(window.SYSTEM_INFO)  ? window.SYSTEM_INFO.length  : 0,
+    NETWORK_INFO: Array.isArray(window.NETWORK_INFO) ? window.NETWORK_INFO.length : 0,
+    ZBX_EVENTS:   Array.isArray(window.ZBX_EVENTS)   ? window.ZBX_EVENTS.length   : 0,
+    WIRED_PORTS:  Array.isArray(window.WIRED_PORTS)  ? window.WIRED_PORTS.length  : 0,
+    PF_CLIENTS:   Array.isArray(window.PF_CLIENTS)   ? window.PF_CLIENTS.length   : 0,
+    PF_AUTH_FAILS:Array.isArray(window.PF_AUTH_FAILS)? window.PF_AUTH_FAILS.length: 0,
+    AP_SITES:     Array.isArray(window.AP_SITES)     ? window.AP_SITES.length     : 0
+  };
+
+  const itemRows = Object.entries(items).map(([k, v]) => ({
+    name: k,
+    missing: v && v.missing,
+    value: v && v.value,
+    unit: v && v.unit,
+    key: v && v.key,
+    histLen: v && Array.isArray(v.history) ? v.history.length : 0
+  }));
+
+  const liveOk = d.lastFetchOk === true;
+  const liveErr = d.lastFetchOk === false;
+
+  return (
+    <div className="card debug-panel" style={{ marginTop: 14, border: "1px dashed var(--line-2)" }}>
+      <div className="card-h" style={{ cursor: "pointer" }} onClick={() => setOpen(o => !o)}>
+        <h3>Debug · Data Bridge</h3>
+        <span style={{
+          marginLeft: 8, fontSize: 10, padding: "2px 8px", borderRadius: 999,
+          background: liveOk ? "rgba(52,211,153,0.15)" : liveErr ? "rgba(242,95,92,0.18)" : "rgba(245,179,0,0.18)",
+          color: liveOk ? "var(--ok)" : liveErr ? "var(--err)" : "var(--warn)",
+          border: `1px solid ${liveOk ? "rgba(52,211,153,0.4)" : liveErr ? "rgba(242,95,92,0.4)" : "rgba(245,179,0,0.4)"}`
+        }}>
+          {liveOk ? "live refresh OK" : liveErr ? "live refresh ERROR" : "no refresh yet"}
+        </span>
+        <div className="h-spacer" />
+        <button
+          className="btn sm"
+          onClick={(e) => { e.stopPropagation(); if (window.tcsDashboardRefresh) window.tcsDashboardRefresh(); }}
+        >Refresh now</button>
+        <span className="h-meta" style={{ marginLeft: 10 }}>{open ? "▼" : "▶"}</span>
+      </div>
+      {!open ? null : (
+        <div className="card-b" style={{ display: "grid", gap: 14, fontSize: 11, fontFamily: "var(--mono)" }}>
+          <DebugSection title="Bridge state">
+            <DebugKV k="boot applied"     v={String(!!d.bootApplied)} />
+            <DebugKV k="data URL"         v={d.url || "—"} />
+            <DebugKV k="last fetch"       v={d.lastFetchAt || "never"} />
+            <DebugKV k="last fetch ok"    v={d.lastFetchOk === null ? "—" : String(d.lastFetchOk)} tone={liveErr ? "err" : liveOk ? "ok" : null} />
+            <DebugKV k="fetch count"      v={String(d.fetchCount ?? 0)} />
+            <DebugKV k="last error"       v={d.lastError || "—"} tone={d.lastError ? "err" : null} />
+          </DebugSection>
+
+          <DebugSection title="ZBX_HOST">
+            <DebugKV k="hostid"        v={host.hostid || "(empty — backend returned no host)"} tone={!host.hostid ? "err" : null} />
+            <DebugKV k="host"          v={host.host || "—"} />
+            <DebugKV k="visible_name"  v={host.visible_name || "—"} />
+            <DebugKV k="ip"            v={host.ip || "—"} />
+            <DebugKV k="available"     v={host.available === 1 ? "1 (up)" : host.available === 2 ? "2 (down)" : String(host.available ?? "—")} />
+            <DebugKV k="uptime (sec)"  v={String(host.uptime ?? "—")} />
+            <DebugKV k="templates"     v={(host.templates || []).join(", ") || "—"} />
+            <DebugKV k="groups"        v={(host.groups || []).join(", ") || "—"} />
+            <DebugKV k="proxy"         v={host.proxy || "(direct)"} />
+          </DebugSection>
+
+          <DebugSection title={`ZBX_ITEMS (${itemRows.length} keys)`}>
+            <table className="tbl" style={{ width: "100%", fontSize: 11 }}>
+              <thead>
+                <tr>
+                  <th>logical</th><th>missing</th><th>value</th><th>unit</th><th>hist</th><th>matched key</th>
+                </tr>
+              </thead>
+              <tbody>
+                {itemRows.map(r => (
+                  <tr key={r.name}>
+                    <td className="fg">{r.name}</td>
+                    <td style={{ color: r.missing ? "var(--err)" : "var(--ok)" }}>{String(!!r.missing)}</td>
+                    <td>{r.value === null || r.value === undefined ? "—" : String(r.value)}</td>
+                    <td>{r.unit || "—"}</td>
+                    <td>{r.histLen}</td>
+                    <td style={{ color: "var(--muted)" }}>{r.key || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </DebugSection>
+
+          <DebugSection title="ALERTS_SUMMARY">
+            {Object.entries(alerts).map(([k, v]) => (
+              <DebugKV key={k} k={k} v={String(v)} />
+            ))}
+          </DebugSection>
+
+          <DebugSection title="Collection sizes">
+            {Object.entries(collections).map(([k, v]) => (
+              <DebugKV key={k} k={k} v={String(v)} tone={v === 0 ? "warn" : null} />
+            ))}
+          </DebugSection>
+
+          <DebugSection title="Raw ZBX_BOOT (server-inlined)">
+            <details>
+              <summary style={{ cursor: "pointer", color: "var(--muted)" }}>
+                Click to expand
+              </summary>
+              <pre style={{
+                marginTop: 8, padding: 10, background: "var(--bg-2)",
+                border: "1px solid var(--line)", borderRadius: 4,
+                fontSize: 10.5, lineHeight: 1.4, maxHeight: 320,
+                overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word"
+              }}>
+                {(() => { try { return JSON.stringify(d.bootRaw, null, 2); } catch { return "(unserializable)"; }})()}
+              </pre>
+            </details>
+          </DebugSection>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const DebugSection = ({ title, children }) => (
+  <div>
+    <div style={{
+      fontFamily: "var(--sans)", fontSize: 10, textTransform: "uppercase",
+      letterSpacing: 0.6, color: "var(--muted)", marginBottom: 6,
+      paddingBottom: 4, borderBottom: "1px solid var(--line)"
+    }}>{title}</div>
+    <div>{children}</div>
+  </div>
+);
+
+const DebugKV = ({ k, v, tone }) => {
+  const color = tone === "err" ? "var(--err)" : tone === "warn" ? "var(--warn)" : tone === "ok" ? "var(--ok)" : "var(--fg-2)";
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 8, padding: "2px 0" }}>
+      <div style={{ color: "var(--muted)" }}>{k}</div>
+      <div style={{ color, wordBreak: "break-all" }}>{v}</div>
+    </div>
+  );
+};
+
 window.Sidebar = Sidebar;
 window.Topbar = Topbar;
 window.PageHeader = PageHeader;
@@ -359,4 +518,5 @@ window.DeviceSidecar = DeviceSidecar;
 window.APNavigator = APNavigator;
 window.CommandPalette = CommandPalette;
 window.Tweaks = Tweaks;
+window.DebugPanel = DebugPanel;
 window.TWEAK_DEFAULTS = TWEAK_DEFAULTS;

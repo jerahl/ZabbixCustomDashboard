@@ -88,9 +88,17 @@ const App = () => {
                 query={apQuery}
                 setQuery={setApQuery}
               />
-              <div style={{ minWidth: 0 }}>{TabContent}</div>
+              <div style={{ minWidth: 0 }}>
+                {TabContent}
+                <DebugPanel />
+              </div>
             </div>
-          ) : TabContent}
+          ) : (
+            <>
+              {TabContent}
+              <DebugPanel />
+            </>
+          )}
         </div>
       </div>
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
