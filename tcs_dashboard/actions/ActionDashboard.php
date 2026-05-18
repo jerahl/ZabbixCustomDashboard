@@ -804,7 +804,9 @@ class ActionDashboard extends ActionBase {
                 $by_school[$school] = [
                     'id'       => $school,
                     'name'     => $school,
-                    'expanded' => true,
+                    // Collapsed by default — the frontend expands the
+                    // section containing the active AP at mount time.
+                    'expanded' => false,
                     'problems' => 0,
                     'aps'      => []
                 ];

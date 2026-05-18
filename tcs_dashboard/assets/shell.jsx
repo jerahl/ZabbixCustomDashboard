@@ -175,7 +175,14 @@ const DeviceSidecar = ({ host }) => {
 
 // ───────── AP Host Navigator (left rail) ─────────
 const APNavigator = ({ activeId, onSelect, query, setQuery }) => {
-  const [sites, setSites] = React.useState(window.AP_SITES);
+  // Start with every site collapsed except the one containing the active
+  // AP. Search expands all matched sections regardless (handled below).
+  const [sites, setSites] = React.useState(() =>
+    (window.AP_SITES || []).map(s => ({
+      ...s,
+      expanded: Array.isArray(s.aps) && s.aps.some(a => a.id === activeId)
+    }))
+  );
   const toggle = (idx) => {
     setSites(sites.map((s, i) => i === idx ? { ...s, expanded: !s.expanded } : s));
   };
