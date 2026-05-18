@@ -949,13 +949,19 @@ final class XIQClient
     /**
      * Fetch alarm / event records for one device, normalised.
      *
-     * Endpoint: GET /alarms?deviceIds=<id>&views=FULL&page=1&limit=100
+     * Endpoint: GET /devices/{id}/alarms?page=1&limit=100&startTime=<ms>&endTime=<ms>
      *
-     * XIQ's alarm API field names vary across versions; this normaliser is
-     * forgiving — it reads from a list of plausible aliases for each
-     * dashboard field and falls back to "" or 0 when none match. The full
-     * raw row is preserved under `raw` so future debugging can see what
-     * the API actually returned.
+     * Confirmed response shape (XIQ public API):
+     *   { page, count, total_pages, total_count, data: [
+     *       { entity_id, timestamp(ms), severity, category, device_mac,
+     *         client_mac, description }
+     *   ]}
+     *
+     * The normaliser is forgiving — it reads each output field from a
+     * list of plausible aliases so a future XIQ revision that adds
+     * status / alarm_id / etc. is picked up automatically. The full raw
+     * row is preserved under `raw` so future debugging can see what the
+     * API actually returned.
      *
      * The dashboard's Events tab consumes:
      *   id        — stable string id for React keys
@@ -991,10 +997,8 @@ final class XIQClient
         $startMs = $endMs - ($windowHours * 3600 * 1000);
 
         $data = $this->httpGet(
-            path:   '/alarms',
+            path:   "/devices/{$xiqDeviceId}/alarms",
             params: [
-                'deviceIds' => $xiqDeviceId,
-                'views'     => 'FULL',
                 'page'      => 1,
                 'limit'     => $limit,
                 'startTime' => $startMs,
