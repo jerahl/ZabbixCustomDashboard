@@ -14,7 +14,7 @@ const { useState, useEffect } = React;
 let XIQ_TOTALS       = window.XIQ_TOTALS       || {};
 let XIQ_SITES        = window.XIQ_SITES        || [];
 let XIQ_SSIDS        = window.XIQ_SSIDS        || [];
-let XIQ_PROBLEM_APS  = window.XIQ_PROBLEM_APS  || [];
+let XIQ_TOP_CLIENT_APS = window.XIQ_TOP_CLIENT_APS || [];
 let XIQ_CHANNEL_GRID = window.XIQ_CHANNEL_GRID || { sites: [], channels: [], matrix: [] };
 let XIQ_CLIENT_MIX   = window.XIQ_CLIENT_MIX   || { standards: [], os: [] };
 let XIQ_FIRMWARE     = window.XIQ_FIRMWARE     || { versions: [] };
@@ -24,7 +24,7 @@ window.addEventListener("tcs:xiq-data", () => {
   XIQ_TOTALS       = window.XIQ_TOTALS       || XIQ_TOTALS;
   XIQ_SITES        = window.XIQ_SITES        || XIQ_SITES;
   XIQ_SSIDS        = window.XIQ_SSIDS        || XIQ_SSIDS;
-  XIQ_PROBLEM_APS  = window.XIQ_PROBLEM_APS  || XIQ_PROBLEM_APS;
+  XIQ_TOP_CLIENT_APS = window.XIQ_TOP_CLIENT_APS || XIQ_TOP_CLIENT_APS;
   XIQ_CHANNEL_GRID = window.XIQ_CHANNEL_GRID || XIQ_CHANNEL_GRID;
   XIQ_CLIENT_MIX   = window.XIQ_CLIENT_MIX   || XIQ_CLIENT_MIX;
   XIQ_FIRMWARE     = window.XIQ_FIRMWARE     || XIQ_FIRMWARE;
@@ -240,48 +240,50 @@ const SSIDTable = () => (
   </table>
 );
 
-// ───────── Top problem APs list ─────────
-const ProblemAPList = () => (
-  <div className="papl">
-    {XIQ_PROBLEM_APS.map((p, i) => {
-      const c = xiqSev[p.sev] || xiqSev.info;
-      const u2cls = p.util2 > 75 ? "err" : p.util2 > 55 ? "warn" : "";
-      const u5cls = p.util5 > 75 ? "err" : p.util5 > 55 ? "warn" : "";
-      // Click anywhere on the row to navigate to AP Detail. Only render the
-      // row as a link when we have a hostid (live data) — synthetic rows
-      // don't carry one and would otherwise produce a broken link.
-      const apDetailUrl = p.hostid
-        ? `${(window.TCS_NAV && window.TCS_NAV.apDetail) || "zabbix.php?action=tcs.dashboard.view"}&hostid=${encodeURIComponent(p.hostid)}`
-        : null;
-      const rowProps = apDetailUrl
-        ? { onClick: () => { window.location.href = apDetailUrl; }, style: { cursor: "pointer" }, title: `Open ${p.ap} detail` }
-        : {};
-      return (
-        <div className="pap-row" key={i} {...rowProps}>
-          <div className="pap-main">
-            <div className="pap-head">
-              <Sev level={p.sev} />
-              <span className="pap-id">{p.ap}</span>
-              <span className="site-chip">{p.site}</span>
-              <span className="pap-model">{p.model}</span>
+// ───────── Top client APs list (APs with the most connected clients) ─────────
+const TopClientAPList = () => {
+  if (!XIQ_TOP_CLIENT_APS || XIQ_TOP_CLIENT_APS.length === 0) {
+    return (
+      <CardLoading
+        label={window.XIQ_LOADING ? "Loading fleet client counts…" : "No client data yet — xiq.ap.clients items have not reported."}
+        spinning={!!window.XIQ_LOADING}
+      />
+    );
+  }
+  return (
+    <div className="papl">
+      {XIQ_TOP_CLIENT_APS.map((p, i) => {
+        const apDetailUrl = p.hostid
+          ? `${(window.TCS_NAV && window.TCS_NAV.apDetail) || "zabbix.php?action=tcs.dashboard.view"}&hostid=${encodeURIComponent(p.hostid)}`
+          : null;
+        const rowProps = apDetailUrl
+          ? { onClick: () => { window.location.href = apDetailUrl; }, style: { cursor: "pointer" }, title: `Open ${p.ap} detail` }
+          : {};
+        const rank = i + 1;
+        const loadCls = p.clients > 50 ? "err" : p.clients > 35 ? "warn" : "";
+        return (
+          <div className="pap-row" key={i} {...rowProps}>
+            <div className="pap-main">
+              <div className="pap-head">
+                <span className="pap-id">#{rank} · {p.ap}</span>
+                <span className="site-chip">{p.site}</span>
+                <span className="pap-model">{p.model}</span>
+              </div>
+              {p.building ? (
+                <div className="pap-reason" style={{ color: "var(--muted)" }}>{p.building}</div>
+              ) : null}
             </div>
-            <div className="pap-reason" style={{ color: c.fg }}>{p.reason}</div>
+            <div className="pap-age">
+              <span className={"v " + loadCls} style={{ fontSize: 18, fontWeight: 600 }}>{p.clients}</span>
+              <br /><span style={{ color: "var(--muted)" }}>clients</span>
+            </div>
+            <div><Icon name="chevron" size={12} /></div>
           </div>
-          <div className="pap-mini">
-            <div>2.4G <span className={"v " + u2cls}>{p.util2}%</span></div>
-            <div>5G <span className={"v " + u5cls}>{p.util5}%</span></div>
-          </div>
-          <div className="pap-age">{p.clients}<br /><span style={{ color: "var(--muted)" }}>clients</span></div>
-          <div>
-            {p.sev === "disaster" || p.sev === "high"
-              ? <span className="dot pulse-dot" style={{ background: "var(--err)" }} />
-              : <Icon name="chevron" size={12} />}
-          </div>
-        </div>
-      );
-    })}
-  </div>
-);
+        );
+      })}
+    </div>
+  );
+};
 
 // ───────── Channel utilization heat grid ─────────
 const ChannelGrid = () => {
@@ -578,14 +580,13 @@ const App = () => {
             </div>
             <div className="card">
               <div className="card-h">
-                <h3>Top Problem APs</h3>
-                <SourceBadge src="ext" />
+                <h3>Top Client APs</h3>
                 <SourceBadge src="zbx" />
                 <div className="h-spacer" />
-                <a className="h-link">Open in Zabbix <Icon name="external" size={11} /></a>
+                <span className="h-meta">most connected clients</span>
               </div>
               <div className="card-b tight">
-                <ProblemAPList />
+                <TopClientAPList />
               </div>
             </div>
           </div>
