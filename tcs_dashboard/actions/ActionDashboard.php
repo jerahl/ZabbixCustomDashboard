@@ -588,17 +588,36 @@ class ActionDashboard extends ActionBase {
             $by_idx[$m[2]][$m[1]] = $it['lastvalue'];
         }
 
+        // Derive band per radio from its current channel — the wifi0/wifi1
+        // ifname prefix isn't a reliable band hint (this fleet runs dual-5 GHz
+        // AP305Cs). Channels 1–14 = 2.4 GHz, ≥36 = 5 GHz.
+        $radio_channels = $this->lastValuesByKey($hostid, [
+            'extremeap.channel[12]',
+            'extremeap.channel[13]'
+        ]);
+        $bandOf = function ($ch) {
+            if ($ch === null || $ch === '') return null;
+            $n = (int) $ch;
+            if ($n >= 1 && $n <= 14) return '2.4 GHz';
+            if ($n >= 36) return '5 GHz';
+            return null;
+        };
+        $radio_band = [
+            'wifi0' => $bandOf($radio_channels['extremeap.channel[12]'] ?? null),
+            'wifi1' => $bandOf($radio_channels['extremeap.channel[13]'] ?? null)
+        ];
+
         $out = [];
         foreach ($by_idx as $idx => $row) {
             $name = (string) ($row['name'] ?? '');
             if ($name === '') continue;
             $ifname = (string) ($row['ifname'] ?? '');
             $band = null;
-            if (str_starts_with($ifname, 'wifi0')) {
-                $band = '2.4 GHz';
-            }
-            elseif (str_starts_with($ifname, 'wifi1')) {
-                $band = '5 GHz';
+            foreach ($radio_band as $radio => $b) {
+                if ($b !== null && str_starts_with($ifname, $radio)) {
+                    $band = $b;
+                    break;
+                }
             }
 
             $rx_bps = isset($row['rxbytes']) ? (float) $row['rxbytes'] * 8 : null;

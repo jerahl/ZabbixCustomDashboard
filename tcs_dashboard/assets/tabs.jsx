@@ -225,14 +225,26 @@ const SparkCell = ({ label, value, unit, data, color }) => {
   );
 };
 
+// Derive radio band from current channel number. AP305C is dual-5 GHz on
+// this fleet, so we can't assume wifi0=2.4 / wifi1=5 anymore.
+const deriveBand = (ch) => {
+  const n = typeof ch === "number" ? ch : Number(ch);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n >= 1 && n <= 14) return "2.4 GHz";
+  if (n >= 36) return "5 GHz";
+  return null;
+};
+
 // ───────── Wireless tab ─────────
 const WirelessTab = () => {
   const I = window.ZBX_ITEMS || {};
-  const host = window.ZBX_HOST || {};
+  // Keep the existing channel24/channel5 keys (they refer to ifIndex 12 and
+  // 13, i.e. wifi0 and wifi1) but display the band derived from the live
+  // channel value rather than the variable name.
   return (
     <div className="row" style={{ gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-      <RadioCard band="2.4 GHz" channel={I.channel24} txpower={I.txpower24} noise={I.noise24} rxbytes={I.radioRx24} txbytes={I.radioTx24} />
-      <RadioCard band="5 GHz"   channel={I.channel5}  txpower={I.txpower5}  noise={I.noise5}  rxbytes={I.radioRx5}  txbytes={I.radioTx5}  />
+      <RadioCard radioName="wifi0" channel={I.channel24} txpower={I.txpower24} noise={I.noise24} rxbytes={I.radioRx24} txbytes={I.radioTx24} />
+      <RadioCard radioName="wifi1" channel={I.channel5}  txpower={I.txpower5}  noise={I.noise5}  rxbytes={I.radioRx5}  txbytes={I.radioTx5}  />
       <div className="card" style={{ gridColumn: "1 / -1" }}>
         <div className="card-h">
           <h3>SSIDs Broadcast</h3>
@@ -285,18 +297,19 @@ const WirelessTab = () => {
   );
 };
 
-const RadioCard = ({ band, channel, txpower, noise, rxbytes, txbytes }) => {
+const RadioCard = ({ radioName, channel, txpower, noise, rxbytes, txbytes }) => {
   const ch = channel || {};
   const tp = txpower || {};
   const n  = noise   || {};
   const rx = rxbytes || {};
   const tx = txbytes || {};
+  const band = deriveBand(ch.value);
   // Bytes/sec → Mbps for display.
   const bytesToMbps = (v) => (typeof v === "number" ? +(v * 8 / 1e6).toFixed(2) : v);
   return (
     <div className="card">
       <div className="card-h">
-        <h3>Radio · {band}</h3>
+        <h3>Radio · {radioName}{band ? ` · ${band}` : ""}</h3>
         <SourceBadge src="zbx" />
         <div className="h-spacer" />
         <span className="h-meta">
@@ -366,19 +379,6 @@ const WiredTab = () => {
             </tbody>
           </table>
         )}
-      </div>
-      <div className="card">
-        <div className="card-h">
-          <h3>PoE</h3>
-          <SourceBadge src="zbx" />
-          <div className="h-spacer"/>
-          <span className="h-meta">POWER-ETHERNET-MIB not implemented on AP305C</span>
-        </div>
-        <div style={{ padding: 18, color: "var(--muted)", fontSize: 12 }}>
-          PoE draw is not exposed by the AP's SNMP agent. To monitor power consumed by this AP,
-          monitor the upstream switch port instead — that data lives on the EXOS switch template
-          ({"snmp.interfaces.poe.discovery"}).
-        </div>
       </div>
     </div>
   );
