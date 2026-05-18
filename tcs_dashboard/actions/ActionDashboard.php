@@ -57,6 +57,7 @@ class ActionDashboard extends ActionBase {
             'wiredPorts'  => [],
             'ssids'       => [],
             'clientsDebug'=> [],
+            'pfAdminUrl'  => '',
             'alertsDetail'=> [
                 'activeTriggers' => [],
                 'triggerCount'   => 0,
@@ -79,6 +80,7 @@ class ActionDashboard extends ActionBase {
             $boot['wiredPorts']  = $this->collectWiredPorts($hostid);
             $boot['ssids']       = $this->collectSsidList($hostid);
             $boot['alertsDetail']= $this->collectAlertsDetail($hostid);
+            $boot['pfAdminUrl']  = $this->resolvePfAdminUrl($hostid);
 
             // Fold per-AP fields from the XIQ fleet host into the host
             // record so device card / page header have clients/location/
@@ -1424,6 +1426,52 @@ class ActionDashboard extends ActionBase {
             'pass'       => $pass,
             'verify_ssl' => ($bag['{$PF.VERIFY.SSL}'] ?? '1') !== '0'
         ];
+    }
+
+    /**
+     * Resolve {$PF.ADMIN_URL} via the same host → templates → globals chain
+     * the switch tab uses. Returns '' if unset. PF's admin UI typically
+     * lives on a different port than the API (api on :9999, admin on
+     * :1443), so this is a separate macro from {$PF.URL}.
+     */
+    private function resolvePfAdminUrl(string $hostid): string {
+        $names = ['{$PF.ADMIN_URL}'];
+        $bag = [];
+
+        $globals = API::UserMacro()->get([
+            'output'      => ['macro', 'value'],
+            'globalmacro' => true,
+            'filter'      => ['macro' => $names]
+        ]) ?: [];
+        foreach ($globals as $r) {
+            if (!array_key_exists('value', $r)) continue;
+            $bag[$r['macro']] = (string) $r['value'];
+        }
+
+        $templateIds = self::collectTemplateAncestry($hostid);
+        if ($templateIds) {
+            $tplMacros = API::UserMacro()->get([
+                'output'  => ['macro', 'value'],
+                'hostids' => $templateIds,
+                'filter'  => ['macro' => $names]
+            ]) ?: [];
+            foreach ($tplMacros as $r) {
+                if (!array_key_exists('value', $r)) continue;
+                $bag[$r['macro']] = (string) $r['value'];
+            }
+        }
+
+        $hostMacros = API::UserMacro()->get([
+            'output'  => ['macro', 'value'],
+            'hostids' => [$hostid],
+            'filter'  => ['macro' => $names]
+        ]) ?: [];
+        foreach ($hostMacros as $r) {
+            if (!array_key_exists('value', $r)) continue;
+            $bag[$r['macro']] = (string) $r['value'];
+        }
+
+        return rtrim((string) ($bag['{$PF.ADMIN_URL}'] ?? ''), '/');
     }
 
     /**

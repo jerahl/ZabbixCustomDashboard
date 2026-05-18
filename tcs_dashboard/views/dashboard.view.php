@@ -62,6 +62,7 @@ $asset_base = 'modules/tcs_dashboard/assets';
     // expects, so app.jsx and friends are unmodified.
     window.ZBX_BOOT = <?= $boot_json ?: 'null' ?>;
     window.TCS_DATA_URL = 'zabbix.php?action=tcs.dashboard.data';
+    window.TCS_PF_DEVICE_URL = 'zabbix.php?action=tcs.pf.device';
 </script>
 
 <!-- React + Babel via CDN. For air-gapped installs, vendor these into assets/ and update the src= paths. -->

@@ -618,7 +618,63 @@ const ClientDetailCard = ({ c, onClose }) => {
             </div>
           </div>
         )}
+
+        <ClientPfActionRow mac={c.mac} hasPf={!!c.pf} />
       </div>
+    </div>
+  );
+};
+
+// Per-client PF write-actions — "View in PacketFence" + "Reevaluate
+// access". Mirrors switches-widgets' PfActionRow but skipped the
+// switchport-restart button since it doesn't apply to wireless.
+const ClientPfActionRow = ({ mac, hasPf }) => {
+  const [busy, setBusy] = React.useState(null);
+  const [msg,  setMsg]  = React.useState({ kind: "", text: "" });
+  const adminBase = (window.PF_ADMIN_BASE || "").replace(/\/+$/, "");
+  const viewHref = adminBase && mac
+    ? `${adminBase}/admin/#/node/${encodeURIComponent(mac)}`
+    : null;
+
+  const run = React.useCallback(async (op, label) => {
+    if (!mac || busy) return;
+    if (typeof window.tcsPfDeviceAction !== "function") {
+      setMsg({ kind: "err", text: "endpoint missing" });
+      return;
+    }
+    setBusy(op);
+    setMsg({ kind: "", text: `${label}…` });
+    const r = await window.tcsPfDeviceAction(mac, op);
+    setBusy(null);
+    setMsg(r && r.ok
+      ? { kind: "", text: r.message || "ok" }
+      : { kind: "err", text: (r && (r.error || r.message)) || "failed" });
+    setTimeout(() => setMsg({ kind: "", text: "" }), 6000);
+  }, [mac, busy]);
+
+  return (
+    <div className="pf-actions" style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--line)" }}>
+      {viewHref ? (
+        <a className="pf-btn" href={viewHref} target="_blank" rel="noopener noreferrer">
+          <Icon name="external" size={11}/> View in PacketFence
+        </a>
+      ) : (
+        <span className="pf-btn" style={{ opacity: 0.4, cursor: "not-allowed" }} title="Set global macro {$PF.ADMIN_URL} to enable">
+          View in PacketFence
+        </span>
+      )}
+      <button
+        type="button"
+        className="pf-btn"
+        onClick={() => run("reevaluate_access", "reevaluating")}
+        disabled={!!busy || !hasPf}
+        title={hasPf
+          ? "Re-run PF role / access evaluation for this client (issues a CoA)"
+          : "Client not registered in PacketFence"}
+      >
+        <Icon name="refresh" size={11}/> {busy === "reevaluate_access" ? "REEVALUATING…" : "Reevaluate access"}
+      </button>
+      {msg.text && <span className={"pf-msg" + (msg.kind === "err" ? " err" : "")}>{msg.text}</span>}
     </div>
   );
 };

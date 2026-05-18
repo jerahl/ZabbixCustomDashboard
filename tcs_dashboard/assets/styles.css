@@ -276,6 +276,26 @@ body {
 .tab .badge.warn { color: var(--warn); border-color: rgba(245, 179, 0, 0.4); background: rgba(245, 179, 0, 0.08); }
 .tab .badge.err  { color: var(--err);  border-color: rgba(242, 95, 92, 0.45); background: rgba(242, 95, 92, 0.10); }
 
+/* PacketFence device-card action row — shared with switches.css. */
+.pf-actions {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.pf-btn {
+  font-family: var(--sans); font-size: 11px; font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 3px;
+  display: inline-flex; align-items: center; gap: 5px;
+  text-decoration: none;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--line-2);
+  cursor: pointer; user-select: none;
+}
+.pf-btn:hover { background: rgba(255,255,255,0.04); }
+.pf-btn[disabled] { opacity: 0.5; cursor: wait; }
+.pf-msg { font-size: 10.5px; color: var(--muted); margin-left: 6px; align-self: center; }
+.pf-msg.err { color: var(--warn); }
+
 /* ───────── Page body ───────── */
 .body { padding: 18px 22px 40px; }
 

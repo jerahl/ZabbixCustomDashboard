@@ -111,6 +111,7 @@
         window.WIRED_PORTS   = Array.isArray(b.wiredPorts)  ? b.wiredPorts  : [];
         window.SSIDS         = Array.isArray(b.ssids)       ? b.ssids       : [];
         window.TCS_CLIENTS_DEBUG = (b.clientsDebug && typeof b.clientsDebug === 'object') ? b.clientsDebug : {};
+        window.PF_ADMIN_BASE = typeof b.pfAdminUrl === 'string' ? b.pfAdminUrl : '';
         window.ALERTS_DETAIL = (b.alertsDetail && typeof b.alertsDetail === 'object') ? b.alertsDetail : {
             activeTriggers: [], triggerCount: 0, last24h: { count: 0, bySeverity: {} }, lastFiredAgo: null
         };
@@ -206,6 +207,34 @@
 
     // Expose a manual refresh so the DebugPanel button works.
     window.tcsDashboardRefresh = tick;
+
+    // PacketFence per-node write actions (Reevaluate access, Restart
+    // switchport). Same envelope as the switch-page helper of the same
+    // name: returns { ok, message? } on success, { ok:false, error }
+    // otherwise. Backend (tcs.pf.device) is admin-gated.
+    window.tcsPfDeviceAction = async function (mac, op) {
+        const actionUrl = window.TCS_PF_DEVICE_URL;
+        const hostid    = window.ZBX_HOST && window.ZBX_HOST.hostid;
+        if (!actionUrl || !hostid) return { ok: false, error: "endpoint not configured" };
+        if (!mac || !op)           return { ok: false, error: "mac and op required" };
+        try {
+            const form = new URLSearchParams({ hostid: String(hostid), mac: String(mac), op: String(op) });
+            const resp = await fetch(actionUrl, {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {
+                    "Accept": "application/json",
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
+                },
+                body: form.toString()
+            });
+            const body = await resp.json().catch(() => ({}));
+            if (!resp.ok) return { ok: false, error: body.error || `HTTP ${resp.status}` };
+            return body;
+        } catch (e) {
+            return { ok: false, error: String(e && e.message ? e.message : e) };
+        }
+    };
 
     if (hostid && url) {
         setInterval(tick, REFRESH_MS);
