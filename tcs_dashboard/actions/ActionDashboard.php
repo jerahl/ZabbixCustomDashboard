@@ -54,6 +54,7 @@ class ActionDashboard extends ActionBase {
             'pfClients'   => [],
             'pfAuthFails' => [],
             'wiredPorts'  => [],
+            'ssids'       => [],
             // AP Navigator: every wireless host grouped by school. Always
             // collected (independent of $hostid) so the left rail is
             // populated even when the page is opened without a hostid.
@@ -68,6 +69,7 @@ class ActionDashboard extends ActionBase {
             $boot['events']      = $this->collectEvents($hostid);
             $boot['alerts']      = $this->collectAlertsSummary($hostid);
             $boot['wiredPorts']  = $this->collectWiredPorts($hostid);
+            $boot['ssids']       = $this->collectSsidList($hostid);
 
             // Fold per-AP fields from the XIQ fleet host into the host
             // record so device card / page header have clients/location/
@@ -516,8 +518,108 @@ class ActionDashboard extends ActionBase {
     }
 
     private function collectWiredPorts(string $hostid): array {
-        // Stub. Populate from net.if.* items if/when you discover them.
-        return [];
+        // For an Extreme AP this is just eth0 (ifIndex 10). Pull the four
+        // uplink items in one Item.get; if none exist this isn't an
+        // Extreme-AP-templated host and we return empty.
+        $live = $this->lastValuesByKey($hostid, [
+            'net.if.status[ifOperStatus.10]',
+            'net.if.speed[ifSpeed.10]',
+            'net.if.in[ifHCInOctets.10]',
+            'net.if.out[ifHCOutOctets.10]'
+        ]);
+        if (!array_filter($live, fn($v) => $v !== null)) {
+            return [];
+        }
+
+        $oper_raw = $live['net.if.status[ifOperStatus.10]'] ?? null;
+        $state = match ((int) ($oper_raw ?? 0)) {
+            1 => 'ok',
+            2 => 'down',
+            default => 'warn'
+        };
+
+        $speed_raw = $live['net.if.speed[ifSpeed.10]'] ?? null;
+        $speed_str = $speed_raw !== null ? $this->formatBps((float) $speed_raw) : '—';
+
+        $in_bps  = $live['net.if.in[ifHCInOctets.10]']  ?? null;
+        $out_bps = $live['net.if.out[ifHCOutOctets.10]'] ?? null;
+        $fmt = fn($v) => $v !== null ? $this->formatBps((float) $v) : '—';
+
+        return [[
+            'name'     => 'eth0',
+            'state'    => $state,
+            'speed'    => $speed_str,
+            'duplex'   => '—',  // not exposed by the Extreme AP SNMP template
+            'in'       => $fmt($in_bps),
+            'out'      => $fmt($out_bps),
+            'err'      => '—',  // add when net.if.errors[ifInErrors.10] is templated
+            'neighbor' => ''    // LLDP neighbor not collected
+        ]];
+    }
+
+    /**
+     * Pull the per-SSID LLD items defined by "Extreme AP via SNMPv2c" and
+     * fold them into one row per SSID for the Wireless tab.
+     *
+     * Item keys (per the template):
+     *   extremeap.ssid.name[<ifIndex>]    — SSID broadcast name
+     *   extremeap.ssid.ifname[<ifIndex>]  — subinterface name e.g. wifi0.1
+     *   extremeap.ssid.rxbytes[<ifIndex>] — RX bytes/sec (Change/sec preprocessing)
+     *   extremeap.ssid.txbytes[<ifIndex>] — TX bytes/sec
+     *
+     * Band is derived from the ifname prefix: wifi0.* = 2.4 GHz, wifi1.* = 5 GHz.
+     * VLAN, auth, encryption, role, and per-SSID client counts are NOT in
+     * SNMP and would need an XIQ d360 API call — left null here so the UI
+     * renders an em-dash.
+     */
+    private function collectSsidList(string $hostid): array {
+        $items = API::Item()->get([
+            'output'      => ['key_', 'lastvalue'],
+            'hostids'     => [$hostid],
+            'search'      => ['key_' => 'extremeap.ssid.'],
+            'startSearch' => true
+        ]) ?: [];
+
+        $by_idx = [];
+        foreach ($items as $it) {
+            if (!preg_match('/^extremeap\.ssid\.(name|ifname|rxbytes|txbytes)\[(\d+)\]$/', $it['key_'], $m)) {
+                continue;
+            }
+            $by_idx[$m[2]][$m[1]] = $it['lastvalue'];
+        }
+
+        $out = [];
+        foreach ($by_idx as $idx => $row) {
+            $name = (string) ($row['name'] ?? '');
+            if ($name === '') continue;
+            $ifname = (string) ($row['ifname'] ?? '');
+            $band = null;
+            if (str_starts_with($ifname, 'wifi0')) {
+                $band = '2.4 GHz';
+            }
+            elseif (str_starts_with($ifname, 'wifi1')) {
+                $band = '5 GHz';
+            }
+
+            $rx_bps = isset($row['rxbytes']) ? (float) $row['rxbytes'] * 8 : null;
+            $tx_bps = isset($row['txbytes']) ? (float) $row['txbytes'] * 8 : null;
+
+            $out[] = [
+                'id'         => $idx,
+                'name'       => $name,
+                'ifname'     => $ifname,
+                'band'       => $band ?? '—',
+                'rxMbps'     => $rx_bps !== null ? round($rx_bps / 1e6, 2) : null,
+                'txMbps'     => $tx_bps !== null ? round($tx_bps / 1e6, 2) : null,
+                'vlan'       => null,
+                'auth'       => null,
+                'encryption' => null,
+                'clients'    => null,
+                'role'       => null
+            ];
+        }
+        usort($out, fn($a, $b) => strnatcasecmp($a['name'], $b['name']));
+        return $out;
     }
 
     /**

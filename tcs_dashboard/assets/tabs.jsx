@@ -236,29 +236,43 @@ const WirelessTab = () => {
       <div className="card" style={{ gridColumn: "1 / -1" }}>
         <div className="card-h">
           <h3>SSIDs Broadcast</h3>
-          <SourceBadge src="ext" />
+          <SourceBadge src="zbx" />
           <div className="h-spacer"/>
           <span className="h-meta">
             {Array.isArray(window.SSIDS) && window.SSIDS.length > 0
-              ? `${window.SSIDS.length} SSIDs · via XIQ policy`
-              : "SSID inventory not yet wired — see ActionDashboard::collectSsids()"}
+              ? `${window.SSIDS.length} SSIDs · LLD via Extreme AP SNMPv2c`
+              : "SSID LLD has not yet discovered any subinterfaces (runs hourly)"}
           </span>
         </div>
         {Array.isArray(window.SSIDS) && window.SSIDS.length > 0 ? (
           <table className="tbl">
-            <thead><tr><th>SSID</th><th>VLAN</th><th>Auth</th><th>Encryption</th><th>Band</th><th>Clients</th><th>NAC Role</th></tr></thead>
+            <thead>
+              <tr>
+                <th>SSID</th>
+                <th>Subinterface</th>
+                <th>Band</th>
+                <th>VLAN</th>
+                <th>Auth</th>
+                <th style={{ textAlign: "right" }}>RX</th>
+                <th style={{ textAlign: "right" }}>TX</th>
+              </tr>
+            </thead>
             <tbody>
-              {window.SSIDS.map(s => (
-                <tr key={s.id || s.name}>
-                  <td className="fg">{s.name}</td>
-                  <td>{s.vlan ?? "—"}</td>
-                  <td>{s.auth ?? "—"}</td>
-                  <td>{s.encryption ?? "—"}</td>
-                  <td>{s.band ?? "—"}</td>
-                  <td>{s.clients ?? 0}</td>
-                  <td>{s.role && <span className={`role-tag ${s.role.cls || "faculty"}`}>{s.role.label || s.role}</span>}</td>
-                </tr>
-              ))}
+              {window.SSIDS.map(s => {
+                const rx = s.rxMbps;
+                const tx = s.txMbps;
+                return (
+                  <tr key={s.id || s.name}>
+                    <td className="fg">{s.name}</td>
+                    <td className="mono" style={{ color: "var(--muted)" }}>{s.ifname || "—"}</td>
+                    <td>{s.band || "—"}</td>
+                    <td>{s.vlan ?? "—"}</td>
+                    <td>{s.auth ?? "—"}</td>
+                    <td className="mono" style={{ textAlign: "right" }}>{rx == null ? "—" : `${rx.toFixed(2)} Mbps`}</td>
+                    <td className="mono" style={{ textAlign: "right" }}>{tx == null ? "—" : `${tx.toFixed(2)} Mbps`}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         ) : (
@@ -317,41 +331,58 @@ const MiniMetric = ({ label, v, unit, data, color, threshold }) => {
 };
 
 // ───────── Wired tab ─────────
-const WiredTab = () => (
-  <div className="row" style={{ gridTemplateColumns: "1fr", gap: 14 }}>
-    <div className="card">
-      <div className="card-h"><h3>Wired Interfaces</h3><SourceBadge src="zbx" /><div className="h-spacer"/><span className="h-meta">SNMP IF-MIB poll · 30s</span></div>
-      <table className="tbl">
-        <thead><tr><th>Port</th><th>State</th><th>Speed/Duplex</th><th>In</th><th>Out</th><th>Errors</th><th>LLDP Neighbor</th></tr></thead>
-        <tbody>
-          {window.WIRED_PORTS.map(p => (
-            <tr key={p.name}>
-              <td className="fg">{p.name}</td>
-              <td><StatusDot state={p.state}/> <span style={{textTransform:"uppercase"}}>{p.state}</span></td>
-              <td>{p.speed} · {p.duplex}</td>
-              <td>{p.in}</td>
-              <td>{p.out}</td>
-              <td>{p.err}</td>
-              <td>{p.neighbor}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-    <div className="card">
-      <div className="card-h"><h3>PoE Power Budget</h3><SourceBadge src="zbx" /></div>
-      <div className="card-b">
-        <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 12 }}>
-          <div style={{ fontFamily: "var(--mono)", fontSize: 28, fontWeight: 600 }}>12.4<span style={{ fontSize: 14, color: "var(--muted)" }}> / 25.5 W</span></div>
-          <div style={{ flex: 1, background: "var(--bg-2)", borderRadius: 4, height: 8, overflow: "hidden", border: "1px solid var(--line)" }}>
-            <div style={{ width: `${(12.4/25.5)*100}%`, height: "100%", background: "linear-gradient(90deg, var(--ok), var(--pf))" }} />
+const WiredTab = () => {
+  const ports = Array.isArray(window.WIRED_PORTS) ? window.WIRED_PORTS : [];
+  return (
+    <div className="row" style={{ gridTemplateColumns: "1fr", gap: 14 }}>
+      <div className="card">
+        <div className="card-h">
+          <h3>Wired Interfaces</h3>
+          <SourceBadge src="zbx" />
+          <div className="h-spacer"/>
+          <span className="h-meta">{ports.length === 0 ? "no IF-MIB items for this host" : "SNMP IF-MIB · live"}</span>
+        </div>
+        {ports.length === 0 ? (
+          <div style={{ padding: 30, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
+            No wired interface data available. Confirm the host has the Extreme AP SNMPv2c template linked.
           </div>
-          <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }}>49% of budget · Class 4 (802.3at)</div>
+        ) : (
+          <table className="tbl">
+            <thead>
+              <tr><th>Port</th><th>State</th><th>Link Speed</th><th>In</th><th>Out</th><th>Errors</th><th>LLDP Neighbor</th></tr>
+            </thead>
+            <tbody>
+              {ports.map(p => (
+                <tr key={p.name}>
+                  <td className="fg">{p.name}</td>
+                  <td><StatusDot state={p.state}/> <span style={{textTransform:"uppercase"}}>{p.state}</span></td>
+                  <td className="mono">{p.speed || "—"}</td>
+                  <td className="mono">{p.in || "—"}</td>
+                  <td className="mono">{p.out || "—"}</td>
+                  <td className="mono">{p.err || "—"}</td>
+                  <td>{p.neighbor || <span className="muted">—</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      <div className="card">
+        <div className="card-h">
+          <h3>PoE</h3>
+          <SourceBadge src="zbx" />
+          <div className="h-spacer"/>
+          <span className="h-meta">POWER-ETHERNET-MIB not implemented on AP305C</span>
+        </div>
+        <div style={{ padding: 18, color: "var(--muted)", fontSize: 12 }}>
+          PoE draw is not exposed by the AP's SNMP agent. To monitor power consumed by this AP,
+          monitor the upstream switch port instead — that data lives on the EXOS switch template
+          ({"snmp.interfaces.poe.discovery"}).
         </div>
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 // ───────── Clients tab (PacketFence-driven) ─────────
 const ClientsTab = ({ filter, setFilter }) => {

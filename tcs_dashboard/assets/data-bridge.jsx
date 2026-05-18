@@ -109,6 +109,7 @@
         window.PF_AUTH_FAILS = Array.isArray(b.pfAuthFails) ? b.pfAuthFails : [];
         window.ZBX_EVENTS    = Array.isArray(b.events)      ? b.events      : [];
         window.WIRED_PORTS   = Array.isArray(b.wiredPorts)  ? b.wiredPorts  : [];
+        window.SSIDS         = Array.isArray(b.ssids)       ? b.ssids       : [];
         window.AP_SITES      = buildApSites(b, window.ZBX_HOST);
         window.ALERTS_SUMMARY = b.alerts || {
             associationFailures: 0, authFailures: 0,
@@ -186,7 +187,8 @@
                 items:      fresh.items      ?? {},
                 events:     fresh.events     ?? window.ZBX_EVENTS,
                 alerts:     fresh.alerts     ?? window.ALERTS_SUMMARY,
-                wiredPorts: fresh.wiredPorts ?? window.WIRED_PORTS
+                wiredPorts: fresh.wiredPorts ?? window.WIRED_PORTS,
+                ssids:      fresh.ssids      ?? window.SSIDS
             });
             recordFetch(true, null, fresh);
             window.dispatchEvent(new CustomEvent("tcs:data", { detail: fresh }));
