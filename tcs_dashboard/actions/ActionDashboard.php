@@ -412,7 +412,10 @@ class ActionDashboard extends ActionBase {
         if ($fleet_hostid === null) return $out;
 
         // 3. Pull the specific xiq.ap.<field>[<serial>] items on the fleet host.
-        $keys = array_map(fn($f) => "xiq.ap.$f[$serial]", $fields);
+        // Use concatenation — "xiq.ap.$f[$serial]" parses $f[$serial] as
+        // array-access on the field-name string, which trips an
+        // "Uninitialized string offset" notice for serials that look numeric.
+        $keys = array_map(fn($f) => 'xiq.ap.'.$f.'['.$serial.']', $fields);
         $items = API::Item()->get([
             'output'  => ['key_', 'lastvalue'],
             'hostids' => [$fleet_hostid],
