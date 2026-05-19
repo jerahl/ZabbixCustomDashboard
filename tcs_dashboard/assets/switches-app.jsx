@@ -81,7 +81,7 @@ const SwitchesApp = () => {
     members: 1, ports: 0, up: 0, down: 0, poe: 0,
     cpu: 0, mem: 0, temp: 0, problems: 0
   };
-  const host =
+  const baseHost =
     allHosts.find(h => h.id === activeId)
     || allHosts.find(h => h.hostid && h.hostid === String(liveHost && liveHost.hostid))
     || synth;
@@ -90,12 +90,34 @@ const SwitchesApp = () => {
   // the fleet roll-up, which can lag), then fall back to the fleet row.
   const liveStack = Array.isArray(window.ARC_MDF_STACK) ? window.ARC_MDF_STACK : [];
   const liveStackCount = liveStack.filter(m => (m.ports || []).length + (m.sfp || []).length > 0).length;
-  const stackMemberCount = liveStackCount || host.members || 1;
+  const stackMemberCount = liveStackCount || baseHost.members || 1;
 
-  // Firmware shown in the EXOS pill — try the dedicated firmware item first,
-  // fall back to the software-rev item, then to model, then placeholder.
+  // Firmware / model from the snapshot info payload. The fleet roll-up no
+  // longer carries per-port counters or inventory (those were the slow part
+  // of the host navigator load) — for the selected switch we derive the
+  // header pills from the snapshot stack + info instead.
   const info = window.SWITCH_INFO || {};
   const firmwareLabel = info.firmware || info.swOs || info.version || "—";
+
+  const stackTotals = liveStack.reduce((acc, m) => {
+    const total = (m.ports || []).length + (m.sfp || []).length;
+    return {
+      ports: acc.ports + total,
+      up:    acc.up    + (m.upCount   || 0),
+      down:  acc.down  + (m.downCount || 0),
+      poe:   acc.poe   + (m.poeCount  || 0)
+    };
+  }, { ports: 0, up: 0, down: 0, poe: 0 });
+  const hasLiveStack = stackTotals.ports > 0;
+
+  const host = {
+    ...baseHost,
+    model: (info.model && String(info.model).trim()) || baseHost.model || "—",
+    ports: hasLiveStack ? stackTotals.ports : (baseHost.ports || 0),
+    up:    hasLiveStack ? stackTotals.up    : (baseHost.up    || 0),
+    down:  hasLiveStack ? stackTotals.down  : (baseHost.down  || 0),
+    poe:   hasLiveStack ? stackTotals.poe   : (baseHost.poe   || 0)
+  };
 
   return (
     <div className="app" data-density={t.density} style={{ fontSize: `${13 * densityVar}px` }}>
