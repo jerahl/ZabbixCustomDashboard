@@ -109,6 +109,14 @@ class ActionDashboard extends ActionBase {
                 $apMacForPf = (string) ($this->readHostMacro($hostid, '{$XIQ_MAC}') ?? '');
                 if ($apMacForPf === '') $apMacForPf = (string) ($fleet['mac'] ?? '');
                 $boot['host']['pfUplink']       = $this->collectPfApUplink($hostid, $apMacForPf);
+                // The PF buttons on the device card (View in PF, Reevaluate
+                // access) gate on host.mac. fleet['mac'] is often empty even
+                // when {$XIQ_MAC} is set, and the locationlog row itself
+                // carries the canonical lowercase-colon MAC PF expects —
+                // prefer that, then fall back to whatever input we used.
+                $pfMac = $boot['host']['pfUplink']['mac'] ?? '';
+                if ($pfMac === '') $pfMac = self::normalizeMacForPf($apMacForPf);
+                if ($pfMac !== '') $boot['host']['mac'] = $pfMac;
             }
 
             [$pfClients, $pfAuthFails] = $this->collectPacketFence($hostid, $boot['host']);
@@ -1459,7 +1467,13 @@ class ActionDashboard extends ActionBase {
 
             $sw   = (string) ($loc['switch']    ?? '');
             $swIp = (string) ($loc['switch_ip'] ?? '');
+            // Prefer the MAC PF returned on the row (already canonical) so
+            // the frontend gets exactly what /api/v1/node/<mac>/* expects,
+            // even if the input MAC came in dashed / dotted / mixed-case.
+            $rowMac = self::normalizeMacForPf((string) ($loc['mac'] ?? ''));
+            if ($rowMac === '') $rowMac = $mac;
             return [
+                'mac'          => $rowMac,
                 'switch'       => $sw,
                 'switchIp'     => $swIp,
                 'switchHostid' => self::resolveSwitchHostid($sw, $swIp),

@@ -199,7 +199,7 @@ const DeviceSidecar = ({ host }) => {
       </div>
 
       <div className="dev-h-actions">
-        <ApPfActionRow mac={host.mac} uplink={uplink} />
+        <ApPfActionRow mac={host.mac || (uplink && uplink.mac) || ""} uplink={uplink} />
       </div>
     </div>
   );
