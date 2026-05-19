@@ -314,18 +314,20 @@ class PFClient {
      * @return array<int, array<string, mixed>>
      */
     public function authFailuresForNode(string $deviceId, int $limit = 50): array {
+        // radius_audit_logs uses switch_id / nas_port_id — NOT the
+        // switch / port names locationlogs/search exposes.
         $body = [
             'cursor' => 0,
             'limit'  => max(1, $limit),
             'sort'   => ['created_at DESC'],
             'fields' => [
-                'mac', 'user_name', 'switch', 'port',
+                'mac', 'user_name', 'switch_id', 'nas_port_id',
                 'auth_status', 'reason', 'created_at'
             ],
             'query'  => [
                 'op' => 'and',
                 'values' => [
-                    ['op' => 'equals', 'field' => 'switch',      'value' => $deviceId],
+                    ['op' => 'equals', 'field' => 'switch_id',   'value' => $deviceId],
                     ['op' => 'equals', 'field' => 'auth_status', 'value' => 'reject']
                 ]
             ]
@@ -337,7 +339,7 @@ class PFClient {
             $out[] = [
                 'mac'    => (string) ($r['mac'] ?? ''),
                 'user'   => (string) ($r['user_name'] ?? ''),
-                'port'   => (string) ($r['port'] ?? ''),
+                'port'   => (string) ($r['nas_port_id'] ?? ''),
                 'reason' => (string) ($r['reason'] ?? ''),
                 'ts'     => (string) ($r['created_at'] ?? '')
             ];
