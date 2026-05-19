@@ -314,6 +314,9 @@ class PFClient {
      * @return array<int, array<string, mixed>>
      */
     public function authFailuresForNode(string $deviceId, int $limit = 50): array {
+        // Newer PF exposes a structured search endpoint; older releases only
+        // accept the flat listing with query-string filters. Try /search
+        // first, fall back to the legacy listing on 404 (route absent).
         // radius_audit_logs uses switch_id / nas_port_id — NOT the
         // switch / port names locationlogs/search exposes.
         $body = [
@@ -332,7 +335,18 @@ class PFClient {
                 ]
             ]
         ];
-        $rows = $this->call('POST', '/api/v1/radius_audit_logs/search', [], $body);
+        try {
+            $rows = $this->call('POST', '/api/v1/radius_audit_logs/search', [], $body);
+        } catch (\RuntimeException $e) {
+            if (!str_contains($e->getMessage(), 'HTTP 404')) throw $e;
+            $rows = $this->get('/api/v1/radius_audit_logs', [
+                'fields'      => 'mac,user_name,switch_id,nas_port_id,auth_status,reason,created_at',
+                'limit'       => max(1, $limit),
+                'sort'        => 'created_at DESC',
+                'switch_id'   => $deviceId,
+                'auth_status' => 'reject'
+            ]);
+        }
 
         $out = [];
         foreach (($rows['items'] ?? []) as $r) {
