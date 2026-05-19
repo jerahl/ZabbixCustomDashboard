@@ -1,17 +1,22 @@
 // Main app shell — sidebar now lives in global-nav.jsx (unified across all pages)
 const Sidebar = ({ tab, setTab }) => <GlobalSidebar active="wireless" />;
 
-const Topbar = ({ onCmdK, activeAp }) => (
+const Topbar = ({ onCmdK, activeAp }) => {
+  const h = window.ZBX_HOST || {};
+  const site  = (activeAp && activeAp.site)  || h.site  || "—";
+  const floor = (activeAp && activeAp.floor) || h.floor || "—";
+  const id    = (activeAp && activeAp.id)    || h.visible_name || h.host || "—";
+  return (
   <div className="topbar">
     <div className="icon-btn" title="Back"><Icon name="back" /></div>
     <div className="crumb">
       <span>Wireless APs</span>
       <span className="sep">/</span>
-      <span>{activeAp ? activeAp.site : "Bryant High School"}</span>
+      <span>{site}</span>
       <span className="sep">/</span>
-      <span>{activeAp ? activeAp.floor : "1st Floor"}</span>
+      <span>{floor}</span>
       <span className="sep">/</span>
-      <span className="seg">{activeAp ? activeAp.id : "BHS-56-Hallway"}</span>
+      <span className="seg">{id}</span>
     </div>
     <div className="spacer" />
     <div className="search" onClick={onCmdK}>
@@ -22,7 +27,8 @@ const Topbar = ({ onCmdK, activeAp }) => (
     <div className="icon-btn" title="Refresh"><Icon name="refresh" /></div>
     <div className="icon-btn" title="More"><Icon name="more" /></div>
   </div>
-);
+  );
+};
 
 const PageHeader = ({ timeRange, setTimeRange, host }) => (
   <div className="page-header">
@@ -364,12 +370,21 @@ const ApPfActionRow = ({ mac, uplink }) => {
 
 // ───────── AP Host Navigator (left rail) ─────────
 const APNavigator = ({ activeId, onSelect, query, setQuery }) => {
+  // activeId may be a Zabbix hostid (preferred, set by the parent from
+  // ZBX_HOST.hostid) or, for synthetic rows, an AP id string. Match
+  // both so legacy callers keep working.
+  const isActive = (ap) => {
+    if (!activeId) return false;
+    const s = String(activeId);
+    if (ap.hostid && String(ap.hostid) === s) return true;
+    return ap.id === activeId;
+  };
   // Start with every site collapsed except the one containing the active
   // AP. Search expands all matched sections regardless (handled below).
   const [sites, setSites] = React.useState(() =>
     (window.AP_SITES || []).map(s => ({
       ...s,
-      expanded: Array.isArray(s.aps) && s.aps.some(a => a.id === activeId)
+      expanded: Array.isArray(s.aps) && s.aps.some(isActive)
     }))
   );
   const toggle = (idx) => {
@@ -461,7 +476,7 @@ const APNavigator = ({ activeId, onSelect, query, setQuery }) => {
                   return (
                     <div
                       key={ap.id}
-                      className={"ap-nav-host" + (ap.id === activeId ? " active" : "")}
+                      className={"ap-nav-host" + (isActive(ap) ? " active" : "")}
                       onClick={() => onSelect(ap)}
                       title={`${ap.id} · ${ap.ip} · ${ap.model} · ${loadTitle}`}
                     >

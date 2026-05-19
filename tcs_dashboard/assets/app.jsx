@@ -7,29 +7,39 @@ const App = () => {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [clientFilter, setClientFilter] = useState("all");
   const [t, setTweak] = useTweaks(window.TWEAK_DEFAULTS);
-  // Default to whatever host the server boot-loaded — that's the one whose
-  // data is on the page. Fall back to the tweak-remembered selection or the
-  // first AP in the navigator.
-  const bootHostName = window.ZBX_HOST && window.ZBX_HOST.host;
-  const firstNavAp   = (window.AP_SITES && window.AP_SITES[0] && window.AP_SITES[0].aps && window.AP_SITES[0].aps[0]) || null;
-  const [activeApId, setActiveApId] = useState(bootHostName || t.selectedAp || (firstNavAp && firstNavAp.id) || "");
+  // Default to whatever host the server boot-loaded — that's the one
+  // whose data is on the page. Match on hostid: the AP nav records use
+  // ZBX visible_name as `id`, while ZBX_HOST.host is the technical name
+  // (e.g. "TMS-GYM-2" vs. visible "TMS-GYM#2"), so an id-string match
+  // silently misses and used to fall through to a hardcoded placeholder.
+  const bootHostid = window.ZBX_HOST && window.ZBX_HOST.hostid ? String(window.ZBX_HOST.hostid) : "";
+  const firstNavAp = (window.AP_SITES && window.AP_SITES[0] && window.AP_SITES[0].aps && window.AP_SITES[0].aps[0]) || null;
+  const [activeApId, setActiveApId] = useState(bootHostid || t.selectedAp || (firstNavAp && firstNavAp.hostid && String(firstNavAp.hostid)) || (firstNavAp && firstNavAp.id) || "");
   const [apQuery, setApQuery] = useState("");
 
-  // Resolve the active AP from AP_SITES — fall back to ZBX_HOST defaults
+  // Resolve the active AP from AP_SITES. Prefer hostid (stable, set on
+  // every real nav record); fall back to legacy id-string matching for
+  // synthetic rows that don't carry one. NO hardcoded placeholder —
+  // returning undefined here is preferable to painting an unrelated AP
+  // over the real ZBX_HOST data.
   const allAps = window.AP_SITES.flatMap(s => s.aps.map(a => ({ ...a, site: s.name })));
-  const activeAp = allAps.find(a => a.id === activeApId) || allAps.find(a => a.id === "BHS-56-Hallway") || allAps[0];
-  const host = {
+  const activeAp = allAps.find(a => a.hostid && String(a.hostid) === String(activeApId))
+                || allAps.find(a => a.id === activeApId)
+                || null;
+  // Merge nav-rail enrichment (loadLevel, status, clients, etc.) over
+  // ZBX_HOST. When activeAp resolves cleanly, prefer the boot host's
+  // canonical fields (host name, ip, model) — they're already correct
+  // for the page that was server-rendered; only fold in the per-AP
+  // metadata the nav rail uniquely provides.
+  const host = activeAp ? {
     ...window.ZBX_HOST,
-    host: activeAp.id,
-    visible_name: activeAp.id,
-    ip: activeAp.ip,
-    model: activeAp.model,
-    site: activeAp.site,
-    floor: activeAp.floor,
-    clients: activeAp.clients,
+    site:       activeAp.site       ?? window.ZBX_HOST.site,
+    floor:      activeAp.floor      ?? window.ZBX_HOST.floor,
+    clients:    activeAp.clients    ?? window.ZBX_HOST.clients,
     apProblems: activeAp.problems,
-    apStatus: activeAp.status,
-  };
+    apStatus:   activeAp.status,
+  } : { ...window.ZBX_HOST };
+
   const onSelectAp = (ap) => {
     // When the AP carries a real Zabbix hostid (i.e. came from
     // boot.apSites, not the synthetic single-host fallback), reload the
