@@ -590,16 +590,17 @@ class ActionDashboard extends ActionBase {
         }
 
         // Merge PacketFence RADIUS reject events for this AP if PF is wired
-        // — same source field the EventsTab badge consumes. The AP's MAC
-        // is the called_station_id in PF's radius_audit_log, so we ask the
-        // PF client to look up failures keyed by the host's XIQ MAC.
+        // — same source field the EventsTab badge consumes. PF only
+        // populates nas_ip_address on failed auths (switch / switch_ip /
+        // switch_mac stay empty), so look up failures by the AP's Mgt0
+        // IPv4 from its primary Zabbix interface.
         $pfMacros = $this->resolvePfMacros($hostid);
         if ($pfMacros !== null) {
-            $apMac = $this->readHostMacro($hostid, '{$XIQ_MAC}');
-            if ($apMac !== null && $apMac !== '') {
+            $apIp = $this->primaryInterfaceIp($hostid);
+            if ($apIp !== '') {
                 try {
                     $pf   = PFClient::fromMacros($pfMacros);
-                    $fails = $pf->authFailuresForNode($apMac, 25);
+                    $fails = $pf->authFailuresForNode($apIp, 25);
                     foreach ($fails as $f) {
                         $ts = isset($f['ts']) ? strtotime((string) $f['ts']) : 0;
                         if ($ts <= 0) $ts = time();
@@ -1180,6 +1181,22 @@ class ActionDashboard extends ActionBase {
      */
     private array $pfApUplinkDebug = [];
 
+    /**
+     * IP of the host's primary (main=1) network interface — the Mgt0 IPv4
+     * for an XIQ AP. Empty string when the host has no interfaces or none
+     * marked main.
+     */
+    private function primaryInterfaceIp(string $hostid): string {
+        $ifaces = API::HostInterface()->get([
+            'output'  => ['ip', 'main'],
+            'hostids' => [$hostid]
+        ]) ?: [];
+        foreach ($ifaces as $i) {
+            if ((int) ($i['main'] ?? 0) === 1) return (string) ($i['ip'] ?? '');
+        }
+        return '';
+    }
+
     /** Read a single host-scoped user macro by name; null when unset. */
     private function readHostMacro(string $hostid, string $macro): ?string {
         $rows = API::UserMacro()->get([
@@ -1758,13 +1775,15 @@ class ActionDashboard extends ActionBase {
         }
 
         try {
-            $pf = PFClient::fromMacros($macros);
-            $deviceId = (string) ($host['host'] ?? '');
-            if ($deviceId === '') return [[], []];
+            $pf       = PFClient::fromMacros($macros);
+            $hostName = (string) ($host['host'] ?? '');
+            $hostIp   = (string) ($host['ip']   ?? '');
 
             return [
-                $pf->clientsForNode($deviceId),
-                $pf->authFailuresForNode($deviceId)
+                $hostName !== '' ? $pf->clientsForNode($hostName)    : [],
+                // PF's radius_audit_logs only populates nas_ip_address
+                // on failed auths — feed the AP/switch Mgt0 IPv4.
+                $hostIp   !== '' ? $pf->authFailuresForNode($hostIp) : []
             ];
         }
         catch (\Throwable $e) {
