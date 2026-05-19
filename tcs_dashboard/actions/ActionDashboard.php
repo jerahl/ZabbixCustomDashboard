@@ -61,6 +61,7 @@ class ActionDashboard extends ActionBase {
             'wiredPorts'  => [],
             'ssids'       => [],
             'clientsDebug'=> [],
+            'pfApUplinkDebug' => [],
             'pfAdminUrl'  => '',
             'alertsDetail'=> [
                 'activeTriggers' => [],
@@ -155,7 +156,8 @@ class ActionDashboard extends ActionBase {
             $xiqClients          = $this->collectXiqClients($hostid);
             $boot['pfClients']   = $xiqClients !== [] ? $xiqClients : $pfClients;
             $boot['pfAuthFails'] = $pfAuthFails;
-            $boot['clientsDebug'] = $this->clientsDebug;
+            $boot['clientsDebug']    = $this->clientsDebug;
+            $boot['pfApUplinkDebug'] = $this->pfApUplinkDebug;
 
             // Fold PF client counts into the alerts summary. activeClients is
             // anything PF currently has in a non-rejected/non-quarantined
@@ -1168,6 +1170,16 @@ class ActionDashboard extends ActionBase {
      */
     private array $clientsDebug = [];
 
+    /**
+     * Diagnostic trace for the PF AP uplink lookup — recorded by
+     * collectPfApUplink() and surfaced in boot['pfApUplinkDebug'] so the
+     * debug panel can show exactly which MAC was queried, which
+     * locationlog rows PF returned, how each one scored, and which one
+     * the uplink picker chose. Used to triage the "device card shows a
+     * random incorrect switch and port" symptom.
+     */
+    private array $pfApUplinkDebug = [];
+
     /** Read a single host-scoped user macro by name; null when unset. */
     private function readHostMacro(string $hostid, string $macro): ?string {
         $rows = API::UserMacro()->get([
@@ -1495,17 +1507,40 @@ class ActionDashboard extends ActionBase {
      * @return array{switch:string,switchIp:string,port:string,ifDesc:string}|null
      */
     private function collectPfApUplink(string $hostid, string $apMac): ?array {
+        $this->pfApUplinkDebug = [
+            'inputMac'     => $apMac,
+            'normalizedMac'=> '',
+            'pfUrl'        => '',
+            'apiCall'      => '',
+            'macrosOk'     => null,
+            'rowCount'     => 0,
+            'rows'         => [],
+            'pickedIndex'  => null,
+            'fallback'     => null,
+            'result'       => null,
+            'error'        => null,
+        ];
+
         // Normalize whatever the XIQ macro / fleet item gave us
         // (AA-BB-CC..., aabbccddeeff, AABB.CCDD.EEFF, mixed case) into the
         // canonical PF format: lowercase colon-separated hex.
         $mac = self::normalizeMacForPf($apMac);
-        if ($mac === '') return null;
+        $this->pfApUplinkDebug['normalizedMac'] = $mac;
+        if ($mac === '') {
+            $this->pfApUplinkDebug['error'] = 'empty / unparseable input MAC';
+            return null;
+        }
 
         $macros = $this->resolvePfMacros($hostid);
+        $this->pfApUplinkDebug['macrosOk'] = ($macros !== null);
         if ($macros === null) {
+            $this->pfApUplinkDebug['error'] = 'PF macros not configured for this host';
             error_log('[tcs_dashboard] PF AP uplink: PF macros not configured for host '.$hostid);
             return null;
         }
+        $this->pfApUplinkDebug['pfUrl']   = (string) ($macros['url'] ?? '');
+        $this->pfApUplinkDebug['apiCall'] = 'POST '.rtrim((string) ($macros['url'] ?? ''), '/')
+                                          .'/api/v1/locationlogs/search  mac equals '.$mac.', limit 20, sort start_time DESC';
 
         try {
             $pf = PFClient::fromMacros($macros);
@@ -1518,15 +1553,35 @@ class ActionDashboard extends ActionBase {
             // at a random switch IP. Filter the window to find the actual
             // uplink, then fall back to the newest if nothing qualifies.
             $rows = $pf->recentLocationsForMac($mac, 20);
-            $loc  = self::pickApUplinkRow($rows);
+            $this->pfApUplinkDebug['rowCount'] = count($rows);
+            $this->pfApUplinkDebug['rows']     = self::summarisePfLocRows($rows);
+
+            $picked      = null;
+            $pickedIndex = null;
+            $loc         = self::pickApUplinkRowWithIndex($rows, $picked, $pickedIndex);
+            $this->pfApUplinkDebug['pickedIndex'] = $pickedIndex;
+            // Annotate scores onto the debug row summaries so it's obvious
+            // why a particular entry won.
+            if (is_array($this->pfApUplinkDebug['rows']) && $picked !== null) {
+                foreach ($picked as $i => $score) {
+                    if (isset($this->pfApUplinkDebug['rows'][$i])) {
+                        $this->pfApUplinkDebug['rows'][$i]['_score']  = $score;
+                        $this->pfApUplinkDebug['rows'][$i]['_picked'] = ($i === $pickedIndex);
+                    }
+                }
+            }
 
             if (!is_array($loc) || self::pfLocRowEmpty($loc)) {
                 // Final fallback so we don't regress operators who had a
                 // working card with the old code: ask the singleton endpoint.
                 $loc = $pf->locationFor($mac);
+                $this->pfApUplinkDebug['fallback'] = is_array($loc)
+                    ? 'locationFor() singleton (no qualifying recent row)'
+                    : 'locationFor() returned nothing';
             }
 
             if (!is_array($loc) || self::pfLocRowEmpty($loc)) {
+                $this->pfApUplinkDebug['error'] = 'no usable locationlog for '.$mac;
                 error_log('[tcs_dashboard] PF AP uplink: no locationlog for '.$mac.' (host '.$hostid.')');
                 return null;
             }
@@ -1538,7 +1593,7 @@ class ActionDashboard extends ActionBase {
             // even if the input MAC came in dashed / dotted / mixed-case.
             $rowMac = self::normalizeMacForPf((string) ($loc['mac'] ?? ''));
             if ($rowMac === '') $rowMac = $mac;
-            return [
+            $out = [
                 'mac'          => $rowMac,
                 'switch'       => $sw,
                 'switchIp'     => $swIp,
@@ -1546,11 +1601,95 @@ class ActionDashboard extends ActionBase {
                 'port'         => (string) ($loc['port']      ?? ''),
                 'ifDesc'       => (string) ($loc['ifDesc']    ?? ''),
             ];
+            $this->pfApUplinkDebug['result'] = $out;
+            return $out;
         }
         catch (\Throwable $e) {
+            $this->pfApUplinkDebug['error'] = $e->getMessage();
             error_log('[tcs_dashboard] PF AP uplink lookup ('.$mac.'): '.$e->getMessage());
             return null;
         }
+    }
+
+    /**
+     * Compact representation of a PF locationlog row for the debug panel —
+     * keeps the fields that drive uplink scoring and drops the rest.
+     *
+     * @param array<int, array<string, mixed>> $rows
+     * @return array<int, array<string, mixed>>
+     */
+    private static function summarisePfLocRows(array $rows): array {
+        $out = [];
+        foreach ($rows as $r) {
+            if (!is_array($r)) continue;
+            $out[] = [
+                'mac'             => (string) ($r['mac']             ?? ''),
+                'switch'          => (string) ($r['switch']          ?? ''),
+                'switch_ip'       => (string) ($r['switch_ip']       ?? ''),
+                'port'            => (string) ($r['port']            ?? ''),
+                'ifDesc'          => (string) ($r['ifDesc']          ?? ''),
+                'connection_type' => (string) ($r['connection_type'] ?? ''),
+                'role'            => (string) ($r['role']            ?? ''),
+                'ssid'            => (string) ($r['ssid']            ?? ''),
+                'start_time'      => (string) ($r['start_time']      ?? ''),
+                'end_time'        => (string) ($r['end_time']        ?? ''),
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Pick the locationlog row that represents the AP's actual wired
+     * uplink, from a DESC-sorted list of recent rows for one MAC.
+     *
+     * Scoring (highest wins):
+     *   +4  session still open (end_time empty / zero-date)
+     *   +3  connection_type is wired (Ethernet, etc — not Wireless)
+     *   +2  row has a real switch hostname (not just an IP)
+     *   +1  port string is non-empty
+     *   -3  connection_type is Wireless (this is the AP serving clients,
+     *       not the AP plugging in — exclude unless nothing else exists)
+     *
+     * On ties the input order (DESC by start_time) wins. Fills $scores
+     * with the per-row score map and $pickedIndex with the winning
+     * index so the debug panel can show the scoring decision.
+     *
+     * @param array<int, array<string, mixed>> $rows
+     * @param array<int, int>|null             $scores      filled by reference
+     * @param int|null                         $pickedIndex filled by reference
+     */
+    private static function pickApUplinkRowWithIndex(array $rows, ?array &$scores, ?int &$pickedIndex): ?array {
+        $scores      = [];
+        $pickedIndex = null;
+        if (!$rows) return null;
+        $best      = null;
+        $bestScore = PHP_INT_MIN;
+        foreach ($rows as $i => $r) {
+            if (!is_array($r)) {
+                $scores[$i] = PHP_INT_MIN;
+                continue;
+            }
+            $score = 0;
+            $end   = trim((string) ($r['end_time'] ?? ''));
+            if ($end === '' || $end === '0000-00-00 00:00:00') $score += 4;
+
+            $type = strtolower((string) ($r['connection_type'] ?? ''));
+            if ($type !== '' && str_contains($type, 'wireless')) {
+                $score -= 3;
+            } elseif ($type !== '') {
+                $score += 3;
+            }
+            if (trim((string) ($r['switch'] ?? '')) !== '')    $score += 2;
+            if (trim((string) ($r['port']   ?? '')) !== '')    $score += 1;
+
+            $scores[$i] = $score;
+            if ($score > $bestScore) {
+                $bestScore   = $score;
+                $best        = $r;
+                $pickedIndex = $i;
+            }
+        }
+        return $best;
     }
 
     /**
@@ -1593,50 +1732,6 @@ class ActionDashboard extends ActionBase {
             if ($anyHit  !== '') return $anyHit;
         }
         return '';
-    }
-
-    /**
-     * Pick the locationlog row that represents the AP's actual wired
-     * uplink, from a DESC-sorted list of recent rows for one MAC.
-     *
-     * Scoring (highest wins):
-     *   +4  session still open (end_time empty / zero-date)
-     *   +3  connection_type is wired (Ethernet, etc — not Wireless)
-     *   +2  row has a real switch hostname (not just an IP)
-     *   +1  port string is non-empty
-     *   -3  connection_type is Wireless (this is the AP serving clients,
-     *       not the AP plugging in — exclude unless nothing else exists)
-     *
-     * On ties the input order (DESC by start_time) wins, so newer rows
-     * trump older equivalents.
-     */
-    private static function pickApUplinkRow(array $rows): ?array {
-        if (!$rows) return null;
-        $best = null;
-        $bestScore = PHP_INT_MIN;
-        foreach ($rows as $r) {
-            if (!is_array($r)) continue;
-            $score = 0;
-            $end = trim((string) ($r['end_time'] ?? ''));
-            if ($end === '' || $end === '0000-00-00 00:00:00') $score += 4;
-
-            $type = strtolower((string) ($r['connection_type'] ?? ''));
-            if ($type !== '' && str_contains($type, 'wireless')) {
-                $score -= 3;
-            } elseif ($type !== '') {
-                // Ethernet, Ethernet-NoEAP, Ethernet-EAP, etc.
-                $score += 3;
-            }
-
-            if (trim((string) ($r['switch'] ?? '')) !== '')    $score += 2;
-            if (trim((string) ($r['port']   ?? '')) !== '')    $score += 1;
-
-            if ($score > $bestScore) {
-                $bestScore = $score;
-                $best = $r;
-            }
-        }
-        return $best;
     }
 
     /** PF v11+ canonical MAC format: 12 lowercase hex digits in colon pairs. */

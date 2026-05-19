@@ -110,7 +110,8 @@
         window.ZBX_EVENTS    = Array.isArray(b.events)      ? b.events      : [];
         window.WIRED_PORTS   = Array.isArray(b.wiredPorts)  ? b.wiredPorts  : [];
         window.SSIDS         = Array.isArray(b.ssids)       ? b.ssids       : [];
-        window.TCS_CLIENTS_DEBUG = (b.clientsDebug && typeof b.clientsDebug === 'object') ? b.clientsDebug : {};
+        window.TCS_CLIENTS_DEBUG     = (b.clientsDebug    && typeof b.clientsDebug    === 'object') ? b.clientsDebug    : {};
+        window.TCS_PF_AP_UPLINK_DEBUG = (b.pfApUplinkDebug && typeof b.pfApUplinkDebug === 'object') ? b.pfApUplinkDebug : {};
         window.PF_ADMIN_BASE = typeof b.pfAdminUrl === 'string' ? b.pfAdminUrl : '';
         window.ALERTS_DETAIL = (b.alertsDetail && typeof b.alertsDetail === 'object') ? b.alertsDetail : {
             activeTriggers: [], triggerCount: 0, last24h: { count: 0, bySeverity: {} }, lastFiredAgo: null

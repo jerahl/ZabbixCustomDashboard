@@ -698,6 +698,10 @@ const DebugPanel = () => {
             })()}
           </DebugSection>
 
+          <DebugSection title="PF AP uplink lookup">
+            <PfApUplinkDebug />
+          </DebugSection>
+
           <DebugSection title="Collection sizes">
             {Object.entries(collections).map(([k, v]) => (
               <DebugKV key={k} k={k} v={String(v)} tone={v === 0 ? "warn" : null} />
@@ -719,6 +723,88 @@ const DebugPanel = () => {
               </pre>
             </details>
           </DebugSection>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// PF AP uplink lookup diagnostic — surfaces the exact MAC queried, the
+// PF API call, every locationlog row returned, the per-row score, and
+// the row the uplink picker chose. Used to triage cases where the
+// device card's Uplink tile points at a clearly wrong switch/port.
+const PfApUplinkDebug = () => {
+  const d = window.TCS_PF_AP_UPLINK_DEBUG || {};
+  if (!d || Object.keys(d).length === 0) {
+    return <div style={{ color: "var(--muted)" }}>(no diagnostic — collector didn't run; load with ?hostid=N)</div>;
+  }
+  const rows = Array.isArray(d.rows) ? d.rows : [];
+  const result = d.result || null;
+  return (
+    <div>
+      <DebugKV k="input MAC"        v={d.inputMac      || "—"} />
+      <DebugKV k="normalized MAC"   v={d.normalizedMac || "—"} tone={!d.normalizedMac ? "err" : null} />
+      <DebugKV k="PF base URL"      v={d.pfUrl         || "—"} />
+      <DebugKV k="macros configured" v={d.macrosOk === null ? "—" : String(d.macrosOk)} tone={d.macrosOk === false ? "err" : null} />
+      <DebugKV k="API call"         v={d.apiCall       || "—"} />
+      <DebugKV k="rows returned"    v={String(d.rowCount ?? 0)} tone={(d.rowCount ?? 0) === 0 ? "warn" : null} />
+      <DebugKV k="picked index"     v={d.pickedIndex === null || d.pickedIndex === undefined ? "—" : String(d.pickedIndex)} />
+      <DebugKV k="fallback path"    v={d.fallback || "—"} tone={d.fallback ? "warn" : null} />
+      <DebugKV k="error"            v={d.error    || "—"} tone={d.error ? "err" : null} />
+
+      {result && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontFamily: "var(--sans)", fontSize: 10, textTransform: "uppercase",
+                        letterSpacing: 0.6, color: "var(--muted)", marginBottom: 4 }}>
+            Picked uplink (shown on card)
+          </div>
+          <DebugKV k="mac"            v={result.mac          || "—"} />
+          <DebugKV k="switch"         v={result.switch       || "—"} />
+          <DebugKV k="switch IP"      v={result.switchIp     || "—"} />
+          <DebugKV k="switch hostid"  v={result.switchHostid || "—"} tone={!result.switchHostid ? "warn" : null} />
+          <DebugKV k="port (ifIndex)" v={result.port         || "—"} />
+          <DebugKV k="ifDesc"         v={result.ifDesc       || "—"} />
+        </div>
+      )}
+
+      {rows.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontFamily: "var(--sans)", fontSize: 10, textTransform: "uppercase",
+                        letterSpacing: 0.6, color: "var(--muted)", marginBottom: 4 }}>
+            Raw locationlog rows ({rows.length}, newest first)
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table className="tbl" style={{ width: "100%", fontSize: 10.5 }}>
+              <thead>
+                <tr>
+                  <th>#</th><th>score</th><th>type</th><th>switch</th><th>switch_ip</th>
+                  <th>port</th><th>ifDesc</th><th>start</th><th>end</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => {
+                  const picked = !!r._picked;
+                  const cellStyle = picked ? { background: "rgba(91,140,255,0.10)", fontWeight: 600 } : null;
+                  return (
+                    <tr key={i} style={cellStyle}>
+                      <td>{picked ? `★ ${i}` : i}</td>
+                      <td>{r._score === undefined ? "—" : r._score}</td>
+                      <td>{r.connection_type || "—"}</td>
+                      <td>{r.switch    || "—"}</td>
+                      <td>{r.switch_ip || "—"}</td>
+                      <td>{r.port      || "—"}</td>
+                      <td style={{ color: "var(--muted)" }}>{r.ifDesc || "—"}</td>
+                      <td style={{ color: "var(--muted)" }}>{r.start_time || "—"}</td>
+                      <td style={{ color: "var(--muted)" }}>{r.end_time || "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 6 }}>
+            Scoring: +4 still-open session · +3 wired connection_type · +2 row has switch hostname · +1 row has port · −3 Wireless connection_type
+          </div>
         </div>
       )}
     </div>
