@@ -314,38 +314,43 @@ class PFClient {
      * @return array<int, array<string, mixed>>
      */
     public function authFailuresForNode(string $deviceId, int $limit = 50): array {
-        // Newer PF exposes a structured search endpoint; older releases only
-        // accept the flat listing with query-string filters. Try /search
-        // first, fall back to the legacy listing on 404 (route absent).
-        // radius_audit_logs uses switch_id / nas_port_id — NOT the
-        // switch / port names locationlogs/search exposes.
+        // PF stores the NAS under three columns depending on how the device
+        // is provisioned: switch_id (PF config key, often the IP), switch_ip_address,
+        // and switch_mac. Callers here pass a mix — switch IPs, AP MACs, or
+        // Zabbix hostnames — so match the value across all three.
+        //
+        // Note: PF's /search endpoint requires the `query` field, returns
+        // 404 ("entries not found") when zero rows match, and only accepts
+        // the `equals` / `contains` operator family (NOT `is`).
         $body = [
             'cursor' => 0,
             'limit'  => max(1, $limit),
             'sort'   => ['created_at DESC'],
             'fields' => [
-                'mac', 'user_name', 'switch_id', 'nas_port_id',
-                'auth_status', 'reason', 'created_at'
+                'mac', 'user_name', 'switch_id', 'switch_ip_address', 'switch_mac',
+                'nas_port_id', 'auth_status', 'reason', 'created_at'
             ],
             'query'  => [
                 'op' => 'and',
                 'values' => [
-                    ['op' => 'equals', 'field' => 'switch_id',   'value' => $deviceId],
-                    ['op' => 'equals', 'field' => 'auth_status', 'value' => 'reject']
+                    ['op' => 'equals', 'field' => 'auth_status', 'value' => 'reject'],
+                    [
+                        'op' => 'or',
+                        'values' => [
+                            ['op' => 'equals', 'field' => 'switch_id',         'value' => $deviceId],
+                            ['op' => 'equals', 'field' => 'switch_ip_address', 'value' => $deviceId],
+                            ['op' => 'equals', 'field' => 'switch_mac',        'value' => $deviceId],
+                        ]
+                    ]
                 ]
             ]
         ];
         try {
             $rows = $this->call('POST', '/api/v1/radius_audit_logs/search', [], $body);
         } catch (\RuntimeException $e) {
-            if (!str_contains($e->getMessage(), 'HTTP 404')) throw $e;
-            $rows = $this->get('/api/v1/radius_audit_logs', [
-                'fields'      => 'mac,user_name,switch_id,nas_port_id,auth_status,reason,created_at',
-                'limit'       => max(1, $limit),
-                'sort'        => 'created_at DESC',
-                'switch_id'   => $deviceId,
-                'auth_status' => 'reject'
-            ]);
+            // PF answers 404 instead of 200+empty when nothing matches.
+            if (str_contains($e->getMessage(), 'HTTP 404')) return [];
+            throw $e;
         }
 
         $out = [];
