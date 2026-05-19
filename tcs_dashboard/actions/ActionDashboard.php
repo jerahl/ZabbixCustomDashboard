@@ -101,8 +101,18 @@ class ActionDashboard extends ActionBase {
                 $boot['host']['floor']          = $fleet['floor']    ?? ($boot['host']['floor'] ?? '');
                 $boot['host']['location']       = $fleet['location'] ?? '';
                 $boot['host']['model']          = $fleet['model']    ?? ($boot['host']['model'] ?? '');
-                $boot['host']['xiqConnected']   = $fleet['connected']      !== null ? (int) $fleet['connected']      : null;
-                $boot['host']['configMismatch'] = $fleet['configmismatch'] !== null ? (int) $fleet['configmismatch'] : null;
+                // xiq.ap.connected[<serial>] on the fleet host: "1"/"0",
+                // or "" when the dependent item hasn't reported yet — and
+                // (int)"" === 0, which would mis-render a healthy AP as
+                // XIQ=DOWN. Treat empty / missing as unknown (null).
+                $xiqRaw = $fleet['connected'] ?? null;
+                $boot['host']['xiqConnected'] = ($xiqRaw === null || $xiqRaw === '')
+                    ? null
+                    : (((int) $xiqRaw) === 1 ? 1 : 0);
+                $cmRaw = $fleet['configmismatch'] ?? null;
+                $boot['host']['configMismatch'] = ($cmRaw === null || $cmRaw === '')
+                    ? null
+                    : (int) $cmRaw;
                 $boot['host']['xiqId']          = $fleet['xiqid']    ?? '';
                 $boot['host']['mac']            = $fleet['mac']      ?? '';
                 $boot['host']['policy']         = $fleet['policy']   ?? '';
