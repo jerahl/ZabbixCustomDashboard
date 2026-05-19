@@ -1457,17 +1457,62 @@ class ActionDashboard extends ActionBase {
                 return null;
             }
 
+            $sw   = (string) ($loc['switch']    ?? '');
+            $swIp = (string) ($loc['switch_ip'] ?? '');
             return [
-                'switch'   => (string) ($loc['switch']    ?? ''),
-                'switchIp' => (string) ($loc['switch_ip'] ?? ''),
-                'port'     => (string) ($loc['port']      ?? ''),
-                'ifDesc'   => (string) ($loc['ifDesc']    ?? ''),
+                'switch'       => $sw,
+                'switchIp'     => $swIp,
+                'switchHostid' => self::resolveSwitchHostid($sw, $swIp),
+                'port'         => (string) ($loc['port']      ?? ''),
+                'ifDesc'       => (string) ($loc['ifDesc']    ?? ''),
             ];
         }
         catch (\Throwable $e) {
             error_log('[tcs_dashboard] PF AP uplink lookup ('.$mac.'): '.$e->getMessage());
             return null;
         }
+    }
+
+    /**
+     * Resolve a Zabbix hostid for the upstream switch — matched first by
+     * exact host name (PF's locationlog.switch typically holds the Zabbix
+     * host name) and then by SNMP/agent interface IP. Returns '' when
+     * nothing matches, in which case the Cycle PoE button stays disabled.
+     */
+    private static function resolveSwitchHostid(string $switchName, string $switchIp): string {
+        $name = trim($switchName);
+        if ($name !== '') {
+            $rows = API::Host()->get([
+                'output' => ['hostid'],
+                'filter' => ['host' => $name]
+            ]) ?: [];
+            if (!$rows) {
+                $rows = API::Host()->get([
+                    'output' => ['hostid'],
+                    'filter' => ['name' => $name]
+                ]) ?: [];
+            }
+            if ($rows) return (string) $rows[0]['hostid'];
+        }
+        $ip = trim($switchIp);
+        if ($ip !== '' && $ip !== '0.0.0.0') {
+            $ifaces = API::HostInterface()->get([
+                'output' => ['hostid', 'type'],
+                'filter' => ['ip' => $ip]
+            ]) ?: [];
+            $snmpHit = '';
+            $anyHit  = '';
+            foreach ($ifaces as $iface) {
+                if ((int) ($iface['type'] ?? 0) === 2 && $snmpHit === '') {
+                    $snmpHit = (string) $iface['hostid'];
+                } elseif ($anyHit === '') {
+                    $anyHit = (string) $iface['hostid'];
+                }
+            }
+            if ($snmpHit !== '') return $snmpHit;
+            if ($anyHit  !== '') return $anyHit;
+        }
+        return '';
     }
 
     /**

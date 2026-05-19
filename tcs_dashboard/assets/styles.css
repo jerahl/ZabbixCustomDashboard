@@ -293,6 +293,11 @@ body {
 }
 .pf-btn:hover { background: rgba(255,255,255,0.04); }
 .pf-btn[disabled] { opacity: 0.5; cursor: wait; }
+.pf-btn.warn {
+  color: var(--warn);
+  border-color: rgba(245,179,0,0.4);
+}
+.pf-btn.warn:hover { background: rgba(245,179,0,0.08); }
 .pf-msg { font-size: 10.5px; color: var(--muted); margin-left: 6px; align-self: center; }
 .pf-msg.err { color: var(--warn); }
 

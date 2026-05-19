@@ -199,11 +199,114 @@ const DeviceSidecar = ({ host }) => {
       </div>
 
       <div className="dev-h-actions">
-        <button className="btn primary"><Icon name="refresh" size={12} /> Reboot</button>
-        <button className="btn"><Icon name="external" size={12} /> SSH</button>
-        <button className="btn ghost"><Icon name="more" size={12} /></button>
+        <ApPfActionRow mac={host.mac} uplink={uplink} />
       </div>
     </div>
+  );
+};
+
+// Per-AP PF write-actions + a "Cycle PoE" button that bounces the AP's
+// upstream switch port. Mirrors ClientPfActionRow in tabs.jsx (View in
+// PacketFence + Reevaluate access) with one extra action specific to
+// wired APs. The upstream switch is the host PF's locationlog points
+// at — its hostid is resolved server-side in collectPfApUplink.
+const ApPfActionRow = ({ mac, uplink }) => {
+  const [busy, setBusy] = React.useState(null);
+  const [msg,  setMsg]  = React.useState({ kind: "", text: "" });
+
+  // PF stores MACs lowercase colon-separated; force it here so callers
+  // don't have to remember.
+  const pfMac = String(mac || "").toLowerCase();
+  const hasPf = !!pfMac;
+  const adminBase = (window.PF_ADMIN_BASE || "").replace(/\/+$/, "");
+  const viewHref = adminBase && pfMac
+    ? `${adminBase}/admin/#/node/${encodeURIComponent(pfMac)}`
+    : null;
+
+  // ifIndex → "<member>:<port>". PF locationlog.port holds the SNMP
+  // ifIndex (e.g. 5036 → member 5, port 36) — same encoding the
+  // switches page's rConfig snippet expects.
+  const portIdx = uplink && /^\d+$/.test(String(uplink.port || "").trim())
+    ? parseInt(uplink.port, 10) : 0;
+  const member  = portIdx > 0 ? Math.floor(portIdx / 1000) : 0;
+  const portNum = portIdx > 0 ? portIdx % 1000 : 0;
+  const switchHostid = (uplink && uplink.switchHostid) || "";
+  const canCycle = !!(switchHostid && member && portNum);
+
+  const runPf = React.useCallback(async (op, label) => {
+    if (!pfMac || busy) return;
+    if (typeof window.tcsPfDeviceAction !== "function") {
+      setMsg({ kind: "err", text: "endpoint missing" });
+      return;
+    }
+    setBusy(op);
+    setMsg({ kind: "", text: `${label}…` });
+    const r = await window.tcsPfDeviceAction(pfMac, op);
+    setBusy(null);
+    setMsg(r && r.ok
+      ? { kind: "", text: r.message || "ok" }
+      : { kind: "err", text: (r && (r.error || r.message)) || "failed" });
+    setTimeout(() => setMsg({ kind: "", text: "" }), 6000);
+  }, [pfMac, busy]);
+
+  const runCycle = React.useCallback(async () => {
+    if (busy) return;
+    if (typeof window.tcsCyclePoeOnSwitch !== "function") {
+      setMsg({ kind: "err", text: "endpoint missing" });
+      return;
+    }
+    if (!canCycle) {
+      setMsg({ kind: "err", text: "no upstream port" });
+      setTimeout(() => setMsg({ kind: "", text: "" }), 4000);
+      return;
+    }
+    setBusy("cycle_poe");
+    setMsg({ kind: "", text: "cycling…" });
+    const r = await window.tcsCyclePoeOnSwitch(switchHostid, member, portNum);
+    setBusy(null);
+    setMsg(r && r.ok
+      ? { kind: "", text: r.message || "queued" }
+      : { kind: "err", text: (r && (r.error || r.message)) || "failed" });
+    setTimeout(() => setMsg({ kind: "", text: "" }), 6000);
+  }, [busy, canCycle, switchHostid, member, portNum]);
+
+  return (
+    <>
+      {viewHref ? (
+        <a className="pf-btn" href={viewHref} target="_blank" rel="noopener noreferrer">
+          <Icon name="external" size={11}/> View in PacketFence
+        </a>
+      ) : (
+        <span className="pf-btn" style={{ opacity: 0.4, cursor: "not-allowed" }} title="PF admin URL not configured">
+          View in PacketFence
+        </span>
+      )}
+      <button
+        type="button"
+        className="pf-btn"
+        onClick={() => runPf("reevaluate_access", "reevaluating")}
+        disabled={!!busy || !hasPf}
+        title={hasPf
+          ? "Re-run PF role / access evaluation for this AP (issues a CoA)"
+          : "AP MAC not known — set the {$XIQ_MAC} macro"}
+      >
+        <Icon name="refresh" size={11}/> {busy === "reevaluate_access" ? "REEVALUATING…" : "Reevaluate access"}
+      </button>
+      <button
+        type="button"
+        className="pf-btn warn"
+        onClick={runCycle}
+        disabled={!!busy || !canCycle}
+        title={canCycle
+          ? `Cycle PoE on ${uplink.switch || uplink.switchIp || "switch"} port ${member}:${portNum} via rConfig`
+          : "Upstream switch/port not known — needs a PF locationlog entry on a Zabbix-monitored switch"}
+      >
+        <Icon name="refresh" size={11}/> {busy === "cycle_poe"
+          ? "CYCLING…"
+          : `Cycle PoE${canCycle ? ` ${member}:${portNum}` : ""}`}
+      </button>
+      {msg.text && <span className={"pf-msg" + (msg.kind === "err" ? " err" : "")}>{msg.text}</span>}
+    </>
   );
 };
 
