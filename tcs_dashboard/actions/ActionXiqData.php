@@ -10,8 +10,8 @@ use Modules\TcsDashboard\Lib\XIQFleetClient;
  * GET zabbix.php?action=tcs.xiq.data
  *
  * Returns the rollup payload consumed by xiq-bridge.jsx (XIQ_TOTALS, XIQ_SITES,
- * XIQ_BANDS, XIQ_SSIDS, XIQ_PROBLEM_APS, XIQ_CHANNEL_GRID, XIQ_CLIENT_MIX,
- * XIQ_THROUGHPUT, XIQ_FIRMWARE, XIQ_ROAMING, XIQ_EVENTS).
+ * XIQ_SSIDS, XIQ_TOP_CLIENT_APS, XIQ_CHANNEL_GRID, XIQ_CLIENT_MIX,
+ * XIQ_FIRMWARE, XIQ_ROAMING, XIQ_EVENTS).
  *
  * Data flow:
  *   1. Read the fleet master item xiq.devices.raw — a JSON array of every AP
@@ -21,7 +21,7 @@ use Modules\TcsDashboard\Lib\XIQFleetClient;
  *      sites, firmware, and the AP rows under "Top problem APs".
  *
  *   2. Query API::Problem for the auto-created per-AP hosts (tag target=xiq).
- *      Drives problemAps reasons/severities and the events stream.
+ *      Drives the Recent Events stream and totals.aps.critical.
  *
  *   3. Optional XIQ direct call (when {$XIQ_TOKEN} is set): pull /clients/active
  *      for the per-client PHY / OS / SSID breakdown that Zabbix does NOT
@@ -46,15 +46,6 @@ class ActionXiqData extends ActionDataBase {
     /** How many sites to sample for the channel heatmap. Fleet util / noise
      *  pull the whole fleet (paged); only the heatmap is sampled. */
     private const D360_SITE_SAMPLE = 8;
-
-    /** Aggregate throughput: 24 hourly buckets over the last 24h. */
-    private const THROUGHPUT_CACHE_TTL    = 300;
-    private const THROUGHPUT_CACHE_KEY    = 'tcs_dashboard:xiq_throughput:v1';
-    private const THROUGHPUT_BUCKETS      = 24;
-    private const THROUGHPUT_BUCKET_SEC   = 3600;
-    /** Cap on client IDs per bucket. ~500 IDs keeps URL length under 5 KB and
-     *  fleet bytes-per-bucket gets extrapolated by (total / sampleSize). */
-    private const THROUGHPUT_SAMPLE_MAX   = 500;
 
     /** Host group prefix the template's host prototype puts each AP under. */
     private const SITE_PREFIX = 'Site/Wireless/';
@@ -90,6 +81,7 @@ class ActionXiqData extends ActionDataBase {
                 $payload['bands']                       = $fleet['bands'];
                 $payload['sources']['zbx']              = 'live';
                 $payload['loading']                     = false;
+                $payload['topClientAps']                = self::collectTopClientAps($fleet['devices']);
             } else {
                 $payload['sources']['zbx'] = 'empty';
                 $payload['error']          = $payload['error']
@@ -101,12 +93,13 @@ class ActionXiqData extends ActionDataBase {
             $payload['error']          = $payload['error'] ?? ('Zabbix fleet query failed: ' . $e->getMessage());
         }
 
-        // Layer 2: problems + events for per-AP hosts (tag target=xiq).
+        // Layer 2: events + critical-count rollup from per-AP host problems
+        // (tag target=xiq). The Top Problem APs panel was replaced by Top
+        // Client APs (fleet-derived above), so we no longer build problem
+        // rows here — only the events stream and the critical AP counter.
         try {
             $problemCtx = self::collectProblemContext();
-            $payload['problemAps'] = $problemCtx['problemAps'];
-            $payload['events']     = $problemCtx['events'];
-            // Refine totals.aps.critical with real problem severities.
+            $payload['events']                    = $problemCtx['events'];
             $payload['totals']['aps']['critical'] = $problemCtx['criticalCount'];
         } catch (\Throwable $e) {
             error_log('[tcs_dashboard] xiq.data problems: ' . $e->getMessage());
@@ -151,17 +144,8 @@ class ActionXiqData extends ActionDataBase {
                 // stays at 0 util. Log only.
             }
 
-            // Layer 5: aggregate throughput strip — 24 hourly buckets over the
-            // last 24h, computed from /clients/usage with a 500-client sample
-            // extrapolated to fleet scale. Cached 5min.
-            try {
-                self::overlayXiqThroughput($payload, $token);
-            } catch (\Throwable $e) {
-                error_log('[tcs_dashboard] xiq.data throughput overlay: ' . $e->getMessage());
-            }
-
-            // Layer 6: merge XIQ-side problem signal into Top Problem APs and
-            // Recent Events. Reuses the usage-capacity grid (already fetched by
+            // Layer 6: merge XIQ-side capacity/offline signal into Recent
+            // Events. Reuses the usage-capacity grid (already fetched by
             // Layer 4a) and the fleet's offline devices — no extra XIQ calls.
             try {
                 self::overlayXiqProblemContext($payload, $token, $fleet);
@@ -185,19 +169,17 @@ class ActionXiqData extends ActionDataBase {
             'totals'  => [
                 'aps'         => ['total' => 0, 'online' => 0, 'offline' => 0, 'critical' => 0, 'idle' => 0],
                 'clients'     => ['total' => 0, 'dot11ax' => 0, 'dot11ac' => 0, 'legacy' => 0],
-                'throughput'  => ['agg_gbps' => 0.0, 'peak_gbps' => 0.0, 'ingress_gbps' => 0.0, 'egress_gbps' => 0.0],
                 'ssids'       => ['total' => 0, 'broadcast' => 0],
                 'rfHealth'    => ['score' => 0, 'target' => 90],
                 'firmware'    => ['compliant' => 0, 'behind' => 0, 'ahead' => 0, 'target' => '—'],
                 'controllers' => ['region' => '—', 'instance' => '—', 'lastSync' => '—'],
             ],
-            'sites'       => [],
-            'bands'       => self::bandShells(),
-            'ssids'       => [],
-            'problemAps'  => [],
+            'sites'        => [],
+            'bands'        => self::bandShells(),
+            'ssids'        => [],
+            'topClientAps' => [],
             'channelGrid' => ['sites' => [], 'channels' => [36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 149, 153, 157, 161], 'matrix' => []],
             'clientMix'   => ['standards' => [], 'os' => []],
-            'throughput'  => [],
             'firmware'    => ['versions' => []],
             'roaming'     => ['buckets' => [], 'rate24h' => 0.0],
             'events'      => [],
@@ -499,31 +481,20 @@ class ActionXiqData extends ActionDataBase {
 
     // ── Layer 2: problems + events on per-AP hosts ──────────────────────────
 
-    /** Returns { problemAps, events, criticalCount }. */
+    /** Returns { events, criticalCount }. */
     private static function collectProblemContext(): array {
         $hosts = API::Host()->get([
             'output'        => ['hostid', 'host', 'name'],
-            'selectTags'    => ['tag', 'value'],
             'tags'          => [self::AP_HOST_TAG + ['operator' => 1]],
             'evaltype'      => 0,
             'inheritedTags' => true,
             'preservekeys'  => true,
         ]) ?: [];
-        if (!$hosts) return ['problemAps' => [], 'events' => [], 'criticalCount' => 0];
+        if (!$hosts) return ['events' => [], 'criticalCount' => 0];
 
         $hostids   = array_keys($hosts);
         $hostNames = [];
         foreach ($hosts as $h) $hostNames[(string) $h['hostid']] = (string) ($h['name'] ?: $h['host']);
-
-        $hostMeta = [];
-        foreach ($hosts as $h) {
-            $meta = ['model' => '—', 'building' => '—'];
-            foreach ($h['tags'] ?? [] as $t) {
-                if (($t['tag'] ?? '') === 'ap_model') $meta['model']    = (string) $t['value'];
-                if (($t['tag'] ?? '') === 'building') $meta['building'] = (string) $t['value'];
-            }
-            $hostMeta[(string) $h['hostid']] = $meta;
-        }
 
         $problems = API::Problem()->get([
             'output'    => ['eventid', 'name', 'severity', 'clock'],
@@ -552,7 +523,6 @@ class ActionXiqData extends ActionDataBase {
         $now = time();
         $criticalCount = 0;
         $countedHosts  = [];
-        $problemAps    = [];
         $eventRows     = [];
         foreach ($problems as $p) {
             $hid = $hostByEvent[(string) $p['eventid']] ?? null;
@@ -562,25 +532,6 @@ class ActionXiqData extends ActionDataBase {
             if (in_array($sevLabel, ['high', 'disaster'], true) && !isset($countedHosts[$hid])) {
                 $criticalCount++;
                 $countedHosts[$hid] = true;
-            }
-
-            // Top problem APs — keep up to 8 highest-severity rows
-            if (count($problemAps) < 32) {
-                $age = max(0, $now - (int) $p['clock']);
-                $problemAps[] = [
-                    'ap'      => $hostNames[$hid],
-                    'hostid'  => (string) $hid,
-                    'site'    => self::siteIdFromName($hostMeta[$hid]['building'] ?? '—'),
-                    'model'   => $hostMeta[$hid]['model'] ?? '—',
-                    'reason'  => (string) $p['name'],
-                    'sev'     => $sevLabel,
-                    'util2'   => 0,
-                    'util5'   => 0,
-                    'clients' => 0,
-                    'age'     => sprintf('%02d:%02d:%02d', intdiv($age, 3600), intdiv($age % 3600, 60), $age % 60),
-                    '_clock'  => (int) $p['clock'],
-                    '_sevr'   => self::sevRank($sevLabel),
-                ];
             }
 
             // Events stream — keep up to 12 newest rows from the last hour
@@ -597,118 +548,69 @@ class ActionXiqData extends ActionDataBase {
             }
         }
 
-        usort($problemAps, fn($a, $b) => $b['_sevr'] <=> $a['_sevr'] ?: $b['_clock'] <=> $a['_clock']);
-        $problemAps = array_slice($problemAps, 0, 8);
-        foreach ($problemAps as &$p) { unset($p['_clock'], $p['_sevr']); }
-        unset($p);
-
-        return ['problemAps' => $problemAps, 'events' => $eventRows, 'criticalCount' => $criticalCount];
+        return ['events' => $eventRows, 'criticalCount' => $criticalCount];
     }
 
-    // ── Layer 6: XIQ-side problem context (merges into Top Problem APs +
-    //             Recent Events) ──────────────────────────────────────────────
+    // ── Top Client APs (fleet-derived, no XIQ calls) ───────────────────────
 
     /**
-     * Pull XIQ-side problem signal and merge it into the Zabbix-side
-     * problemAps + events arrays already on $payload.
+     * Top N APs by connected client count. Driven by xiq.ap.clients[<serial>]
+     * fleet items (already in $devices['clients']). No XIQ calls — populates
+     * straight from the Zabbix fleet snapshot.
      *
-     * Two sources, both already fetched elsewhere in this request:
+     * Tracks online APs only; an offline AP with stale client count would be
+     * misleading on this list. Falls back to all devices if nothing is
+     * marked online (e.g. fleet master item hasn't run yet).
+     */
+    private static function collectTopClientAps(array $devices, int $limit = 8): array {
+        if (!$devices) return [];
+
+        $pool = array_filter($devices, fn($d) => ($d['state'] ?? '') === 'online');
+        if (!$pool) $pool = $devices;
+
+        usort($pool, fn($a, $b) => ((int) ($b['clients'] ?? 0)) <=> ((int) ($a['clients'] ?? 0)));
+        $top = array_slice($pool, 0, $limit);
+
+        $rows = [];
+        foreach ($top as $d) {
+            $clients = (int) ($d['clients'] ?? 0);
+            if ($clients <= 0) continue;
+            $rows[] = [
+                'ap'       => (string) ($d['name'] ?? '—'),
+                'hostid'   => (string) ($d['hostid'] ?? ''),
+                'site'     => self::siteIdFromName((string) ($d['building'] ?? '—')),
+                'building' => (string) ($d['building'] ?? ''),
+                'model'    => (string) ($d['model'] ?? '—'),
+                'clients'  => $clients,
+                'state'    => (string) ($d['state'] ?? ''),
+            ];
+        }
+        return $rows;
+    }
+
+    // ── Layer 6: XIQ-side event context (merges into Recent Events) ────────
+
+    /**
+     * Pull XIQ-side capacity / offline signal and merge it into Recent
+     * Events on $payload. Two sources, both free (no extra XIQ calls):
      *
-     *   1. usage-capacity grid — rows with has_usage_capacity_issue=true,
-     *      radio_5g_utilization_score >= 75, or unhealthy_clients > 0
-     *      become XIQ-source problem AP rows. The grid is fetched by
-     *      Layer 4a; we hit the 5-min client-level cache.
+     *   1. usage-capacity grid — rows with has_usage_capacity_issue=true
+     *      become "Capacity issue" events. The grid is fetched by Layer 4a
+     *      and reused from the 5-min client-level cache.
      *
      *   2. fleet devices — APs in 'offline' state become "AP disconnected"
-     *      events on the Recent Events strip. No extra XIQ calls — Layer 1
-     *      already populated $fleet['devices'].
-     *
-     * Merging rules: keep Zabbix entries first (they carry the real Zabbix
-     * trigger name, hostid, and timestamp), then append XIQ-derived entries
-     * until we hit the cap. Cap matches the React-side render budget — 8 for
-     * problemAps, 12 for events.
+     *      events. Layer 1 already populated $fleet['devices'].
      */
     private static function overlayXiqProblemContext(array &$payload, string $token, array $fleet): void {
         $fleetClient = XIQFleetClient::fromToken($token);
 
-        // ── Source A: usage-capacity grid (cached 5 min by getUsageCapacityGrid) ─
+        // ── Source A: usage-capacity grid (cached 5 min) ────────────────────
         $grid = [];
         try {
             $grid = $fleetClient->getUsageCapacityGrid(300);
         } catch (\Throwable $e) {
             error_log('[tcs_dashboard] problem-context grid fetch: ' . $e->getMessage());
         }
-
-        // hostname → hostid lookup so XIQ rows can deep-link into AP Detail.
-        $hostidByName = [];
-        foreach ($fleet['devices'] ?? [] as $d) {
-            $name = strtolower((string) ($d['name'] ?? ''));
-            if ($name !== '' && !empty($d['hostid'])) $hostidByName[$name] = (string) $d['hostid'];
-        }
-
-        $xiqProblemAps = [];
-        foreach ($grid as $r) {
-            if (!is_array($r)) continue;
-            $util       = (int) ($r['radio_5g_utilization_score'] ?? 0);
-            $unhealthy  = (int) ($r['unhealthy_clients'] ?? 0);
-            $healthy    = (int) ($r['healthy_clients'] ?? 0);
-            $hasCap     = !empty($r['has_usage_capacity_issue']);
-            // Only surface rows that are actually problematic.
-            if (!$hasCap && $util < 75 && $unhealthy < 1) continue;
-
-            if ($hasCap || $util >= 90)      $sev = 'high';
-            elseif ($util >= 75)             $sev = 'warning';
-            elseif ($unhealthy >= 5)         $sev = 'warning';
-            else                             $sev = 'info';
-
-            if ($hasCap) {
-                $reason = sprintf('Capacity issue · 5G util %d%% · %d unhealthy clients', $util, $unhealthy);
-            } elseif ($util >= 75) {
-                $reason = sprintf('5GHz channel utilization %d%%', $util);
-            } else {
-                $reason = sprintf('%d unhealthy clients', $unhealthy);
-            }
-
-            $hostname = (string) ($r['hostname'] ?? '');
-            $building = (string) ($r['building'] ?? ($r['site'] ?? '—'));
-            $model    = (string) ($r['product_type'] ?? '—');
-            $hostid   = $hostidByName[strtolower($hostname)] ?? '';
-
-            $xiqProblemAps[] = [
-                'ap'      => $hostname !== '' ? $hostname : ('xiq-' . ($r['device_id'] ?? '?')),
-                'hostid'  => $hostid,
-                'site'    => self::siteIdFromName($building !== '' ? $building : '—'),
-                'model'   => $model,
-                'reason'  => $reason,
-                'sev'     => $sev,
-                'util2'   => 0,
-                'util5'   => $util,
-                'clients' => $healthy + $unhealthy,
-                'age'     => '—',
-                '_sevr'   => self::sevRank($sev),
-                '_util'   => $util,
-            ];
-        }
-        usort($xiqProblemAps, fn($a, $b) => $b['_sevr'] <=> $a['_sevr'] ?: $b['_util'] <=> $a['_util']);
-        foreach ($xiqProblemAps as &$p) { unset($p['_sevr'], $p['_util']); }
-        unset($p);
-
-        // Merge: Zabbix first, then XIQ rows that aren't already represented.
-        $existing  = $payload['problemAps'] ?? [];
-        $seenNames = [];
-        foreach ($existing as $p) {
-            $n = strtolower(trim((string) ($p['ap'] ?? '')));
-            if ($n !== '') $seenNames[$n] = true;
-        }
-        $merged = $existing;
-        foreach ($xiqProblemAps as $p) {
-            if (count($merged) >= 8) break;
-            $n = strtolower(trim($p['ap']));
-            if ($n === '' || isset($seenNames[$n])) continue;
-            $seenNames[$n] = true;
-            $merged[] = $p;
-        }
-        $payload['problemAps'] = array_slice($merged, 0, 8);
 
         // ── Source B: offline APs from the fleet → Recent Events ────────────
         $now       = time();
@@ -880,120 +782,6 @@ class ActionXiqData extends ActionDataBase {
             $rem = $client->getRateLimitRemaining();
             $payload['warning'] = "XIQ rate-limit low: $rem requests left this hour.";
         }
-    }
-
-    // ── Layer 5: Aggregate throughput (24-bucket strip) ─────────────────────
-
-    /**
-     * Build the Aggregate Throughput · 24h strip from /clients/usage.
-     *
-     * Algorithm:
-     *   1. Pull active clients (already cached by overlayXiqClients).
-     *   2. Sample up to {@see self::THROUGHPUT_SAMPLE_MAX} client IDs.
-     *   3. For each of 24 hourly buckets ending now, call /clients/usage
-     *      with the sample IDs + that hour's window. Sum response.usage
-     *      across the sample → bytes/hour for the sample.
-     *   4. Extrapolate to fleet by ratio: fleet_bytes = sample_bytes ×
-     *      (totalClients / sampleSize).
-     *   5. Convert bytes/hour → Gbps (×8 / 3600 / 1e9).
-     *   6. Write the strip + agg/peak/ingress/egress to the payload.
-     *
-     * Cost: 24 calls per cache miss, APCu-cached 5min → 288 calls/hr in the
-     * worst case. Fits in the 7,500/hr XIQ quota with huge headroom.
-     *
-     * Ingress vs egress: /clients/usage gives a single combined byte count,
-     * no rx/tx split. We approximate 60% ingress / 40% egress (a typical
-     * school WLAN download-heavy mix). When XIQ exposes a split we can fix.
-     */
-    private static function overlayXiqThroughput(array &$payload, string $token): void {
-        if (function_exists('apcu_fetch')) {
-            $hit = apcu_fetch(self::THROUGHPUT_CACHE_KEY, $ok);
-            if ($ok && is_array($hit)) {
-                self::applyThroughput($payload, $hit);
-                return;
-            }
-        }
-
-        $fleetClient = XIQFleetClient::fromToken($token);
-        $clients = $fleetClient->getActiveClients();
-        if (!$clients) return;
-
-        $ids = [];
-        foreach ($clients as $c) {
-            // /clients/active responses use `id`; older shapes use `client_id`.
-            $id = $c['id'] ?? $c['client_id'] ?? null;
-            if ($id !== null && (int) $id > 0) $ids[] = (int) $id;
-        }
-        if (!$ids) return;
-
-        $totalClients = count($ids);
-        $sampleIds    = $ids;
-        if ($totalClients > self::THROUGHPUT_SAMPLE_MAX) {
-            shuffle($sampleIds);
-            $sampleIds = array_slice($sampleIds, 0, self::THROUGHPUT_SAMPLE_MAX);
-        }
-        $sampleSize    = count($sampleIds);
-        $extrapolation = $sampleSize > 0 ? ($totalClients / $sampleSize) : 1.0;
-
-        // Build all 24 hour-bucket windows up front, dispatch in parallel.
-        // Sequential round-trips dominated cold-load time (24 × ~300ms = 7-15s);
-        // curl_multi collapses that to one wall-clock RTT.
-        $now     = time();
-        $windows = [];
-        for ($i = self::THROUGHPUT_BUCKETS - 1; $i >= 0; $i--) {
-            $bucketEnd   = $now - $i * self::THROUGHPUT_BUCKET_SEC;
-            $bucketStart = $bucketEnd - self::THROUGHPUT_BUCKET_SEC;
-            $windows[$i] = [$bucketStart * 1000, $bucketEnd * 1000];
-        }
-
-        try {
-            $batched = $fleetClient->getClientsUsageMulti($sampleIds, $windows);
-        } catch (\Throwable $e) {
-            error_log('[tcs_dashboard] clients/usage multi: ' . $e->getMessage());
-            $batched = [];
-        }
-
-        $strip = [];
-        for ($i = self::THROUGHPUT_BUCKETS - 1; $i >= 0; $i--) {
-            $rows = $batched[$i] ?? null;
-            if (!is_array($rows)) { $strip[] = 0.0; continue; }
-            $sampleBytes = 0;
-            foreach ($rows as $r) $sampleBytes += (int) ($r['usage'] ?? 0);
-            $fleetBytes  = $sampleBytes * $extrapolation;
-            // bytes / 3600 sec × 8 bits/byte / 1e9 = Gbps
-            $gbps = ($fleetBytes * 8.0) / 3600.0 / 1_000_000_000.0;
-            $strip[] = round($gbps, 2);
-        }
-
-        $aggGbps  = $strip ? array_sum($strip) / count($strip) : 0.0;
-        $peakGbps = $strip ? max($strip) : 0.0;
-
-        $aggregate = [
-            'strip'        => $strip,
-            'agg_gbps'     => round($aggGbps,  2),
-            'peak_gbps'    => round($peakGbps, 2),
-            'ingress_gbps' => round($aggGbps * 0.6, 2),
-            'egress_gbps'  => round($aggGbps * 0.4, 2),
-            'totalClients' => $totalClients,
-            'sampleSize'   => $sampleSize,
-        ];
-
-        if (function_exists('apcu_store')) {
-            apcu_store(self::THROUGHPUT_CACHE_KEY, $aggregate, self::THROUGHPUT_CACHE_TTL);
-        }
-        self::applyThroughput($payload, $aggregate);
-    }
-
-    private static function applyThroughput(array &$payload, array $agg): void {
-        if (!empty($agg['strip']) && is_array($agg['strip'])) {
-            $payload['throughput'] = $agg['strip'];
-        }
-        $payload['totals']['throughput'] = [
-            'agg_gbps'     => (float) ($agg['agg_gbps']     ?? 0),
-            'peak_gbps'    => (float) ($agg['peak_gbps']    ?? 0),
-            'ingress_gbps' => (float) ($agg['ingress_gbps'] ?? 0),
-            'egress_gbps'  => (float) ($agg['egress_gbps']  ?? 0),
-        ];
     }
 
     // ── Layer 4: d360 sampling (RF util / noise / channel grid) ─────────────

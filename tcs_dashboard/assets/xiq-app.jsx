@@ -1,6 +1,6 @@
 // XIQ Wireless Status — global overview rolled up from ExtremeCloud IQ
 // (read-through via the EXT source) joined with Zabbix host-level state.
-// Layout: KPI strip → throughput → site/band → SSID/problems → channel/firmware
+// Layout: KPI strip → sites → SSID/problems → channel/firmware
 // → client-mix/roaming → live events.
 
 const { useState, useEffect } = React;
@@ -13,24 +13,20 @@ const { useState, useEffect } = React;
 // event and bumps a render counter to force the tree to re-evaluate.
 let XIQ_TOTALS       = window.XIQ_TOTALS       || {};
 let XIQ_SITES        = window.XIQ_SITES        || [];
-let XIQ_BANDS        = window.XIQ_BANDS        || [];
 let XIQ_SSIDS        = window.XIQ_SSIDS        || [];
-let XIQ_PROBLEM_APS  = window.XIQ_PROBLEM_APS  || [];
+let XIQ_TOP_CLIENT_APS = window.XIQ_TOP_CLIENT_APS || [];
 let XIQ_CHANNEL_GRID = window.XIQ_CHANNEL_GRID || { sites: [], channels: [], matrix: [] };
 let XIQ_CLIENT_MIX   = window.XIQ_CLIENT_MIX   || { standards: [], os: [] };
-let XIQ_THROUGHPUT   = window.XIQ_THROUGHPUT   || [];
 let XIQ_FIRMWARE     = window.XIQ_FIRMWARE     || { versions: [] };
 let XIQ_ROAMING      = window.XIQ_ROAMING      || { buckets: [], rate24h: 0 };
 let XIQ_EVENTS       = window.XIQ_EVENTS       || [];
 window.addEventListener("tcs:xiq-data", () => {
   XIQ_TOTALS       = window.XIQ_TOTALS       || XIQ_TOTALS;
   XIQ_SITES        = window.XIQ_SITES        || XIQ_SITES;
-  XIQ_BANDS        = window.XIQ_BANDS        || XIQ_BANDS;
   XIQ_SSIDS        = window.XIQ_SSIDS        || XIQ_SSIDS;
-  XIQ_PROBLEM_APS  = window.XIQ_PROBLEM_APS  || XIQ_PROBLEM_APS;
+  XIQ_TOP_CLIENT_APS = window.XIQ_TOP_CLIENT_APS || XIQ_TOP_CLIENT_APS;
   XIQ_CHANNEL_GRID = window.XIQ_CHANNEL_GRID || XIQ_CHANNEL_GRID;
   XIQ_CLIENT_MIX   = window.XIQ_CLIENT_MIX   || XIQ_CLIENT_MIX;
-  XIQ_THROUGHPUT   = window.XIQ_THROUGHPUT   || XIQ_THROUGHPUT;
   XIQ_FIRMWARE     = window.XIQ_FIRMWARE     || XIQ_FIRMWARE;
   XIQ_ROAMING      = window.XIQ_ROAMING      || XIQ_ROAMING;
   XIQ_EVENTS       = window.XIQ_EVENTS       || XIQ_EVENTS;
@@ -122,74 +118,11 @@ const KPIStrip = () => {
           <div className="xiq-kpi-v">{t.clients.total.toLocaleString()}</div>
           <div className="xiq-kpi-foot">{t.clients.dot11ax.toLocaleString()} ax · {t.clients.dot11ac.toLocaleString()} ac · {t.clients.legacy} legacy</div>
         </div>
-        <div className="xiq-kpi-cell">
-          <div className="xiq-kpi-h"><span className="xiq-kpi-lbl">Aggregate Throughput</span><SourceBadge src="ext" /></div>
-          <div className="xiq-kpi-v">{t.throughput.agg_gbps.toFixed(2)}<span className="u">Gbps</span></div>
-          <div className="xiq-kpi-foot">↓ {t.throughput.ingress_gbps.toFixed(2)} · ↑ {t.throughput.egress_gbps.toFixed(2)} · peak {t.throughput.peak_gbps.toFixed(1)}</div>
-        </div>
         <div className="xiq-kpi-cell warn">
           <div className="xiq-kpi-h"><span className="xiq-kpi-lbl">RF Health Score</span><SourceBadge src="ext" /></div>
           <div className="xiq-kpi-v">{t.rfHealth.score}<span className="u">/ 100</span></div>
           <div className="xiq-kpi-bar"><div style={{ width: `${t.rfHealth.score}%`, background: t.rfHealth.score >= t.rfHealth.target ? "var(--ok)" : "var(--warn)" }} /></div>
           <div className="xiq-kpi-foot">target ≥ {t.rfHealth.target} · 2.4 GHz dragging</div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// ───────── Throughput 24h strip ─────────
-const ThroughputStrip = () => {
-  const data = XIQ_THROUGHPUT;
-  if (!data || data.length === 0) {
-    return (
-      <div className="card" style={{ marginBottom: 14 }}>
-        <div className="card-h">
-          <h3>Aggregate Throughput · 24h</h3>
-          <SourceBadge src="ext" />
-          <div className="h-spacer" />
-          <span className="h-meta">no XIQ throughput history yet</span>
-        </div>
-        <CardLoading
-          label={window.XIQ_LOADING ? "Loading throughput…" : "Throughput history requires XIQ d360 data (not yet wired)."}
-          spinning={!!window.XIQ_LOADING}
-        />
-      </div>
-    );
-  }
-  const max = Math.max(...data);
-  const total = data.reduce((a,b) => a+b, 0);
-  const last = data[data.length-1] ?? 0;
-  return (
-    <div className="card" style={{ marginBottom: 14 }}>
-      <div className="card-h">
-        <h3>Aggregate Throughput · 24h</h3>
-        <SourceBadge src="ext" />
-        <div className="h-spacer" />
-        <span className="h-meta">{(total).toFixed(0)} Gbps·h transferred · peak {(XIQ_TOTALS.throughput?.peak_gbps ?? 0).toFixed(1)} Gbps @ 12:00</span>
-      </div>
-      <div className="tput-row">
-        <div className="tput-bars">
-          {data.map((v, i) => (
-            <div key={i} className={"tput-bar" + (i === data.length - 1 ? " now" : "")} title={`${i}:00 — ${v.toFixed(1)} Gbps`}>
-              <div className="tput-bar-fill" style={{ height: `${(v/max)*100}%` }} />
-              {i % 4 === 0 && <div className="tput-bar-tick">{i.toString().padStart(2,"0")}:00</div>}
-            </div>
-          ))}
-        </div>
-        <div className="tput-side">
-          <div className="tput-stat">
-            <div className="tput-stat-lbl"><span className="dot" style={{ background: "var(--zbx)" }} /> Right now</div>
-            <div className="tput-stat-v">{last.toFixed(2)}<span className="u">Gbps</span></div>
-          </div>
-          <div className="tput-stat">
-            <div className="tput-stat-lbl">Mean (24h)</div>
-            <div className="tput-stat-v">{(total/24).toFixed(2)}<span className="u">Gbps</span></div>
-          </div>
-          <div className="tput-stat">
-            <div className="tput-stat-lbl">Clients / AP</div>
-            <div className="tput-stat-v">{(XIQ_TOTALS.aps?.online > 0 ? (XIQ_TOTALS.clients.total / XIQ_TOTALS.aps.online) : 0).toFixed(1)}</div>
-          </div>
         </div>
       </div>
     </div>
@@ -264,43 +197,6 @@ const APSiteGrid = ({ filter, setFilter }) => {
   );
 };
 
-// ───────── Radio band health ─────────
-const BandHealth = () => (
-  <div className="card">
-    <div className="card-h">
-      <h3>Radio Band Health</h3>
-      <SourceBadge src="ext" />
-      <div className="h-spacer" />
-      <span className="h-meta">fleet avg · last 5m</span>
-    </div>
-    <div>
-      {XIQ_BANDS.map(b => {
-        const utilColor = b.util > 70 ? "var(--err)" : b.util > 55 ? "var(--warn)" : "var(--ok)";
-        return (
-          <div className="band-row" key={b.id}>
-            <div className="band-tag" style={{ background: `${b.color}22`, color: b.color, border: `1px solid ${b.color}55` }}>
-              {b.label}
-            </div>
-            <div className="band-mid">
-              <div className="band-h">
-                <span className="label">{b.clients.toLocaleString()} clients</span>
-                <span className="meta">{b.aps.toLocaleString()} radios · noise {b.noise} dBm</span>
-                <span className="util" style={{ color: utilColor }}>{b.util}%</span>
-              </div>
-              <div className="band-bar"><div style={{ width: `${b.util}%`, background: utilColor }} /></div>
-              <div className="band-foot">
-                <span>{b.saturated > 0 ? `${b.saturated} radios > 75% util` : "no saturated radios"}</span>
-                <span className="h-spacer" style={{ flex: 1 }} />
-              </div>
-            </div>
-            <Sparkline data={b.spark} color={b.color} width={100} height={32} fill={true} threshold={75} />
-          </div>
-        );
-      })}
-    </div>
-  </div>
-);
-
 // ───────── SSID table ─────────
 const SSIDTable = () => (
   <table className="tbl ssid-tbl">
@@ -344,48 +240,50 @@ const SSIDTable = () => (
   </table>
 );
 
-// ───────── Top problem APs list ─────────
-const ProblemAPList = () => (
-  <div className="papl">
-    {XIQ_PROBLEM_APS.map((p, i) => {
-      const c = xiqSev[p.sev] || xiqSev.info;
-      const u2cls = p.util2 > 75 ? "err" : p.util2 > 55 ? "warn" : "";
-      const u5cls = p.util5 > 75 ? "err" : p.util5 > 55 ? "warn" : "";
-      // Click anywhere on the row to navigate to AP Detail. Only render the
-      // row as a link when we have a hostid (live data) — synthetic rows
-      // don't carry one and would otherwise produce a broken link.
-      const apDetailUrl = p.hostid
-        ? `${(window.TCS_NAV && window.TCS_NAV.apDetail) || "zabbix.php?action=tcs.dashboard.view"}&hostid=${encodeURIComponent(p.hostid)}`
-        : null;
-      const rowProps = apDetailUrl
-        ? { onClick: () => { window.location.href = apDetailUrl; }, style: { cursor: "pointer" }, title: `Open ${p.ap} detail` }
-        : {};
-      return (
-        <div className="pap-row" key={i} {...rowProps}>
-          <div className="pap-main">
-            <div className="pap-head">
-              <Sev level={p.sev} />
-              <span className="pap-id">{p.ap}</span>
-              <span className="site-chip">{p.site}</span>
-              <span className="pap-model">{p.model}</span>
+// ───────── Top client APs list (APs with the most connected clients) ─────────
+const TopClientAPList = () => {
+  if (!XIQ_TOP_CLIENT_APS || XIQ_TOP_CLIENT_APS.length === 0) {
+    return (
+      <CardLoading
+        label={window.XIQ_LOADING ? "Loading fleet client counts…" : "No client data yet — xiq.ap.clients items have not reported."}
+        spinning={!!window.XIQ_LOADING}
+      />
+    );
+  }
+  return (
+    <div className="papl">
+      {XIQ_TOP_CLIENT_APS.map((p, i) => {
+        const apDetailUrl = p.hostid
+          ? `${(window.TCS_NAV && window.TCS_NAV.apDetail) || "zabbix.php?action=tcs.dashboard.view"}&hostid=${encodeURIComponent(p.hostid)}`
+          : null;
+        const rowProps = apDetailUrl
+          ? { onClick: () => { window.location.href = apDetailUrl; }, style: { cursor: "pointer" }, title: `Open ${p.ap} detail` }
+          : {};
+        const rank = i + 1;
+        const loadCls = p.clients > 50 ? "err" : p.clients > 35 ? "warn" : "";
+        return (
+          <div className="pap-row" key={i} {...rowProps}>
+            <div className="pap-main">
+              <div className="pap-head">
+                <span className="pap-id">#{rank} · {p.ap}</span>
+                <span className="site-chip">{p.site}</span>
+                <span className="pap-model">{p.model}</span>
+              </div>
+              {p.building ? (
+                <div className="pap-reason" style={{ color: "var(--muted)" }}>{p.building}</div>
+              ) : null}
             </div>
-            <div className="pap-reason" style={{ color: c.fg }}>{p.reason}</div>
+            <div className="pap-age">
+              <span className={"v " + loadCls} style={{ fontSize: 18, fontWeight: 600 }}>{p.clients}</span>
+              <br /><span style={{ color: "var(--muted)" }}>clients</span>
+            </div>
+            <div><Icon name="chevron" size={12} /></div>
           </div>
-          <div className="pap-mini">
-            <div>2.4G <span className={"v " + u2cls}>{p.util2}%</span></div>
-            <div>5G <span className={"v " + u5cls}>{p.util5}%</span></div>
-          </div>
-          <div className="pap-age">{p.clients}<br /><span style={{ color: "var(--muted)" }}>clients</span></div>
-          <div>
-            {p.sev === "disaster" || p.sev === "high"
-              ? <span className="dot pulse-dot" style={{ background: "var(--err)" }} />
-              : <Icon name="chevron" size={12} />}
-          </div>
-        </div>
-      );
-    })}
-  </div>
-);
+        );
+      })}
+    </div>
+  );
+};
 
 // ───────── Channel utilization heat grid ─────────
 const ChannelGrid = () => {
@@ -662,11 +560,9 @@ const App = () => {
         <XIQBanner />
         <div className="body">
           <KPIStrip />
-          <ThroughputStrip />
 
-          <div className="row" data-xiq-row style={{ gridTemplateColumns: "1.5fr 1fr", marginBottom: 14 }}>
+          <div style={{ marginBottom: 14 }}>
             <APSiteGrid filter={t.siteFilter} setFilter={v => setTweak("siteFilter", v)} />
-            <BandHealth />
           </div>
 
           <div className="row" data-xiq-row style={{ gridTemplateColumns: "1.4fr 1fr", marginBottom: 14 }}>
@@ -684,14 +580,13 @@ const App = () => {
             </div>
             <div className="card">
               <div className="card-h">
-                <h3>Top Problem APs</h3>
-                <SourceBadge src="ext" />
+                <h3>Top Client APs</h3>
                 <SourceBadge src="zbx" />
                 <div className="h-spacer" />
-                <a className="h-link">Open in Zabbix <Icon name="external" size={11} /></a>
+                <span className="h-meta">most connected clients</span>
               </div>
               <div className="card-b tight">
-                <ProblemAPList />
+                <TopClientAPList />
               </div>
             </div>
           </div>

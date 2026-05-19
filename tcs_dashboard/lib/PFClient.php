@@ -362,6 +362,35 @@ class PFClient {
     }
 
     /**
+     * Recent locationlog rows for a single MAC, newest first.
+     *
+     * Unlike {@see locationsByMac} this does NOT dedupe — callers need to
+     * see the full history to filter for the *correct* row (still-open
+     * session, wired connection, sane port string). Same field list as
+     * locationsByMac so consumers can share their row-shape assumptions.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function recentLocationsForMac(string $mac, int $limit = 20): array {
+        $mac = strtolower(trim($mac));
+        if ($mac === '') return [];
+        $body = [
+            'cursor' => 0,
+            'limit'  => max(1, $limit),
+            'sort'   => ['start_time DESC'],
+            'fields' => [
+                'mac', 'switch', 'switch_ip', 'switch_mac', 'port', 'vlan', 'role',
+                'ssid', 'connection_type', 'connection_sub_type',
+                'dot1x_username', 'realm', 'ifDesc', 'start_time', 'end_time'
+            ],
+            'query'  => ['op' => 'equals', 'field' => 'mac', 'value' => $mac]
+        ];
+        $rows = $this->call('POST', '/api/v1/locationlogs/search', [], $body);
+        $items = $rows['items'] ?? [];
+        return is_array($items) ? $items : [];
+    }
+
+    /**
      * Fingerbank device-class label for a MAC, if PF has fingerprinted it.
      */
     public function fingerbankCategory(string $mac): ?string {

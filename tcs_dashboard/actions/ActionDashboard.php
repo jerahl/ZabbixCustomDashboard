@@ -106,6 +106,9 @@ class ActionDashboard extends ActionBase {
                 $boot['host']['xiqId']          = $fleet['xiqid']    ?? '';
                 $boot['host']['mac']            = $fleet['mac']      ?? '';
                 $boot['host']['policy']         = $fleet['policy']   ?? '';
+                $apMacForPf = (string) ($this->readHostMacro($hostid, '{$XIQ_MAC}') ?? '');
+                if ($apMacForPf === '') $apMacForPf = (string) ($fleet['mac'] ?? '');
+                $boot['host']['pfUplink']       = $this->collectPfApUplink($hostid, $apMacForPf);
             }
 
             [$pfClients, $pfAuthFails] = $this->collectPacketFence($hostid, $boot['host']);
@@ -321,20 +324,44 @@ class ActionDashboard extends ActionBase {
             'extremeap.firmware.0'
         ]);
 
-        // Pull fleet-side fields if this AP is auto-created by the XIQ
-        // template — the {$XIQ_SERIAL} macro tells us which serial to look
-        // up on the fleet host.
-        $fleet = $this->resolveXiqFleetFields($hostid, ['model', 'building', 'floor', 'location', 'adminstate']);
+        // Pull fleet-side fields the XIQ template publishes per AP, plus the
+        // host macros the prototype stamps at creation. Cascading fallbacks
+        // keep every row populated even when one source goes stale.
+        $fleet     = $this->resolveXiqFleetFields($hostid, [
+            'model', 'building', 'floor', 'location', 'adminstate',
+            'version', 'hostname', 'connected'
+        ]);
+        $xiqSerial = (string) ($this->readHostMacro($hostid, '{$XIQ_SERIAL}')    ?? '');
+        $xiqDevice = (string) ($this->readHostMacro($hostid, '{$XIQ_DEVICE_ID}') ?? '');
+
+        $serial   = self::firstNonEmpty([(string) ($live['extremeap.serial.0']   ?? ''), (string) ($inv['serialno_a'] ?? ''), $xiqSerial]);
+        $firmware = self::firstNonEmpty([(string) ($live['extremeap.firmware.0'] ?? ''), (string) ($fleet['version'] ?? ''), (string) ($inv['os'] ?? '')]);
+        $model    = self::firstNonEmpty([(string) ($fleet['model']    ?? ''), (string) ($inv['model'] ?? ''), (string) ($inv['type'] ?? '')]);
+        $building = self::firstNonEmpty([(string) ($fleet['building'] ?? '')]);
+        $floor    = self::firstNonEmpty([(string) ($fleet['floor']    ?? '')]);
+        $adminSt  = self::firstNonEmpty([(string) ($fleet['adminstate'] ?? '')]);
+        $location = self::firstNonEmpty([(string) ($fleet['location'] ?? '')]);
+        $connect  = $fleet['connected'] !== null && $fleet['connected'] !== ''
+            ? ((int) $fleet['connected'] === 1 ? 'connected' : 'disconnected')
+            : '—';
+
+        $hostName    = (string) ($h['host'] ?? '');
+        $visibleName = (string) ($h['name'] ?? '');
+        if ($hostName === '')    $hostName    = '—';
+        if ($visibleName === '') $visibleName = $hostName;
 
         return [
-            ['Host Name',     $h['host'] ?? '—',                                              'zbx'],
-            ['Visible Name',  $h['name'] ?? '—',                                              'zbx'],
-            ['Device Model',  $fleet['model']  ?? ($inv['model'] ?? '—'),                     $fleet['model']  ? 'ext' : 'zbx'],
-            ['Serial Number', $live['extremeap.serial.0']    ?? ($inv['serialno_a'] ?? '—'),  $live['extremeap.serial.0']    ? 'zbx' : 'zbx'],
-            ['Firmware',      $live['extremeap.firmware.0']  ?? ($inv['os']         ?? '—'),  $live['extremeap.firmware.0']  ? 'zbx' : 'zbx'],
-            ['Building',      $fleet['building'] ?? '—',                                       'ext'],
-            ['Floor',         $fleet['floor']    ?? '—',                                       'ext'],
-            ['Admin state',   $fleet['adminstate'] ?? '—',                                     'ext']
+            ['Host Name',      $hostName,                                 'zbx'],
+            ['Visible Name',   $visibleName,                              'zbx'],
+            ['Device Model',   $model,                                    $fleet['model']  ? 'ext' : 'zbx'],
+            ['Serial Number',  $serial,                                   $live['extremeap.serial.0'] ? 'zbx' : ($xiqSerial !== '' ? 'ext' : 'zbx')],
+            ['Firmware',       $firmware,                                 $live['extremeap.firmware.0'] ? 'zbx' : 'ext'],
+            ['Building',       $building,                                 'ext'],
+            ['Floor',          $floor,                                    'ext'],
+            ['Location',       $location,                                 'ext'],
+            ['Admin state',    $adminSt,                                  'ext'],
+            ['Cloud state',    $connect,                                  'ext'],
+            ['XIQ Device ID',  $xiqDevice !== '' ? $xiqDevice : '—',      'ext'],
         ];
     }
 
@@ -361,15 +388,31 @@ class ActionDashboard extends ActionBase {
         $speed_raw = $live['net.if.speed[ifSpeed.10]'] ?? null;
         $speed     = $speed_raw !== null ? $this->formatBps((float) $speed_raw) : '—';
 
-        $fleet = $this->resolveXiqFleetFields($hostid, ['mac', 'ip', 'policy']);
+        $fleet     = $this->resolveXiqFleetFields($hostid, ['mac', 'ip', 'policy']);
+        $xiqMac    = (string) ($this->readHostMacro($hostid, '{$XIQ_MAC}') ?? '');
+        // {$XIQ_MAC} is the canonical AP MAC the XIQ template stamps on the
+        // host at prototype creation; prefer it over the fleet-derived
+        // lastvalue (which can lag through a master-item refresh).
+        $mac       = self::firstNonEmpty([$xiqMac, (string) ($fleet['mac'] ?? '')]);
+        $macSrc    = $xiqMac !== '' ? 'zbx' : 'ext';
 
         return [
-            ['Mgt0 IPv4',     $primary['ip']  ?? '—',     'zbx'],
-            ['DNS Name',      $primary['dns'] ?? '—',     'zbx'],
-            ['MAC Address',   $fleet['mac']   ?? '—',     'ext'],
-            ['Uplink eth0',   "$oper · $speed",           'zbx'],
-            ['Network Policy', $fleet['policy'] ?? '—',   'ext']
+            ['Mgt0 IPv4',      self::firstNonEmpty([(string) ($primary['ip']  ?? ''), (string) ($fleet['ip'] ?? '')]), 'zbx'],
+            ['DNS Name',       self::firstNonEmpty([(string) ($primary['dns'] ?? '')]),                                'zbx'],
+            ['MAC Address',    $mac,                                                                                    $macSrc],
+            ['{$XIQ_MAC}',     $xiqMac !== '' ? $xiqMac : '—',                                                          'zbx'],
+            ['Uplink eth0',    "$oper · $speed",                                                                        'zbx'],
+            ['Network Policy', self::firstNonEmpty([(string) ($fleet['policy'] ?? '')]),                                'ext'],
         ];
+    }
+
+    /** Return the first non-empty trimmed string in $candidates, else '—'. */
+    private static function firstNonEmpty(array $candidates): string {
+        foreach ($candidates as $c) {
+            $s = trim((string) $c);
+            if ($s !== '') return $s;
+        }
+        return '—';
     }
 
     /**
@@ -1366,6 +1409,126 @@ class ActionDashboard extends ActionBase {
      * Device key passed to PF is the host's `host` field (typically the
      * switch hostname or AP MAC, which PF stores in locationlog.switch).
      */
+    /**
+     * Look up the AP's current upstream switch + port from PacketFence
+     * locationlogs. Drives the "Uplink" block on the device card (replaces
+     * the old "Zabbix Templates" listing).
+     *
+     * Returns null when PF is unconfigured for the host, the MAC is empty,
+     * or PF has no locationlog entry for this AP. The card renders an
+     * empty state in that case.
+     *
+     * @return array{switch:string,switchIp:string,port:string,ifDesc:string}|null
+     */
+    private function collectPfApUplink(string $hostid, string $apMac): ?array {
+        // Normalize whatever the XIQ macro / fleet item gave us
+        // (AA-BB-CC..., aabbccddeeff, AABB.CCDD.EEFF, mixed case) into the
+        // canonical PF format: lowercase colon-separated hex.
+        $mac = self::normalizeMacForPf($apMac);
+        if ($mac === '') return null;
+
+        $macros = $this->resolvePfMacros($hostid);
+        if ($macros === null) {
+            error_log('[tcs_dashboard] PF AP uplink: PF macros not configured for host '.$hostid);
+            return null;
+        }
+
+        try {
+            $pf = PFClient::fromMacros($macros);
+
+            // Pull a window of recent locationlog rows, sorted DESC, instead
+            // of trusting locationFor()'s "newest row wins" — an AP MAC can
+            // get logged from a non-uplink source (transient learn on a
+            // trunk, neighbor switch reflecting LLDP, another stack member
+            // briefly seeing the MAC), which left the device card pointing
+            // at a random switch IP. Filter the window to find the actual
+            // uplink, then fall back to the newest if nothing qualifies.
+            $rows = $pf->recentLocationsForMac($mac, 20);
+            $loc  = self::pickApUplinkRow($rows);
+
+            if (!is_array($loc) || self::pfLocRowEmpty($loc)) {
+                // Final fallback so we don't regress operators who had a
+                // working card with the old code: ask the singleton endpoint.
+                $loc = $pf->locationFor($mac);
+            }
+
+            if (!is_array($loc) || self::pfLocRowEmpty($loc)) {
+                error_log('[tcs_dashboard] PF AP uplink: no locationlog for '.$mac.' (host '.$hostid.')');
+                return null;
+            }
+
+            return [
+                'switch'   => (string) ($loc['switch']    ?? ''),
+                'switchIp' => (string) ($loc['switch_ip'] ?? ''),
+                'port'     => (string) ($loc['port']      ?? ''),
+                'ifDesc'   => (string) ($loc['ifDesc']    ?? ''),
+            ];
+        }
+        catch (\Throwable $e) {
+            error_log('[tcs_dashboard] PF AP uplink lookup ('.$mac.'): '.$e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Pick the locationlog row that represents the AP's actual wired
+     * uplink, from a DESC-sorted list of recent rows for one MAC.
+     *
+     * Scoring (highest wins):
+     *   +4  session still open (end_time empty / zero-date)
+     *   +3  connection_type is wired (Ethernet, etc — not Wireless)
+     *   +2  row has a real switch hostname (not just an IP)
+     *   +1  port string is non-empty
+     *   -3  connection_type is Wireless (this is the AP serving clients,
+     *       not the AP plugging in — exclude unless nothing else exists)
+     *
+     * On ties the input order (DESC by start_time) wins, so newer rows
+     * trump older equivalents.
+     */
+    private static function pickApUplinkRow(array $rows): ?array {
+        if (!$rows) return null;
+        $best = null;
+        $bestScore = PHP_INT_MIN;
+        foreach ($rows as $r) {
+            if (!is_array($r)) continue;
+            $score = 0;
+            $end = trim((string) ($r['end_time'] ?? ''));
+            if ($end === '' || $end === '0000-00-00 00:00:00') $score += 4;
+
+            $type = strtolower((string) ($r['connection_type'] ?? ''));
+            if ($type !== '' && str_contains($type, 'wireless')) {
+                $score -= 3;
+            } elseif ($type !== '') {
+                // Ethernet, Ethernet-NoEAP, Ethernet-EAP, etc.
+                $score += 3;
+            }
+
+            if (trim((string) ($r['switch'] ?? '')) !== '')    $score += 2;
+            if (trim((string) ($r['port']   ?? '')) !== '')    $score += 1;
+
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $best = $r;
+            }
+        }
+        return $best;
+    }
+
+    /** PF v11+ canonical MAC format: 12 lowercase hex digits in colon pairs. */
+    private static function normalizeMacForPf(string $mac): string {
+        $hex = strtolower(preg_replace('/[^0-9a-fA-F]/', '', $mac) ?? '');
+        if (strlen($hex) !== 12) return '';
+        return implode(':', str_split($hex, 2));
+    }
+
+    /** True when a PF locationlog row has no switch / port info to display. */
+    private static function pfLocRowEmpty(array $loc): bool {
+        return trim((string) ($loc['switch']    ?? '')) === ''
+            && trim((string) ($loc['switch_ip'] ?? '')) === ''
+            && trim((string) ($loc['port']      ?? '')) === ''
+            && trim((string) ($loc['ifDesc']    ?? '')) === '';
+    }
+
     private function collectPacketFence(string $hostid, ?array $host): array {
         $macros = $this->resolvePfMacros($hostid);
         if ($macros === null) {

@@ -66,12 +66,13 @@ final class XIQFleetClient {
     }
 
     /**
-     * Whole-fleet active client list (views=FULL — emits rssi, snr, channel,
-     * connection_duration, locations[]; without it XIQ returns only 12 fields).
+     * Whole-fleet active client list. We only consume id / radio_type / os_type
+     * / ssid in the dashboard, so request just those fields instead of the
+     * FULL view — much smaller pages = faster paging on large client fleets.
      */
     public function getActiveClients(int $cacheTtl = 60): array {
         return $this->cached('clients_active', $cacheTtl, function () {
-            return $this->getPaged('/clients/active', ['views' => 'FULL']);
+            return $this->getPaged('/clients/active', ['fields' => 'ID,RADIO_TYPE,OS_TYPE,SSID']);
         });
     }
 
@@ -151,47 +152,6 @@ final class XIQFleetClient {
 
             return $all;
         });
-    }
-
-    /**
-     * Per-client byte usage over a fixed window.
-     *
-     * GET /clients/usage?clientIds=…&clientIds=…&startTime=ms&endTime=ms
-     * Returns: [{ client_id, usage }] where `usage` is total bytes in window.
-     *
-     * Note: OpenAPI emits clientIds as `style: form, explode: true` — repeated
-     * `clientIds=1&clientIds=2` query params, NOT the PHP-default
-     * `clientIds[]=1`. We build the query string by hand to match.
-     */
-    public function getClientsUsage(array $clientIds, int $startTimeMs, int $endTimeMs): array {
-        if (!$clientIds) return [];
-        return $this->getRaw('/clients/usage?' . self::buildUsageQuery($clientIds, $startTimeMs, $endTimeMs));
-    }
-
-    /**
-     * Batched /clients/usage — same payload as {@see getClientsUsage} but for
-     * many windows at once. Dispatches all windows through curl_multi.
-     *
-     * @param array<int|string, int[]> $windowsByKey Each value is [startMs, endMs].
-     * @return array<int|string, array> Keyed identically to $windowsByKey, each value
-     *                                  is the decoded response (array of {client_id, usage}).
-     */
-    public function getClientsUsageMulti(array $clientIds, array $windowsByKey): array {
-        if (!$clientIds || !$windowsByKey) return [];
-        $reqs = [];
-        foreach ($windowsByKey as $k => $window) {
-            [$startMs, $endMs] = $window;
-            $url = self::BASE_URL . '/clients/usage?' . self::buildUsageQuery($clientIds, (int) $startMs, (int) $endMs);
-            $reqs[$k] = ['method' => 'GET', 'url' => $url, 'label' => "clients/usage[$k]"];
-        }
-        return $this->multiJson($reqs);
-    }
-
-    /** Encode /clients/usage query — repeated `clientIds=…` per OpenAPI form/explode. */
-    private static function buildUsageQuery(array $clientIds, int $startTimeMs, int $endTimeMs): string {
-        $parts = ['startTime=' . $startTimeMs, 'endTime=' . $endTimeMs];
-        foreach ($clientIds as $id) $parts[] = 'clientIds=' . (int) $id;
-        return implode('&', $parts);
     }
 
     /**

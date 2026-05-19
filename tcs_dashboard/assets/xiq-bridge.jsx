@@ -2,8 +2,8 @@
 //
 // Data layer for the XIQ Wireless Status page. ActionXiq embeds the SSR boot
 // snapshot in window.XIQ_BOOT. This bridge unpacks it into the per-section
-// globals xiq-app.jsx reads (XIQ_TOTALS / XIQ_SITES / XIQ_BANDS / XIQ_SSIDS /
-// XIQ_PROBLEM_APS / XIQ_CHANNEL_GRID / XIQ_CLIENT_MIX / XIQ_THROUGHPUT /
+// globals xiq-app.jsx reads (XIQ_TOTALS / XIQ_SITES / XIQ_SSIDS /
+// XIQ_TOP_CLIENT_APS / XIQ_CHANNEL_GRID / XIQ_CLIENT_MIX /
 // XIQ_FIRMWARE / XIQ_ROAMING / XIQ_EVENTS), then fetches tcs.xiq.data after
 // first paint to refresh the same globals and bump a re-render.
 //
@@ -13,12 +13,10 @@
     const KEYS = [
         ["totals",      "XIQ_TOTALS",       {}],
         ["sites",       "XIQ_SITES",        []],
-        ["bands",       "XIQ_BANDS",        []],
         ["ssids",       "XIQ_SSIDS",        []],
-        ["problemAps",  "XIQ_PROBLEM_APS",  []],
+        ["topClientAps", "XIQ_TOP_CLIENT_APS", []],
         ["channelGrid", "XIQ_CHANNEL_GRID", { sites: [], channels: [], matrix: [] }],
         ["clientMix",   "XIQ_CLIENT_MIX",   { standards: [], os: [] }],
-        ["throughput",  "XIQ_THROUGHPUT",   []],
         ["firmware",    "XIQ_FIRMWARE",     { versions: [] }],
         ["roaming",     "XIQ_ROAMING",      { buckets: [], rate24h: 0 }],
         ["events",      "XIQ_EVENTS",       []],

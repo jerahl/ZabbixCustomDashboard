@@ -160,31 +160,21 @@ class ActionSwitches extends ActionBase {
     }
 
     /**
-     * Discover the switch fleet and roll up per-host port/PoE counters in a
-     * shape the existing HostNavigator widget consumes (SWITCH_SITES schema).
-     *
-     * Discovery (in order):
-     *   1. Enumerate host groups whose name starts with `Site/` — these are
-     *      the operator-curated sites the navigator buckets switches into.
-     *   2. Pull hosts in those groups that carry tag `target=exos` (set on
-     *      the EXOS template / per-host so non-switch members of a Site/
-     *      group don't leak into the switch view).
-     *   3. Pull stacking.member items for those hosts so we know stack size.
-     *
-     * Site grouping: each host's first `Site/<name>` group wins. Hosts in
-     * multiple Site/* groups are still listed once, under their first.
+     * Full fleet rollup (skeleton + counters) used by SSR / reflection callers
+     * that need a single payload. The JSON data endpoints split this into a
+     * fast skeleton fetch and a deferred counters fetch — the navigator only
+     * needs the skeleton, so it can render before the heavy item.get for port
+     * and PoE state finishes.
      *
      * @return array<int, array<string, mixed>>
      */
     private function collectFleet(): array {
-        // Stale-while-revalidate caching. Fresh hits (<30s) and stale hits
-        // (<5min) both return instantly; stale hits also schedule a background
-        // refresh after the response is flushed so the next request is fresh.
-        // The user sees a sub-millisecond navigator load almost every time.
+        // Per-request page loads (and every navigator click — tcsNavigateSwitch
+        // does a full page reload) used to recompute everything. Cache for 5
+        // minutes in APCu so navigator clicks feel instant; counters lag by
+        // ≤300s, which is well within the underlying SNMP poll interval (60s+
+        // for the heavier items).
         $cacheKey = 'tcs_dashboard:switch_fleet:v2';
-        $softTtl  = 30;
-        $hardTtl  = 300;
-
         if (function_exists('apcu_fetch')) {
             $hit = apcu_fetch($cacheKey, $ok);
             if ($ok && is_array($hit) && isset($hit['data'], $hit['ts']) && is_array($hit['data'])) {
@@ -199,14 +189,13 @@ class ActionSwitches extends ActionBase {
             }
         }
 
-        $fleet = $this->collectFleetUncached();
-        $this->storeFleetCache($cacheKey, $fleet, $hardTtl);
-        return $fleet;
-    }
+        $skeleton = $this->collectFleetSkeleton();
+        $counters = $this->collectFleetCounters();
+        $fleet    = self::mergeFleetCounters($skeleton, $counters);
 
     private function storeFleetCache(string $cacheKey, array $fleet, int $ttl): void {
         if (function_exists('apcu_store')) {
-            apcu_store($cacheKey, ['data' => $fleet, 'ts' => time()], $ttl);
+            apcu_store($cacheKey, $fleet, 300);
         }
     }
 
@@ -238,8 +227,66 @@ class ActionSwitches extends ActionBase {
         });
     }
 
+    /**
+     * Sites + hosts + per-host problem count. NO port / PoE / stacking
+     * item.get calls — those are the heavy queries that made the navigator
+     * slow. Returns the SWITCH_SITES shape with counter fields zeroed; the
+     * bridge merges in the real counters from a deferred fetch.
+     *
+     * Cached for 5 min in APCu under its own key so the navigator path
+     * doesn't share cache invalidation with the slower counters path.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function collectFleetSkeleton(): array {
+        $cacheKey = 'tcs_dashboard:switch_fleet_skel:v1';
+        if (function_exists('apcu_fetch')) {
+            $hit = apcu_fetch($cacheKey, $ok);
+            if ($ok && is_array($hit)) return $hit;
+        }
+        $skel = $this->collectFleetSkeletonUncached();
+        if (function_exists('apcu_store')) {
+            apcu_store($cacheKey, $skel, 300);
+        }
+        return $skel;
+    }
+
+    /**
+     * Per-host port / PoE / stacking / model rollup, keyed by hostid. The
+     * navigator never reads these directly — they feed the page-header
+     * pills on switches-app.jsx — so they can arrive after first paint.
+     *
+     * @return array<string, array<string, int|string>>
+     */
+    public function collectFleetCounters(): array {
+        $cacheKey = 'tcs_dashboard:switch_fleet_counters:v1';
+        if (function_exists('apcu_fetch')) {
+            $hit = apcu_fetch($cacheKey, $ok);
+            if ($ok && is_array($hit)) return $hit;
+        }
+        $counters = $this->collectFleetCountersUncached();
+        if (function_exists('apcu_store')) {
+            apcu_store($cacheKey, $counters, 300);
+        }
+        return $counters;
+    }
+
+    /** Splice counter rollups into the skeleton's switch rows. */
+    private static function mergeFleetCounters(array $skeleton, array $counters): array {
+        foreach ($skeleton as &$site) {
+            foreach (($site['switches'] ?? []) as &$sw) {
+                $hid = (string) ($sw['hostid'] ?? '');
+                if ($hid === '' || !isset($counters[$hid])) continue;
+                foreach ($counters[$hid] as $k => $v) $sw[$k] = $v;
+            }
+            unset($sw);
+        }
+        unset($site);
+        return $skeleton;
+    }
+
     /** @return array<int, array<string, mixed>> */
-    private function collectFleetUncached(): array {
+    private function collectFleetSkeletonUncached(): array {
         // Step 1: Site/* host groups.
         $siteGroups = API::HostGroup()->get([
             'output'      => ['groupid', 'name'],
@@ -250,19 +297,12 @@ class ActionSwitches extends ActionBase {
 
         $groupids = array_column($siteGroups, 'groupid');
 
-        // Step 2: hosts in those groups, tag target=exos. inheritedTags=true
-        // is critical — operators typically put the tag on the EXOS template
-        // rather than every host individually, and the default host.get tag
-        // filter only inspects host-level tags.
-        //
-        // Trimmed compared to the original: no selectInventory, no
-        // selectTags. The navigator only needs name / ip / site bucket;
-        // per-host model + port counters now come from the snapshot endpoint
-        // for the actively selected switch (loaded in parallel).
+        // Step 2: hosts in those groups, tag target=exos.
         $taggedHosts = API::Host()->get([
             'output'           => ['hostid', 'host', 'name', 'status'],
             'selectInterfaces' => ['ip', 'main'],
             'selectHostGroups' => ['groupid', 'name'],
+            'selectTags'       => ['tag', 'value'],
             'groupids'         => $groupids,
             'tags'             => [['tag' => 'target', 'value' => 'exos', 'operator' => 1]],
             'evaltype'         => 0,
@@ -273,32 +313,20 @@ class ActionSwitches extends ActionBase {
 
         $hostids = array_keys($taggedHosts);
 
-        // The original implementation issued three more Item.get calls here:
-        // stacking.member[…], net.if.status[…], snmp.interfaces.poe.dstatus[…].
-        // Across a fleet of N switches with K ports each those returned
-        // 2*N*K rows just to compute counters the host navigator never
-        // displays — they were only used for the *selected* switch's header
-        // pills, which now derive them from the snapshot stack on the client.
-        // Removing them is the bulk of the navigator load-time win.
-
-        // Open problem counts. Hosts metadata already came in step 2.
+        // Per-host open-problem counts. Same logic as the legacy unified
+        // collector but lifted out so the navigator skeleton can carry the
+        // site/host-level problem badges without waiting on port/PoE rollups.
+        $problemByHost = [];
         $problems = API::Problem()->get([
-            'output'  => ['eventid', 'severity', 'r_eventid', 'objectid'],
+            'output'  => ['eventid'],
             'hostids' => $hostids,
             'recent'  => false
         ]) ?: [];
-
-        // Problems aren't reported with hostid directly — they reference
-        // triggers, and a trigger can span hosts. Map back via item.get on the
-        // trigger's objectid is overkill here; for the navigator badge we
-        // approximate per-host counts via event.get with selectHosts.
-        $problemByHost = [];
         if ($problems) {
-            $eventids = array_column($problems, 'eventid');
             $events = API::Event()->get([
-                'output'       => ['eventid'],
-                'eventids'     => $eventids,
-                'selectHosts'  => ['hostid']
+                'output'      => ['eventid'],
+                'eventids'    => array_column($problems, 'eventid'),
+                'selectHosts' => ['hostid']
             ]) ?: [];
             foreach ($events as $ev) {
                 foreach ($ev['hosts'] ?? [] as $h) {
@@ -310,8 +338,8 @@ class ActionSwitches extends ActionBase {
             }
         }
 
-        // Step 6: bucket by Site/* host group, build the SWITCH_SITES payload.
-        $sites = [];   // siteId => row
+        // Bucket hosts by Site/* host group.
+        $sites = [];
         foreach ($hostids as $hid) {
             $h = $taggedHosts[$hid] ?? null;
             if (!$h) continue;
@@ -321,7 +349,6 @@ class ActionSwitches extends ActionBase {
                 if ((int) ($iface['main'] ?? 0) === 1) { $ip = $iface['ip']; break; }
             }
 
-            // Discovery guarantees at least one Site/* group; pick the first.
             $siteName = '';
             foreach ($h['hostgroups'] ?? [] as $g) {
                 if (str_starts_with((string) $g['name'], 'Site/')) {
@@ -329,7 +356,7 @@ class ActionSwitches extends ActionBase {
                     break;
                 }
             }
-            if ($siteName === '') continue; // shouldn't happen — defensive
+            if ($siteName === '') continue;
             $siteId = strtolower(preg_replace('/[^a-z0-9]+/i', '-', $siteName));
 
             if (!isset($sites[$siteId])) {
@@ -342,14 +369,13 @@ class ActionSwitches extends ActionBase {
                 ];
             }
 
-            // ports / up / down / poe / model / members are populated by the
-            // snapshot endpoint for the active switch; keep zero placeholders
-            // here so the React `host` object shape stays stable.
             $row = [
-                'id'       => $h['host'],                 // human-readable, shown in UI
-                'hostid'   => (string) $h['hostid'],      // numeric, used for navigation
+                'id'       => $h['host'],
+                'hostid'   => (string) $h['hostid'],
                 'name'     => $h['name'],
                 'ip'       => $ip,
+                // Counter fields stay zeroed in the skeleton; the deferred
+                // counters fetch fills them in via mergeFleetCounters().
                 'model'    => '—',
                 'members'  => 1,
                 'ports'    => 0,
@@ -363,17 +389,111 @@ class ActionSwitches extends ActionBase {
             ];
 
             $sites[$siteId]['switches'][] = $row;
-            $sites[$siteId]['problems'] += $row['problems'];
+            $sites[$siteId]['problems']  += $row['problems'];
         }
 
-        // Sort: switches alphabetically within each site, sites alphabetically.
         foreach ($sites as &$site) {
             usort($site['switches'], fn($a, $b) => strcmp($a['id'], $b['id']));
         }
         unset($site);
-
         uasort($sites, fn($a, $b) => strcmp($a['name'], $b['name']));
-
         return array_values($sites);
+    }
+
+    /**
+     * Port / PoE / stacking / model rollup, keyed by hostid. Reuses the same
+     * host discovery as the skeleton so the same fleet is in scope.
+     *
+     * @return array<string, array<string, int|string>>
+     */
+    private function collectFleetCountersUncached(): array {
+        // Re-resolve EXOS hosts here so this method can run independently
+        // of the skeleton (each has its own APCu cache + endpoint).
+        $siteGroups = API::HostGroup()->get([
+            'output'      => ['groupid'],
+            'search'      => ['name' => 'Site/'],
+            'startSearch' => true
+        ]) ?: [];
+        if (!$siteGroups) return [];
+
+        $taggedHosts = API::Host()->get([
+            'output'          => ['hostid'],
+            'selectInventory' => ['model'],
+            'groupids'        => array_column($siteGroups, 'groupid'),
+            'tags'            => [['tag' => 'target', 'value' => 'exos', 'operator' => 1]],
+            'evaltype'        => 0,
+            'inheritedTags'   => true,
+            'preservekeys'    => true
+        ]) ?: [];
+        if (!$taggedHosts) return [];
+
+        $hostids = array_keys($taggedHosts);
+
+        // Stacking items — counted per host for the members KPI. The EXOS
+        // template literally ships the misspelled key `stacking.memeber[…]`
+        // (sic); match both forms.
+        $stackingItems = API::Item()->get([
+            'output'      => ['hostid', 'key_'],
+            'hostids'     => $hostids,
+            'search'      => ['key_' => 'stacking.'],
+            'startSearch' => true
+        ]) ?: [];
+
+        $memberCount = [];
+        foreach ($stackingItems as $it) {
+            $k = (string) $it['key_'];
+            if (!preg_match('/^(?:extreme\.)?(?:snmp\.)?stack(?:ing)?\.(?:member|memeber)\[\d+\]$/', $k)) continue;
+            $hid = (string) $it['hostid'];
+            $memberCount[$hid] = ($memberCount[$hid] ?? 0) + 1;
+        }
+
+        // Port + PoE rollups. Both queries return potentially thousands of
+        // rows fleet-wide — by far the heaviest part of fleet discovery.
+        // `output` is trimmed to the bare minimum (drop key_ — it's already
+        // implied by the search filter).
+        $portItems = API::Item()->get([
+            'output'      => ['hostid', 'lastvalue'],
+            'hostids'     => $hostids,
+            'search'      => ['key_' => 'net.if.status[ifOperStatus.'],
+            'startSearch' => true,
+            'monitored'   => true
+        ]) ?: [];
+
+        $poeItems = API::Item()->get([
+            'output'      => ['hostid', 'lastvalue'],
+            'hostids'     => $hostids,
+            'search'      => ['key_' => 'snmp.interfaces.poe.dstatus['],
+            'startSearch' => true,
+            'monitored'   => true
+        ]) ?: [];
+
+        $counters = [];
+        foreach ($hostids as $hid) {
+            $counters[(string) $hid] = [
+                'model'   => (string) ($taggedHosts[$hid]['inventory']['model'] ?? '—'),
+                'members' => max(1, (int) ($memberCount[(string) $hid] ?? 1)),
+                'ports'   => 0,
+                'up'      => 0,
+                'down'    => 0,
+                'poe'     => 0
+            ];
+        }
+        foreach ($portItems as $it) {
+            $hid = (string) $it['hostid'];
+            if (!isset($counters[$hid])) continue;
+            $counters[$hid]['ports']++;
+            $s = (int) $it['lastvalue'];
+            if      ($s === 1) $counters[$hid]['up']++;
+            elseif  ($s === 2) $counters[$hid]['down']++;
+        }
+        foreach ($poeItems as $it) {
+            $hid = (string) $it['hostid'];
+            if (!isset($counters[$hid])) continue;
+            if ((int) $it['lastvalue'] === 3) {
+                $counters[$hid]['poe']++;
+            }
+        }
+
+        return $counters;
     }
 }
