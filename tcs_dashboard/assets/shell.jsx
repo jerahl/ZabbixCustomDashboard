@@ -385,6 +385,11 @@ const APNavigator = ({ activeId, onSelect, query, setQuery }) => {
     if (ap.hostid && String(ap.hostid) === s) return true;
     return ap.id === activeId;
   };
+  // "Problems" here means anything an operator would treat as not-OK:
+  // a Zabbix trigger fired against the host, or the AP is down per
+  // XIQ / SNMP / ICMP. Matches what the LED dot and the per-site
+  // counters already signal in red.
+  const hasProblem = (ap) => (ap.problems || 0) > 0 || ap.status === "down";
   // Start with every site collapsed except the one containing the active
   // AP. Search expands all matched sections regardless (handled below).
   const [sites, setSites] = React.useState(() =>
@@ -393,6 +398,7 @@ const APNavigator = ({ activeId, onSelect, query, setQuery }) => {
       expanded: Array.isArray(s.aps) && s.aps.some(isActive)
     }))
   );
+  const [problemsOnly, setProblemsOnly] = React.useState(false);
   const toggle = (idx) => {
     setSites(sites.map((s, i) => i === idx ? { ...s, expanded: !s.expanded } : s));
   };
@@ -400,6 +406,7 @@ const APNavigator = ({ activeId, onSelect, query, setQuery }) => {
   const totalAps = window.AP_SITES.reduce((n, s) => n + s.aps.length, 0);
   const totalClients = window.AP_SITES.reduce((n, s) => n + s.aps.reduce((m, a) => m + a.clients, 0), 0);
   const totalProb = window.AP_SITES.reduce((n, s) => n + s.problems, 0);
+  const totalIssues = window.AP_SITES.reduce((n, s) => n + s.aps.filter(hasProblem).length, 0);
 
   return (
     <div className="card ap-nav-card">
@@ -419,6 +426,19 @@ const APNavigator = ({ activeId, onSelect, query, setQuery }) => {
         />
         {query ? <span className="ap-nav-clear" onClick={() => setQuery("")}>×</span> : null}
       </div>
+      <div className="ap-nav-filter">
+        <div className="seg-toggle">
+          <button
+            className={"seg-btn" + (!problemsOnly ? " active" : "")}
+            onClick={() => setProblemsOnly(false)}
+          >All {totalAps}</button>
+          <button
+            className={"seg-btn" + (problemsOnly ? " active" : "")}
+            onClick={() => setProblemsOnly(true)}
+            title="APs with active Zabbix triggers or unreachable (XIQ / SNMP / ping)"
+          >Problems {totalIssues}</button>
+        </div>
+      </div>
       <div className="ap-nav-summary">
         <span><b>{totalClients.toLocaleString()}</b> clients</span>
         <span className="dot-sep">·</span>
@@ -428,15 +448,18 @@ const APNavigator = ({ activeId, onSelect, query, setQuery }) => {
       </div>
       <div className="ap-nav">
         {sites.map((site, i) => {
-          const matchedAps = q
+          let matchedAps = q
             ? site.aps.filter(a =>
                 a.id.toLowerCase().includes(q) ||
                 a.ip.toLowerCase().includes(q) ||
                 a.floor.toLowerCase().includes(q) ||
                 site.name.toLowerCase().includes(q))
             : site.aps;
-          if (q && matchedAps.length === 0) return null;
-          const expanded = q ? true : site.expanded;
+          if (problemsOnly) matchedAps = matchedAps.filter(hasProblem);
+          if ((q || problemsOnly) && matchedAps.length === 0) return null;
+          // Auto-expand sites whose APs survived the filter so the
+          // operator doesn't have to click into each one.
+          const expanded = q || problemsOnly ? true : site.expanded;
           return (
             <div className="ap-nav-section" key={site.id}>
               <div

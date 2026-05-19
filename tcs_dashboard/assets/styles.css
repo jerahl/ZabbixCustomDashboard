@@ -852,6 +852,12 @@ body {
 }
 .ap-nav-clear:hover { background: var(--bg-2); color: var(--fg); }
 
+.ap-nav-filter {
+  display: flex; padding: 6px 12px; border-bottom: 1px solid var(--line);
+}
+.ap-nav-filter .seg-toggle { flex: 1; }
+.ap-nav-filter .seg-btn { flex: 1; text-align: center; }
+
 .ap-nav-summary {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 7px 12px; font-size: 11px; color: var(--muted);
