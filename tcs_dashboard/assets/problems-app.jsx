@@ -354,26 +354,30 @@ const ProblemTile = ({ p, onClick }) => {
   return (
     <div className={"ptile " + sevCls + " " + statusCls} onClick={() => onClick(p)}>
       <div className="ptile-top">
+        <span className="pt-icon-sm"><Glyph name={HOST_ICON[hostClass]} size={16} /></span>
         <SrcMark src={p.source} />
+        {p.count > 1 && <span className="pt-count-inline">×{p.count}</span>}
+        <span style={{ flex: 1 }} />
         <span className={"pt-status " + p.status}>
           <Glyph name={statusIcon} size={11} />
         </span>
       </div>
-      <div className="ptile-mid">
-        <span className="pt-icon"><Glyph name={HOST_ICON[hostClass]} size={44} /></span>
-        {p.count > 1 && <span className="pt-count">×{p.count}</span>}
+      <div className="ptile-body">
+        <div className="pt-trigger" title={p.trigger}>{p.trigger}</div>
+        <div className="pt-host" title={p.host}>{p.host}</div>
       </div>
       {tagGlyphs.length > 0 && (
-        <div className="ptile-tags">
+        <div className="ptile-tags-row">
           {tagGlyphs.map((tg, i) => (
             <span className="ptag" key={i} title={tg.t}>
-              <Glyph name={tg.g} size={12} />
+              <Glyph name={tg.g} size={11} />
             </span>
           ))}
         </div>
       )}
       <div className="ptile-bot">
         <span className="pt-site">{p.site || "—"}</span>
+        <span className="pt-age-text" title={"Age " + p.age}>{p.age}</span>
         <span className="pt-age-wrap" title={"Age " + p.age}>
           <span className="pt-age-bar" style={{ width: `${ageFrac * 100}%` }} />
         </span>

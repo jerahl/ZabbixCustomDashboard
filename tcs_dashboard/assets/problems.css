@@ -108,7 +108,7 @@
 }
 .matrix-grid .mg-col-head:hover { color: var(--fg); }
 .matrix-grid .mg-row-head {
-  display: flex; align-items: center; justify-content: flex-end;
+  display: flex; align-items: center;
   font-family: var(--mono); font-size: 10px;
   color: var(--muted);
   padding-right: 8px;
@@ -339,22 +339,23 @@
 
 .prb-mosaic {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 8px;
 }
-[data-size="dense"]    .prb-mosaic { grid-template-columns: repeat(auto-fill, minmax(108px, 1fr)); gap: 6px; }
-[data-size="large"]    .prb-mosaic { grid-template-columns: repeat(auto-fill, minmax(172px, 1fr)); gap: 10px; }
+[data-size="dense"]    .prb-mosaic { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px; }
+[data-size="large"]    .prb-mosaic { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
 
 /* ───────── Problem tile ───────── */
 .ptile {
   position: relative;
-  aspect-ratio: 1 / 1;
+  min-height: 92px;
   border-radius: 10px;
   border: 1px solid var(--line);
   background: var(--bg);
-  padding: 10px;
+  padding: 8px 10px 8px 12px;
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto 1fr auto auto;
+  gap: 4px;
   cursor: pointer;
   overflow: hidden;
   transition: transform 100ms ease, border-color 100ms ease;
@@ -394,10 +395,15 @@
 }
 
 .ptile-top {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; gap: 6px;
   font-family: var(--mono); font-size: 9px;
   color: var(--muted);
-  height: 14px;
+  height: 16px;
+}
+.ptile-top .pt-icon-sm {
+  display: inline-grid; place-items: center;
+  color: currentColor;
+  width: 16px; height: 16px;
 }
 .ptile-top .pt-src {
   font-family: var(--mono); font-size: 8.5px;
@@ -405,6 +411,12 @@
   border: 1px solid currentColor;
   color: currentColor;
   letter-spacing: 0.5px;
+}
+.ptile-top .pt-count-inline {
+  font-family: var(--mono); font-size: 9px; font-weight: 600;
+  background: currentColor; color: #0d1117;
+  padding: 1px 5px; border-radius: 8px;
+  line-height: 1.2;
 }
 .ptile-top .pt-status {
   display: inline-grid; place-items: center;
@@ -415,34 +427,43 @@
 }
 .ptile-top .pt-status.open { background: currentColor; color: #0d1117; }
 
-.ptile-mid {
-  display: grid; place-items: center;
-  position: relative;
+.ptile-body {
+  display: flex; flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
-.ptile-mid .pt-icon {
-  width: 44px; height: 44px;
-  color: currentColor;
+.pt-trigger {
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
 }
-[data-size="dense"] .ptile-mid .pt-icon { width: 30px; height: 30px; }
-[data-size="large"] .ptile-mid .pt-icon { width: 60px; height: 60px; }
-.ptile-mid .pt-count {
-  position: absolute; top: -2px; right: -2px;
-  font-family: var(--mono); font-size: 10px; font-weight: 600;
-  background: currentColor; color: #0d1117;
-  padding: 1px 5px; border-radius: 8px;
-  line-height: 1.2;
+.pt-host {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+[data-size="dense"] .pt-trigger { font-size: 11px; -webkit-line-clamp: 2; }
+[data-size="dense"] .pt-host { font-size: 9.5px; }
+[data-size="large"] .pt-trigger { font-size: 13px; -webkit-line-clamp: 3; }
+[data-size="large"] .pt-host { font-size: 11px; }
 
 /* Tag glyph row */
-.ptile-tags {
-  position: absolute; left: 8px; right: 8px;
-  bottom: 36px;
+.ptile-tags-row {
   display: flex; gap: 3px;
-  justify-content: center;
   height: 14px;
   opacity: 0.85;
 }
-.ptile-tags .ptag {
+.ptile-tags-row .ptag {
   width: 14px; height: 14px;
   display: grid; place-items: center;
   color: var(--fg-2);
@@ -459,14 +480,20 @@
   color: var(--fg);
   letter-spacing: 0.4px;
 }
+.pt-age-text {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
 .pt-age-wrap {
   flex: 1;
   height: 4px;
   background: rgba(255,255,255,0.05);
   border-radius: 2px;
   overflow: hidden;
-  max-width: 70px;
-  margin-left: 6px;
+  max-width: 50px;
+  margin-left: 4px;
 }
 .pt-age-bar {
   height: 100%;

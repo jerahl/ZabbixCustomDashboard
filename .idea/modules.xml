@@ -2,7 +2,10 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
+      <module fileurl="file://$PROJECT_DIR$/../MilestoneZabbix/.idea/MilestoneZabbix.iml" filepath="$PROJECT_DIR$/../MilestoneZabbix/.idea/MilestoneZabbix.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../ZabbixSwitchPortWidgets/.idea/Zabbix.iml" filepath="$PROJECT_DIR$/../ZabbixSwitchPortWidgets/.idea/Zabbix.iml" />
       <module fileurl="file://$PROJECT_DIR$/.idea/ZabbixCustomDashboard.iml" filepath="$PROJECT_DIR$/.idea/ZabbixCustomDashboard.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../ZabbixExtremeIQ/.idea/ZabbixExtremeIQ.iml" filepath="$PROJECT_DIR$/../ZabbixExtremeIQ/.idea/ZabbixExtremeIQ.iml" />
     </modules>
   </component>
 </project>

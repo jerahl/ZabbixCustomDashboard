@@ -495,7 +495,7 @@ body {
 
 .device-actions { padding: 12px 14px; display: flex; gap: 8px; }
 .btn {
-  font: inherit; font-size: 12px;
+  font: inherit; font-size: 10px;
   padding: 6px 12px;
   border-radius: var(--r-2);
   border: 1px solid var(--line);

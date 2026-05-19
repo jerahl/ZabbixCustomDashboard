@@ -112,9 +112,9 @@ const GlobalSidebar = ({ active }) => {
       </div>
 
 <div className="sidebar-footer">
-        <div className="sf-row"><span className="sf-k">Zabbix Server</span><span className="sf-v ok">● 7.0.4</span></div>
-        <div className="sf-row"><span className="sf-k">PacketFence API</span><span className="sf-v ok">● v12.3</span></div>
-        <div className="sf-row"><span className="sf-k">XProtect Mgmt</span><span className="sf-v ok">● 24.2 R2</span></div>
+        <div className="sf-row"><span className="sf-k">Zabbix Server</span><span className="sf-v ok">● 7.4.9</span></div>
+        <div className="sf-row"><span className="sf-k">PacketFence API</span><span className="sf-v ok">● v15</span></div>
+        <div className="sf-row"><span className="sf-k">XProtect Mgmt</span><span className="sf-v ok">● 25.3 R2</span></div>
       </div>
     </aside>
   );

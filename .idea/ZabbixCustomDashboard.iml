@@ -4,5 +4,8 @@
     <content url="file://$MODULE_DIR$" />
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />
+    <orderEntry type="module" module-name="MilestoneZabbix" />
+    <orderEntry type="module" module-name="ZabbixExtremeIQ" />
+    <orderEntry type="module" module-name="Zabbix" />
   </component>
 </module>
