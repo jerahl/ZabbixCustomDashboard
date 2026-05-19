@@ -311,37 +311,29 @@ class PFClient {
     /**
      * Recent 802.1X auth failures (radius_audit_logs filtered to reject).
      *
+     * Filters by `nas_ip_address` — the IP of the NAS (AP / switch) that
+     * initiated the RADIUS request. Callers must pass the device's IP,
+     * not its MAC or hostname.
+     *
      * @return array<int, array<string, mixed>>
      */
     public function authFailuresForNode(string $deviceId, int $limit = 50): array {
-        // PF stores the NAS under three columns depending on how the device
-        // is provisioned: switch_id (PF config key, often the IP), switch_ip_address,
-        // and switch_mac. Callers here pass a mix — switch IPs, AP MACs, or
-        // Zabbix hostnames — so match the value across all three.
-        //
-        // Note: PF's /search endpoint requires the `query` field, returns
-        // 404 ("entries not found") when zero rows match, and only accepts
+        // PF's /search endpoint requires the `query` field, returns 404
+        // ("entries not found") when zero rows match, and only accepts
         // the `equals` / `contains` operator family (NOT `is`).
         $body = [
             'cursor' => 0,
             'limit'  => max(1, $limit),
             'sort'   => ['created_at DESC'],
             'fields' => [
-                'mac', 'user_name', 'switch_id', 'switch_ip_address', 'switch_mac',
-                'nas_port_id', 'auth_status', 'reason', 'created_at'
+                'mac', 'user_name', 'nas_ip_address', 'nas_port_id',
+                'auth_status', 'reason', 'created_at'
             ],
             'query'  => [
                 'op' => 'and',
                 'values' => [
-                    ['op' => 'equals', 'field' => 'auth_status', 'value' => 'reject'],
-                    [
-                        'op' => 'or',
-                        'values' => [
-                            ['op' => 'equals', 'field' => 'switch_id',         'value' => $deviceId],
-                            ['op' => 'equals', 'field' => 'switch_ip_address', 'value' => $deviceId],
-                            ['op' => 'equals', 'field' => 'switch_mac',        'value' => $deviceId],
-                        ]
-                    ]
+                    ['op' => 'equals', 'field' => 'auth_status',    'value' => 'reject'],
+                    ['op' => 'equals', 'field' => 'nas_ip_address', 'value' => $deviceId],
                 ]
             ]
         ];
