@@ -383,22 +383,36 @@ class ActionGlobalData extends ActionDataBase {
             }
         }
 
-        // Aggregate problem counts + worst trigger by domain.
+        // Aggregate problem counts + worst trigger + host availability split
+        // by domain. host_avail per domain becomes the basis for the
+        // "<up> / <total>" KPI in the snapshot tiles.
         $by_domain = [];
         foreach (array_keys(self::DOMAIN_PATTERNS) as $d) {
             $by_domain[$d] = [
-                'total' => 0, 'ok' => 0, 'warn' => 0, 'err' => 0,
-                'problems' => 0, 'top' => '', '_top_sev' => -1, 'spark' => array_fill(0, 24, 0)
+                'total'    => 0,
+                'ok'       => 0, 'warn' => 0, 'err' => 0,
+                'up'       => 0, 'down' => 0, 'unknown' => 0,
+                'hosts_with_problems' => 0,
+                'problems' => 0,
+                'top'      => '',
+                '_top_sev' => -1,
+                'spark'    => array_fill(0, 24, 0)
             ];
         }
         foreach ($hosts as $hid => $h) {
             $d = $host_domain[$hid] ?? null;
             if (!$d) continue;
             $by_domain[$d]['total']++;
+            $avail = $this->hostAvailable($h);
+            if      ($avail === 1) $by_domain[$d]['up']++;
+            elseif  ($avail === 2) $by_domain[$d]['down']++;
+            else                   $by_domain[$d]['unknown']++;
+
             $sev = $this->hostWorstSev($hid, $problems);
             if      ($sev >= 4) $by_domain[$d]['err']++;
             elseif  ($sev >= 2) $by_domain[$d]['warn']++;
             else                $by_domain[$d]['ok']++;
+            if ($sev >= 2) $by_domain[$d]['hosts_with_problems']++;
         }
 
         foreach ($problems as $p) {
@@ -414,21 +428,172 @@ class ActionGlobalData extends ActionDataBase {
             }
         }
 
-        // Domain labels + click-through targets — mirror the mock shape so
-        // the existing React tile renderer doesn't need changes.
+        // Wireless enrichment — pull xiq.ap.connected[*] and xiq.ap.clients[*]
+        // items once, sum across the fleet. Same item shape ActionXiqData
+        // reads, so this stays cheap (one API::Item.get) and consistent with
+        // the wireless dashboard's totals.
+        $wireless = $this->collectWirelessFleetKpis();
+
+        // Domain labels + click-through targets — mirror the design's
+        // SystemSnapshot tiles so the React renderer doesn't need changes.
         static $meta = [
-            'wireless' => ['label' => 'Wireless APs',  'icon' => 'wifi',     'href' => 'zabbix.php?action=tcs.dashboard.view'],
-            'switches' => ['label' => 'Switches',      'icon' => 'ethernet', 'href' => 'zabbix.php?action=tcs.switches.view'],
-            'servers'  => ['label' => 'Servers',       'icon' => 'ap',       'href' => 'zabbix.php?action=tcs.servers.view'],
-            'nvr'      => ['label' => 'Surveillance',  'icon' => 'shield',   'href' => 'zabbix.php?action=tcs.surveillance.view']
+            'wireless' => [
+                'label' => 'Wireless · XIQ',         'sub'        => 'ExtremeCloud IQ',
+                'icon'  => 'wifi',                   'src'        => 'ext',
+                'href'  => 'zabbix.php?action=tcs.xiq.view',
+                'sparkColor' => 'var(--ext)',        'sparkLabel' => 'Connected clients · 24h'
+            ],
+            'switches' => [
+                'label' => 'Switches',                'sub'        => 'Extreme Universal',
+                'icon'  => 'ethernet',                'src'        => 'zbx',
+                'href'  => 'zabbix.php?action=tcs.switches.view',
+                'sparkColor' => 'var(--zbx)',         'sparkLabel' => 'Hosts up · 24h'
+            ],
+            'servers'  => [
+                'label' => 'Servers',                 'sub'        => 'Linux / Windows · VM + physical',
+                'icon'  => 'ap',                      'src'        => 'zbx',
+                'href'  => 'zabbix.php?action=tcs.servers.view',
+                'sparkColor' => 'var(--zbx)',         'sparkLabel' => 'Hosts up · 24h'
+            ],
+            'nvr'      => [
+                'label' => 'Surveillance · Milestone','sub'        => 'XProtect',
+                'icon'  => 'shield',                  'src'        => 'ext',
+                'href'  => 'zabbix.php?action=tcs.surveillance.view',
+                'sparkColor' => 'var(--ext)',         'sparkLabel' => 'Cameras online · 24h'
+            ]
         ];
 
         $out = [];
         foreach ($by_domain as $id => $d) {
             unset($d['_top_sev']);
-            $out[] = array_merge(['id' => $id], $meta[$id], $d);
+            $d['status'] = $this->domainStatus($d);
+            $d['kpis']   = $this->buildDomainKpis($id, $d, $wireless);
+            // Live wireless: surface the current client total as a flat
+            // sparkline so the labelled "Connected clients" graph isn't a
+            // dead line of zeros until proper history wiring lands.
+            if ($id === 'wireless' && $wireless['clients_total'] !== null) {
+                $d['spark'] = array_fill(0, 24, $wireless['clients_total']);
+            }
+            $tileMeta = $meta[$id] ?? [];
+            // Refine the subtitle with a live host count if we have one.
+            if ($d['total'] > 0 && isset($tileMeta['sub'])) {
+                $tileMeta['sub'] = trim($tileMeta['sub'].' · '.number_format($d['total']).' hosts');
+            }
+            $out[] = array_merge(['id' => $id], $tileMeta, $d);
         }
         return $out;
+    }
+
+    /** Worst-severity-aware status label, used to colour the tile header. */
+    private function domainStatus(array $d): string {
+        if ($d['err']  > 0) return 'high';
+        if ($d['warn'] > 0) return 'warning';
+        if ($d['down'] > 0) return 'warning';
+        return 'ok';
+    }
+
+    /**
+     * Build the 3-KPI tile content shown in the System Snapshot.
+     * Each KPI is { label, value, unit?, note? } — same shape the JSX renders.
+     *
+     * @param array{
+     *     online: ?int, total: ?int,
+     *     critical: ?int, offline: ?int,
+     *     clients_total: ?int, rf_health: ?int
+     * } $wireless
+     */
+    private function buildDomainKpis(string $domain, array $d, array $wireless): array {
+        $fmt = fn(?int $n) => $n === null ? '—' : number_format($n);
+        $up = $d['up']; $total = $d['total']; $down = $d['down'];
+        $withProblems = $d['hosts_with_problems'];
+
+        if ($domain === 'wireless') {
+            // Live xiq.ap.* item totals beat the template-bucketed host
+            // counts because per-AP hosts may not match DOMAIN_PATTERNS yet.
+            $apsOnline = $wireless['online'] ?? $up;
+            $apsTotal  = $wireless['total']  ?? $total;
+            $clients   = $wireless['clients_total'];
+            $rf        = $wireless['rf_health'];
+            $apsKpiNote = $withProblems > 0
+                ? $fmt($withProblems).' APs with problems'
+                : 'no AP problems';
+            $clientsNote = $apsOnline > 0 && $clients !== null
+                ? 'avg '.number_format(round($clients / max(1, $apsOnline), 1), 1).' / AP'
+                : '';
+            return [
+                ['label' => 'APs online',        'value' => $fmt($apsOnline).' / '.$fmt($apsTotal), 'note' => $apsKpiNote],
+                ['label' => 'Connected clients', 'value' => $clients === null ? '—' : $fmt($clients), 'note' => $clientsNote],
+                ['label' => 'RF health',         'value' => $rf === null ? '—' : (string) $rf, 'unit' => '/100', 'note' => 'target ≥ 90'],
+            ];
+        }
+
+        if ($domain === 'switches') {
+            return [
+                ['label' => 'Switches up', 'value' => $fmt($up).' / '.$fmt($total), 'note' => $down > 0 ? $fmt($down).' unreachable' : 'all reachable'],
+                ['label' => 'With problems', 'value' => $fmt($withProblems), 'note' => $d['err'] > 0 ? $fmt($d['err']).' critical' : ''],
+                ['label' => 'Open alerts', 'value' => $fmt($d['problems']), 'note' => $d['err'] > 0 ? 'inc. '.$fmt($d['err']).' critical' : ''],
+            ];
+        }
+
+        if ($domain === 'servers') {
+            return [
+                ['label' => 'Servers up',    'value' => $fmt($up).' / '.$fmt($total), 'note' => $down > 0 ? $fmt($down).' down' : 'all reachable'],
+                ['label' => 'With problems', 'value' => $fmt($withProblems), 'note' => $d['err'] > 0 ? $fmt($d['err']).' critical' : ''],
+                ['label' => 'Open alerts',   'value' => $fmt($d['problems']), 'note' => $d['err'] > 0 ? 'inc. '.$fmt($d['err']).' critical' : ''],
+            ];
+        }
+
+        // nvr / surveillance
+        return [
+            ['label' => 'Cameras online', 'value' => $fmt($up).' / '.$fmt($total), 'note' => $down > 0 ? $fmt($down).' unreachable' : 'all online'],
+            ['label' => 'With problems',  'value' => $fmt($withProblems), 'note' => $d['err'] > 0 ? $fmt($d['err']).' critical' : ''],
+            ['label' => 'Open alerts',    'value' => $fmt($d['problems']), 'note' => $d['err'] > 0 ? 'inc. '.$fmt($d['err']).' critical' : ''],
+        ];
+    }
+
+    /**
+     * Single API::Item.get over xiq.ap.connected[*] and xiq.ap.clients[*] to
+     * derive: how many APs are online, total connected clients, and a simple
+     * RF-health score (online ratio capped at 100). Returns all-null shape
+     * if no items exist so the tile prints dashes rather than crashing.
+     *
+     * @return array{online: ?int, total: ?int, offline: ?int, clients_total: ?int, rf_health: ?int}
+     */
+    private function collectWirelessFleetKpis(): array {
+        $items = $this->safeGet(fn() => API::Item()->get([
+            'output'      => ['key_', 'lastvalue', 'lastclock'],
+            'search'      => ['key_' => 'xiq.ap.'],
+            'startSearch' => true,
+            'monitored'   => true,
+            'limit'       => 50000
+        ]));
+        if (!$items) {
+            return ['online' => null, 'total' => null, 'offline' => null, 'clients_total' => null, 'rf_health' => null];
+        }
+        $online = 0; $total = 0; $clients = 0;
+        $sawConnected = false; $sawClients = false;
+        foreach ($items as $it) {
+            if (!preg_match('/^xiq\.ap\.([a-z]+)\[(.+)\]$/i', (string) $it['key_'], $m)) continue;
+            $type = $m[1];
+            $val  = (string) ($it['lastvalue'] ?? '');
+            if ($type === 'connected') {
+                $sawConnected = true;
+                $total++;
+                if ((int) $val === 1) $online++;
+            } elseif ($type === 'clients') {
+                $sawClients = true;
+                if ($val !== '') $clients += (int) $val;
+            }
+        }
+        $offline  = $sawConnected ? max(0, $total - $online) : null;
+        $rfHealth = $sawConnected && $total > 0 ? (int) round($online / $total * 100) : null;
+        return [
+            'online'        => $sawConnected ? $online  : null,
+            'total'         => $sawConnected ? $total   : null,
+            'offline'       => $offline,
+            'clients_total' => $sawClients   ? $clients : null,
+            'rf_health'     => $rfHealth
+        ];
     }
 
     private function buildTriggers(array $problems): array {

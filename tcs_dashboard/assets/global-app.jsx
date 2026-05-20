@@ -137,37 +137,6 @@ const SeverityStrip = () => {
   );
 };
 
-// ───────── Problem trend strip (24h timeline of new problems) ─────────
-const TrendStrip = () => {
-  const data = window.PROBLEM_TIMELINE;
-  const max = Math.max(...data);
-  return (
-    <div className="card" style={{ marginBottom: 14 }}>
-      <div className="card-h">
-        <h3>New Problems (24h)</h3>
-        <SourceBadge src="zbx" />
-        <div className="h-spacer" />
-        <span className="h-meta">{data.reduce((a,b)=>a+b,0)} opened · {data[data.length-1]} active now</span>
-      </div>
-      <div className="trend-row">
-        <div className="trend-bars">
-          {data.map((v, i) => (
-            <div key={i} className="trend-bar" title={`${i}:00 — ${v} new problems`}>
-              <div className="trend-bar-fill" style={{ height: `${(v/max)*100}%`, background: i >= data.length - 4 ? "var(--err)" : "var(--zbx)" }} />
-              {i % 4 === 0 && <div className="trend-bar-tick">{i.toString().padStart(2,"0")}</div>}
-            </div>
-          ))}
-        </div>
-        <div className="trend-side">
-          <div className="trend-pill"><span className="dot" style={{ background: "var(--err)" }} /> Last 4h</div>
-          <div className="trend-side-v">{data.slice(-4).reduce((a,b)=>a+b,0)}</div>
-          <div className="trend-side-note">+62% vs prior 4h</div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
 // ───────── Sites heatmap ─────────
 const sevColors = {
   ok:       { bg: "rgba(52,211,153,0.12)",  bd: "rgba(52,211,153,0.35)", fg: "var(--ok)"  },
@@ -184,7 +153,7 @@ const SitesHeatmap = ({ filter, setFilter }) => {
     ? GLOBAL_SITES.filter(s => s.problems === 0)
     : GLOBAL_SITES;
   return (
-    <div className="card">
+    <div className="card" style={{ marginBottom: 14 }}>
       <div className="card-h">
         <h3>Sites — Health Map</h3>
         <SourceBadge src="zbx" />
@@ -238,50 +207,84 @@ const SitesHeatmap = ({ filter, setFilter }) => {
   );
 };
 
-// ───────── Domain breakdown card ─────────
-const DomainBreakdown = () => (
-  <div className="card">
-    <div className="card-h">
-      <h3>Problems by Domain</h3>
-      <SourceBadge src="zbx" />
-      <div className="h-spacer" />
-      <a className="h-link">All hosts <Icon name="external" size={11} /></a>
-    </div>
-    <div className="card-b tight">
-      {GLOBAL_DOMAINS.map(d => {
-        const total = d.ok + d.warn + d.err;
-        const okPct   = (d.ok / total) * 100;
-        const warnPct = (d.warn / total) * 100;
-        const errPct  = (d.err / total) * 100;
-        return (
-          <a key={d.id} className="domain-row" href={d.href}>
-            <div className="domain-icon"><Icon name={d.icon} size={16} /></div>
-            <div className="domain-meta">
-              <div className="domain-h">
-                <span className="domain-label">{d.label}</span>
-                <span className="domain-count">{d.total.toLocaleString()}</span>
-                <span className="h-spacer" />
-                <span className="domain-prob">
-                  {d.problems} <span className="muted" style={{ fontSize: 10 }}>open</span>
-                </span>
-              </div>
-              <div className="domain-bar">
-                <div style={{ width: `${okPct}%`,   background: "var(--ok)"   }} />
-                <div style={{ width: `${warnPct}%`, background: "var(--warn)" }} />
-                <div style={{ width: `${errPct}%`,  background: "var(--err)"  }} />
-              </div>
-              <div className="domain-foot">
-                <span className="domain-top" title={d.top}>↳ {d.top}</span>
-                <Sparkline data={d.spark} color="var(--zbx)" width={84} height={20} fill={true} />
-              </div>
+// ───────── System Snapshot — per-system tiles ─────────
+// One card per monitored system, surfacing its 3 most important KPIs +
+// a domain-specific sparkline + a headline message. Matches the design's
+// SystemCard layout (sys-card / sys-h / sys-kpis / sys-spark / sys-foot).
+
+const sysStatus = {
+  ok:       { lbl: "OK",       fg: "var(--ok)",   bg: "rgba(52,211,153,0.10)", bd: "rgba(52,211,153,0.35)" },
+  info:     { lbl: "INFO",     fg: "var(--info)", bg: "rgba(95,168,211,0.10)", bd: "rgba(95,168,211,0.35)" },
+  warning:  { lbl: "WARN",     fg: "var(--warn)", bg: "rgba(245,179,0,0.10)",  bd: "rgba(245,179,0,0.40)"  },
+  high:     { lbl: "HIGH",     fg: "var(--err)",  bg: "rgba(242,95,92,0.10)",  bd: "rgba(242,95,92,0.40)"  },
+  disaster: { lbl: "DISASTER", fg: "#ffd0cf",     bg: "rgba(242,95,92,0.22)",  bd: "var(--err)"            },
+};
+
+const SystemCard = ({ sys }) => {
+  const st = sysStatus[sys.status] || sysStatus.ok;
+  const spark = Array.isArray(sys.spark) && sys.spark.some(v => v > 0) ? sys.spark : null;
+  return (
+    <a className="sys-card" href={sys.href} title={sys.top}>
+      <div className="sys-h">
+        <div className="sys-icon" style={{ borderColor: st.bd, color: st.fg, background: st.bg }}>
+          <Icon name={sys.icon} size={15} />
+        </div>
+        <div className="sys-h-meta">
+          <div className="sys-h-title">{sys.label}</div>
+          <div className="sys-h-sub">{sys.sub}</div>
+        </div>
+        {sys.src && <SourceBadge src={sys.src} />}
+        <span className="sys-status" style={{ color: st.fg, borderColor: st.bd, background: st.bg }}>
+          <span className="dot" style={{ background: st.fg }} />{st.lbl}
+        </span>
+      </div>
+
+      <div className="sys-kpis">
+        {(sys.kpis || []).map((k, i) => (
+          <div className="sys-kpi" key={i}>
+            <div className="sys-kpi-lbl">{k.label}</div>
+            <div className="sys-kpi-v">
+              {k.value}
+              {k.unit && <span className="sys-kpi-u">{k.unit}</span>}
             </div>
-            <Icon name="chevron" size={14} />
-          </a>
-        );
-      })}
+            {k.note && <div className="sys-kpi-n" title={k.note}>{k.note}</div>}
+          </div>
+        ))}
+      </div>
+
+      <div className="sys-spark">
+        {spark
+          ? <Sparkline data={spark} color={sys.sparkColor || "var(--zbx)"} width={260} height={28} fill={true} />
+          : <div className="sys-spark-empty">—</div>}
+        {sys.sparkLabel && <div className="sys-spark-lbl">{sys.sparkLabel}</div>}
+      </div>
+
+      <div className="sys-foot">
+        <span className="sys-foot-msg" style={{ borderLeftColor: st.fg }}>{sys.top || "—"}</span>
+        <span className="sys-foot-link">Open <Icon name="external" size={11} /></span>
+      </div>
+    </a>
+  );
+};
+
+const SystemSnapshot = () => {
+  const needAttention = GLOBAL_DOMAINS.filter(s => s.status && s.status !== "ok" && s.status !== "info").length;
+  return (
+    <div className="card" style={{ marginBottom: 14 }}>
+      <div className="card-h">
+        <h3>System Snapshot</h3>
+        <span className="h-meta">most important headline from every monitored system</span>
+        <div className="h-spacer" />
+        <span className="h-meta mono">{GLOBAL_DOMAINS.length} systems · {needAttention} need attention</span>
+      </div>
+      <div className="card-b">
+        <div className="sys-grid">
+          {GLOBAL_DOMAINS.map(s => <SystemCard key={s.id} sys={s} />)}
+        </div>
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 // ───────── Active triggers table ─────────
 const TriggersTable = ({ filterSev }) => {
@@ -432,12 +435,10 @@ const App = () => {
         <GlobalHeader now={now} rangeKey={rangeKey} setRangeKey={setRangeKey} />
         <div className="body">
           <SeverityStrip />
-          <TrendStrip />
 
-          <div className="row" style={{ gridTemplateColumns: "1.5fr 1fr", marginBottom: 14 }}>
-            <SitesHeatmap filter={t.siteFilter} setFilter={v => setTweak("siteFilter", v)} />
-            <DomainBreakdown />
-          </div>
+          <SystemSnapshot />
+
+          <SitesHeatmap filter={t.siteFilter} setFilter={v => setTweak("siteFilter", v)} />
 
           <div className="row" style={{ gridTemplateColumns: "1.4fr 1fr", marginBottom: 14 }}>
             <div className="card">

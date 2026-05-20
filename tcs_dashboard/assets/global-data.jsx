@@ -40,31 +40,74 @@ const GLOBAL_SITES = [
   { id: "TBS", name: "Bus Operations",            type: "admin",  hosts: 21,  problems: 0,  sev: "ok",       sla: 99.94 },
 ];
 
-// 4 infrastructure domains — used for the "Problems by domain" card and quick-jump tiles
+// 4 infrastructure domains — drive the System Snapshot tiles.
+// Shape mirrors the design's GLOBAL_SYSTEMS entries: each tile has a
+// label/sub/icon/src/status header, 3 KPIs, a sparkline + label, and a
+// "top" headline that gets rendered with a severity-coloured left border.
 const GLOBAL_DOMAINS = [
   {
-    id: "wireless", label: "Wireless APs",  href: "Zabbix Dashboard.html", icon: "wifi",
-    total: 1184, ok: 1162, warn: 18, err: 4,
-    problems: 22, top: "BHS-23-Cafe lost LAN uplink (5m)",
-    spark: [22,18,15,17,21,18,16,14,12,11,13,15,18,21,22,24,21,18,16,15,14,16,18,22],
+    id: "wireless",
+    label: "Wireless · XIQ",
+    sub: "ExtremeCloud IQ · 1,184 APs",
+    icon: "wifi", src: "ext", status: "warning",
+    href: "zabbix.php?action=tcs.xiq.view",
+    total: 1184, ok: 1162, warn: 18, err: 4, problems: 22,
+    kpis: [
+      { label: "APs online",        value: "1,162 / 1,184", note: "22 APs with problems" },
+      { label: "Connected clients", value: "4,328",         note: "ax 3,981 · ac 295" },
+      { label: "RF health",         value: "94", unit: "/100", note: "target ≥ 90 · 2.4 GHz dragging" },
+    ],
+    spark: [4101,4218,4256,4302,4288,4275,4310,4350,4391,4406,4380,4350,4318,4292,4280,4262,4255,4271,4290,4308,4327,4322,4329,4328],
+    sparkColor: "var(--ext)", sparkLabel: "Connected clients · 24h",
+    top: "BHS-23-Cafe lost LAN uplink (5m) · 22 APs with active problems",
   },
   {
-    id: "switches", label: "Switches",      href: "Switches Dashboard.html", icon: "ethernet",
-    total: 312, ok: 304, warn: 6, err: 2,
-    problems: 11, top: "TCS-CO-CORE-01 PSU2 failed",
-    spark: [9,8,9,7,6,8,10,11,12,11,10,9,11,13,12,11,10,9,8,9,10,11,12,11],
+    id: "switches",
+    label: "Switches",
+    sub: "Extreme Universal · 312 stacks",
+    icon: "ethernet", src: "zbx", status: "high",
+    href: "zabbix.php?action=tcs.switches.view",
+    total: 312, ok: 304, warn: 6, err: 2, problems: 11,
+    kpis: [
+      { label: "Switches up", value: "310 / 312",    note: "2 unreachable" },
+      { label: "Ports up",    value: "6,184 / 7,008", note: "88% utilised" },
+      { label: "PoE budget",  value: "73", unit: "%", note: "12 ports throttled" },
+    ],
+    spark: [6122,6140,6155,6170,6188,6201,6214,6220,6212,6201,6188,6175,6160,6152,6149,6151,6160,6172,6181,6186,6190,6187,6184,6184],
+    sparkColor: "var(--zbx)", sparkLabel: "Ports up · 24h",
+    top: "TCS-CO-CORE-01 PSU2 failed · running on PSU1 only",
   },
   {
-    id: "servers", label: "Servers",        href: "Servers Dashboard.html", icon: "ap",
-    total: 17, ok: 14, warn: 2, err: 1,
-    problems: 6, top: "infra-zbx-db-01 disk /var/lib > 88%",
-    spark: [3,3,4,4,5,5,6,6,5,5,6,7,7,6,5,5,5,5,6,6,7,7,6,6],
+    id: "servers",
+    label: "Servers",
+    sub: "Linux / Windows · physical + VM",
+    icon: "ap", src: "zbx", status: "high",
+    href: "zabbix.php?action=tcs.servers.view",
+    total: 17, ok: 14, warn: 2, err: 1, problems: 6,
+    kpis: [
+      { label: "Servers up",    value: "16 / 17",       note: "1 down (db replica)" },
+      { label: "CPU avg",       value: "42", unit: "%", note: "peak 71% (zbx-db-01)" },
+      { label: "Disk pressure", value: "3",             note: "vols >80% used" },
+    ],
+    spark: [28,30,32,35,38,40,42,45,48,52,55,58,60,58,55,52,48,45,43,42,42,42,42,42],
+    sparkColor: "var(--zbx)", sparkLabel: "Avg CPU % · 24h",
+    top: "infra-zbx-db-01 disk /var/lib > 88% · 2 hosts under disk pressure",
   },
   {
-    id: "nvr", label: "Surveillance",       href: "Surveillance Dashboard.html", icon: "shield",
-    total: 1147, ok: 1098, warn: 38, err: 11,
-    problems: 18, top: "11 cameras unreachable (Central Elem)",
-    spark: [12,13,14,15,17,18,16,15,14,13,15,17,19,21,18,17,16,15,14,16,17,18,18,18],
+    id: "nvr",
+    label: "Surveillance · Milestone",
+    sub: "XProtect 2024 R2 · 6 recorders",
+    icon: "shield", src: "ext", status: "high",
+    href: "zabbix.php?action=tcs.surveillance.view",
+    total: 1147, ok: 1098, warn: 38, err: 11, problems: 18,
+    kpis: [
+      { label: "Cameras online",   value: "1,098 / 1,147", note: "49 unreachable" },
+      { label: "Recording health", value: "94", unit: "%", note: "11 cams lagging" },
+      { label: "Storage used",     value: "78", unit: "%", note: "rec-04 at 92%" },
+    ],
+    spark: [1110,1112,1115,1108,1100,1095,1098,1102,1104,1100,1098,1096,1094,1092,1090,1095,1098,1100,1098,1097,1098,1098,1098,1098],
+    sparkColor: "var(--ext)", sparkLabel: "Cameras online · 24h",
+    top: "11 cameras unreachable at Central Elem · 2 RAID rebuilds on rec-04",
   },
 ];
 
