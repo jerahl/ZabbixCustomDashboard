@@ -157,9 +157,12 @@ class ActionDashboard extends ActionBase {
             [$pfClients, $pfAuthFails] = $this->collectPacketFence($hostid, $boot['host']);
             // Prefer XIQ /clients/active enriched with PacketFence for the
             // Clients tab — canonical per-AP source, works without PF being
-            // configured. Falls back to PF-only when XIQ isn't available.
+            // configured. Fall back to PF-only when XIQ couldn't run
+            // (null: missing device id / token, or API errored). An empty
+            // array from XIQ is authoritative — the AP genuinely has zero
+            // clients — and must NOT fall through to PF.
             $xiqClients          = $this->collectXiqClients($hostid);
-            $boot['pfClients']   = $xiqClients !== [] ? $xiqClients : $pfClients;
+            $boot['pfClients']   = $xiqClients !== null ? $xiqClients : $pfClients;
             $boot['pfAuthFails'] = $pfAuthFails;
             $boot['clientsDebug']    = $this->clientsDebug;
             $boot['pfApUplinkDebug'] = $this->pfApUplinkDebug;
@@ -999,15 +1002,18 @@ class ActionDashboard extends ActionBase {
      *     can't be read back through the Zabbix API so the host-scoped
      *     {$XIQ_TOKEN} from the fleet template isn't usable here.
      *
-     * Returns [] when either piece is missing or the API call fails — the
-     * UI then falls back to PacketFence (or renders the empty state).
+     * Returns null when the XIQ path is unavailable (no device id, no token,
+     * or the API call errored) so the caller can fall back to PacketFence.
+     * Returns [] when XIQ ran successfully but reported zero clients — that
+     * authoritatively means the AP has no active associations and the PF
+     * fallback would only add noise.
      */
-    private function collectXiqClients(string $hostid): array {
+    private function collectXiqClients(string $hostid): ?array {
         $deviceId = $this->readHostMacro($hostid, '{$XIQ_DEVICE_ID}');
         if ($deviceId === null || !is_numeric($deviceId) || (int) $deviceId <= 0) {
             $this->clientsDebug['stage']  = 'no_xiq_device_id';
             $this->clientsDebug['detail'] = 'Host macro {$XIQ_DEVICE_ID} is empty or missing.';
-            return [];
+            return null;
         }
         $this->clientsDebug['deviceId'] = (int) $deviceId;
 
@@ -1015,7 +1021,7 @@ class ActionDashboard extends ActionBase {
         if ($token === null) {
             $this->clientsDebug['stage']  = 'no_xiq_token';
             $this->clientsDebug['detail'] = 'Global macro {$XIQ_API_TOKEN} (or {$XIQ_TOKEN}) is unset. SECRET_TEXT macros are unreadable by the API — set a non-secret read-side copy.';
-            return [];
+            return null;
         }
 
         try {
@@ -1027,13 +1033,13 @@ class ActionDashboard extends ActionBase {
             error_log('[tcs_dashboard] XIQClient::getClients failed: '.$msg);
             $this->clientsDebug['stage']  = 'xiq_call_failed';
             $this->clientsDebug['detail'] = $msg;
-            return [];
+            return null;
         }
         $this->clientsDebug['xiqRowCount'] = count($rows);
 
         if (!$rows) {
             $this->clientsDebug['stage']  = 'xiq_empty';
-            $this->clientsDebug['detail'] = 'XIQ /clients/active returned no rows for device '.$deviceId.'.';
+            $this->clientsDebug['detail'] = 'XIQ /clients/active returned no rows for device '.$deviceId.' — no PF fallback (XIQ is authoritative for the empty case).';
             return [];
         }
 
