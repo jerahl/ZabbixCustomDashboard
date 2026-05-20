@@ -1334,6 +1334,42 @@ final class XIQClient
     }
 
     /**
+     * Reboot one XIQ-managed device.
+     *
+     * Endpoint: POST /devices/:reboot
+     * Body:     { "ids": [<xiqDeviceId>] }
+     *
+     * The XIQ bulk-action endpoint accepts a list — we always send a single
+     * id here because the AP-detail page only exposes one device at a time.
+     * No caching: this is a state-changing call, every invocation hits XIQ.
+     *
+     * @param  int  $xiqDeviceId  XIQ internal device ID (NOT the Zabbix host ID).
+     * @return array{ok:bool, message:string, raw:array<string,mixed>}
+     * @throws XIQException
+     */
+    public function rebootDevice(int $xiqDeviceId): array
+    {
+        if ($xiqDeviceId <= 0) {
+            throw new XIQException(
+                "XIQClient::rebootDevice() requires a positive device ID, got {$xiqDeviceId}"
+            );
+        }
+
+        $resp = $this->request(
+            method: 'POST',
+            path:   '/devices/:reboot',
+            params: [],
+            body:   ['ids' => [$xiqDeviceId]],
+        );
+
+        return [
+            'ok'      => true,
+            'message' => (string) ($resp['message'] ?? 'reboot requested'),
+            'raw'     => is_array($resp) ? $resp : [],
+        ];
+    }
+
+    /**
      * Categorise a floor-plan probe failure into a short tag for logging
      * and for the dashboard's diagnostic display.
      *
