@@ -5,6 +5,8 @@ const SourceBadge = ({ src }) => {
     zbx: { label: "ZBX", title: "Source: Zabbix", color: "var(--zbx)" },
     pf:  { label: "PF",  title: "Source: PacketFence", color: "var(--pf)" },
     ext: { label: "EXT", title: "Source: ExtremeCloud IQ (read-through)", color: "var(--ext)" },
+    "3cx": { label: "3CX", title: "Source: 3CX Phone System API", color: "var(--cx)" },
+    xdr: { label: "XDR", title: "Source: Cortex XDR tenant", color: "var(--xdr)" },
   };
   const m = map[src] || map.zbx;
   return (
@@ -75,6 +77,7 @@ const Sev = ({ level }) => {
   const map = {
     info: ["INFO", "var(--info)"],
     warning: ["WARN", "var(--warn)"],
+    average: ["AVG",  "#e8843c"],
     high: ["HIGH", "var(--err)"],
     disaster: ["DSTR", "var(--err)"],
   };
@@ -97,6 +100,12 @@ const Icon = ({ name, size = 16 }) => {
     case "user": return <svg {...s}><circle cx="8" cy="6" r="2.5" /><path d="M3 14c.8-2.5 2.8-4 5-4s4.2 1.5 5 4" /></svg>;
     case "wifi": return <svg {...s}><path d="M1.5 5.5a10 10 0 0 1 13 0M3.5 8a7 7 0 0 1 9 0M5.5 10.5a4 4 0 0 1 5 0" /><circle cx="8" cy="13" r=".8" fill="currentColor" /></svg>;
     case "ethernet": return <svg {...s}><rect x="2.5" y="5.5" width="11" height="6" rx="1" /><path d="M5 11.5v1.5M7 11.5v1.5M9 11.5v1.5M11 11.5v1.5" /></svg>;
+    case "firewall": return <svg {...s}><rect x="2" y="3" width="12" height="10" rx="1" /><path d="M2 6.5h12M2 9.5h12M6 3v3.5M10 6.5v3M6 9.5V13M10 9.5V13" /></svg>;
+    case "phone": return <svg {...s}><path d="M3 3.5h3l1.2 3.2-1.6 1A8 8 0 0 0 8.3 10.4l1-1.6 3.2 1.2v3a1 1 0 0 1-1.1 1A11 11 0 0 1 2.5 4.6 1 1 0 0 1 3.5 3.5Z" /></svg>;
+    case "headset": return <svg {...s}><path d="M3 9.5V8a5 5 0 0 1 10 0v1.5" /><rect x="2" y="9" width="3" height="4.5" rx="1" /><rect x="11" y="9" width="3" height="4.5" rx="1" /></svg>;
+    case "trunk": return <svg {...s}><circle cx="3" cy="8" r="1.5" /><circle cx="13" cy="3.5" r="1.2" /><circle cx="13" cy="8" r="1.2" /><circle cx="13" cy="12.5" r="1.2" /><path d="M4.5 8 11.8 3.5 M4.5 8h7.3 M4.5 8 11.8 12.5" /></svg>;
+    case "crosshair": return <svg {...s}><circle cx="8" cy="8" r="3.2" /><circle cx="8" cy="8" r="6" /><path d="M8 1v2 M8 13v2 M1 8h2 M13 8h2" /></svg>;
+    case "bug": return <svg {...s}><rect x="5" y="5.5" width="6" height="7" rx="3" /><path d="M5 7H3 M5 9.5H2.5 M5 12H3 M11 7h2 M11 9.5h2.5 M11 12h2 M6.5 5.5 5.5 3.5 M9.5 5.5 10.5 3.5" /></svg>;
     case "alert": return <svg {...s}><path d="M8 2.5 1.5 13.5h13L8 2.5Z" /><path d="M8 6.5v3M8 11.3v.2" /></svg>;
     case "events": return <svg {...s}><path d="M2 4h12M2 8h12M2 12h7" /></svg>;
     case "clients": return <svg {...s}><circle cx="5.5" cy="6" r="2" /><circle cx="11" cy="7" r="1.5" /><path d="M2 13c.5-2 2-3 3.5-3s3 1 3.5 3M9 13c.3-1.4 1.2-2.2 2.5-2.2s2.2.8 2.5 2.2" /></svg>;

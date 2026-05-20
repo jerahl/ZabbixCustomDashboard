@@ -297,10 +297,10 @@ function TweaksPanel({ title = 'Tweaks', noDeckControls = false, children }) {
 
 // ── Layout helpers ──────────────────────────────────────────────────────────
 
-function TweakSection({ label, children }) {
+function TweakSection({ label, title, children }) {
   return (
     <>
-      <div className="twk-sect">{label}</div>
+      <div className="twk-sect">{label ?? title}</div>
       {children}
     </>
   );
@@ -538,10 +538,10 @@ function TweakColor({ label, value, options, onChange }) {
   );
 }
 
-function TweakButton({ label, onClick, secondary = false }) {
+function TweakButton({ label, onClick, secondary = false, children }) {
   return (
     <button type="button" className={secondary ? 'twk-btn secondary' : 'twk-btn'}
-            onClick={onClick}>{label}</button>
+            onClick={onClick}>{label ?? children}</button>
   );
 }
 

@@ -4,8 +4,17 @@
 //   "xiq"           — XIQ Wireless Status (fleet overview)
 //   "wireless"      — Wireless APs (AP Detail / Zabbix Dashboard)
 //   "switches"      — Switches Dashboard
+//   "firewall"      — FortiGate Firewall Dashboard
 //   "zbx-servers"   — Servers Dashboard
-//   "problems"      — (future) problems list
+//   "voip"          — VoIP · 3CX Dashboard
+//   "xdr"           — Cortex XDR Dashboard
+//   "problems"      — Problems list
+//   "events"        — Events Console
+//   "clients"       — PacketFence Connected Devices
+//   "nac"           — PacketFence NAC Policies
+//   "sessions"      — PacketFence User Sessions
+//   "quar"          — PacketFence Quarantine
+//   "pf-status"     — PacketFence Cluster Status
 //   "nvr-overview"  — Surveillance Dashboard
 //   "nvr-cameras"   — Camera Detail
 //   "nvr-servers"   — Recording Server Detail
@@ -24,7 +33,15 @@ window.TCS_NAV = window.TCS_NAV || {
   events:        "zabbix.php?action=tcs.events.view",
   surveillance:  "zabbix.php?action=tcs.surveillance.view",
   cameraDetail:  "zabbix.php?action=tcs.camera.view",
-  serverDetail:  "zabbix.php?action=tcs.server.view"
+  serverDetail:  "zabbix.php?action=tcs.server.view",
+  fortigate:     "zabbix.php?action=tcs.fortigate.view",
+  voip:          "zabbix.php?action=tcs.voip.view",
+  xdr:           "zabbix.php?action=tcs.xdr.view",
+  pfClients:     "zabbix.php?action=tcs.pf.clients.view",
+  pfNac:         "zabbix.php?action=tcs.pf.nac.view",
+  pfSessions:    "zabbix.php?action=tcs.pf.sessions.view",
+  pfQuarantine:  "zabbix.php?action=tcs.pf.quarantine.view",
+  pfStatus:      "zabbix.php?action=tcs.pf.status.view"
 };
 
 const TCS_SIDEBAR_STORAGE_KEY = "tcs.sidebar.collapsed";
@@ -85,21 +102,25 @@ const GlobalSidebar = ({ active }) => {
 
       <div className="nav-section">
         <div className="nav-label">Monitoring</div>
-        {item("global",      NAV.global,        "map",      "Global Dashboard")}
-        {item("xiq",         NAV.xiqStatus,     "ap",       "XIQ · Status", "1,184")}
-        {item("wireless",    NAV.apDetail,      "wifi",     "Wireless APs")}
-        {item("switches",    NAV.switches,      "ethernet", "Switches",     "312")}
-        {item("zbx-servers", NAV.servers,       "ap",       "Servers",      "17")}
-        {item("problems",    NAV.problems,      "alert",    "Problems")}
-        {item("events",      NAV.events,        "events",   "Events Console")}
+        {item("global",      NAV.global,        "map",       "Global Dashboard")}
+        {item("xiq",         NAV.xiqStatus,     "ap",        "XIQ · Status",  "1,184")}
+        {item("wireless",    NAV.apDetail,      "wifi",      "Wireless APs")}
+        {item("switches",    NAV.switches,      "ethernet",  "Switches",      "312")}
+        {item("firewall",    NAV.fortigate,     "firewall",  "Firewall",      "2")}
+        {item("zbx-servers", NAV.servers,       "ap",        "Servers",       "17")}
+        {item("voip",        NAV.voip,          "phone",     "VoIP · 3CX",    "204")}
+        {item("xdr",         NAV.xdr,           "crosshair", "Cortex XDR",    "23", "warn")}
+        {item("problems",    NAV.problems,      "alert",     "Problems")}
+        {item("events",      NAV.events,        "events",    "Events Console")}
       </div>
 
       <div className="nav-section">
         <div className="nav-label">Identity (PacketFence)</div>
-        {item("clients",  NAV.global, "clients", "Connected Devices", "12,847")}
-        {item("nac",      NAV.global, "shield",  "NAC Policies")}
-        {item("sessions", NAV.global, "user",    "User Sessions")}
-        {item("quar",     NAV.global, "lock",    "Quarantine", "2", "warn")}
+        {item("clients",   NAV.pfClients,    "clients", "Connected Devices", "12,847")}
+        {item("nac",       NAV.pfNac,        "shield",  "NAC Policies")}
+        {item("sessions",  NAV.pfSessions,   "user",    "User Sessions")}
+        {item("quar",      NAV.pfQuarantine, "lock",    "Quarantine", "2", "warn")}
+        {item("pf-status", NAV.pfStatus,     "ap",      "PF · Cluster Status")}
       </div>
 
       <div className="nav-section">

@@ -117,6 +117,46 @@
             "class": "ActionPfDevice",
             "layout": "layout.json",
             "view": null
+        },
+        "tcs.pf.clients.view": {
+            "class": "ActionPfClients",
+            "view": "pf.clients.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.pf.nac.view": {
+            "class": "ActionPfNac",
+            "view": "pf.nac.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.pf.sessions.view": {
+            "class": "ActionPfSessions",
+            "view": "pf.sessions.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.pf.quarantine.view": {
+            "class": "ActionPfQuarantine",
+            "view": "pf.quarantine.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.pf.status.view": {
+            "class": "ActionPfStatus",
+            "view": "pf.status.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.voip.view": {
+            "class": "ActionVoip",
+            "view": "voip.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.fortigate.view": {
+            "class": "ActionFortigate",
+            "view": "fortigate.view",
+            "layout": "layout.htmlpage"
+        },
+        "tcs.xdr.view": {
+            "class": "ActionXdr",
+            "view": "xdr.view",
+            "layout": "layout.htmlpage"
         }
     }
 }
