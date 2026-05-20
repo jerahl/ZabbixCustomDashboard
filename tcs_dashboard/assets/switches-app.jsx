@@ -175,46 +175,67 @@ const SwitchesApp = () => {
             </React.Fragment>
           )}
           {activeTab === "topo" && (
-            <div className="switch-layout-2col">
-              <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
-              <TabTopology host={host} />
-            </div>
+            <React.Fragment>
+              <DemoBanner name="Topology" />
+              <div className="switch-layout-2col">
+                <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
+                <TabTopology host={host} />
+              </div>
+            </React.Fragment>
           )}
           {activeTab === "health" && (
-            <div className="switch-layout-2col">
-              <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
-              <TabStackHealth />
-            </div>
+            <React.Fragment>
+              <DemoBanner name="Stack Health" />
+              <div className="switch-layout-2col">
+                <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
+                <TabStackHealth />
+              </div>
+            </React.Fragment>
           )}
           {activeTab === "vlan" && (
-            <div className="switch-layout-2col">
-              <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
-              <TabVlanEaps />
-            </div>
+            <React.Fragment>
+              <DemoBanner name="VLAN / EAPS" />
+              <div className="switch-layout-2col">
+                <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
+                <TabVlanEaps />
+              </div>
+            </React.Fragment>
           )}
           {activeTab === "poe" && (
-            <div className="switch-layout-2col">
-              <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
-              <TabPoe />
-            </div>
+            <React.Fragment>
+              <DemoBanner name="PoE Budget" />
+              <div className="switch-layout-2col">
+                <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
+                <TabPoe />
+              </div>
+            </React.Fragment>
           )}
           {activeTab === "macros" && (
-            <div className="switch-layout-2col">
-              <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
-              <TabMacros host={host} />
-            </div>
+            <React.Fragment>
+              <DemoBanner name="Macros · CLI" />
+              <div className="switch-layout-2col">
+                <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
+                <TabMacros host={host} />
+              </div>
+            </React.Fragment>
           )}
           {activeTab === "triggers" && (
-            <div className="switch-layout-2col">
-              <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
-              <TabTriggers />
-            </div>
+            <React.Fragment>
+              <DemoBanner name="Triggers" />
+              <div className="switch-layout-2col">
+                <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
+                <TabTriggers />
+              </div>
+            </React.Fragment>
           )}
           {activeTab === "backups" && (
-            <div className="switch-layout-2col">
-              <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
-              <TabBackups />
-            </div>
+            <React.Fragment>
+              <DemoBanner name="Config Backups" />
+              <div className="switch-layout-2col">
+                <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
+                <TabBackups />
+              </div>
+            </React.Fragment>
           )}
         </div>
       </div>

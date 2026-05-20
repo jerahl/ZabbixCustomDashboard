@@ -177,54 +177,17 @@ class ActionSwitches extends ActionBase {
         $cacheKey = 'tcs_dashboard:switch_fleet:v2';
         if (function_exists('apcu_fetch')) {
             $hit = apcu_fetch($cacheKey, $ok);
-            if ($ok && is_array($hit) && isset($hit['data'], $hit['ts']) && is_array($hit['data'])) {
-                $age = time() - (int) $hit['ts'];
-                if ($age < $softTtl) {
-                    return $hit['data'];
-                }
-                if ($age < $hardTtl) {
-                    $this->scheduleBackgroundFleetRefresh($cacheKey, $hardTtl);
-                    return $hit['data'];
-                }
-            }
+            if ($ok && is_array($hit)) return $hit;
         }
 
         $skeleton = $this->collectFleetSkeleton();
         $counters = $this->collectFleetCounters();
         $fleet    = self::mergeFleetCounters($skeleton, $counters);
 
-    private function storeFleetCache(string $cacheKey, array $fleet, int $ttl): void {
         if (function_exists('apcu_store')) {
             apcu_store($cacheKey, $fleet, 300);
         }
-    }
-
-    /**
-     * Kick off a fleet refresh that runs *after* the response is flushed to
-     * the browser. Guarded by an apcu_add lock so concurrent stale hits don't
-     * all spawn duplicate refreshes (which would just hammer the Zabbix API).
-     */
-    private function scheduleBackgroundFleetRefresh(string $cacheKey, int $ttl): void {
-        $lockKey = $cacheKey . ':refreshing';
-        if (function_exists('apcu_add')) {
-            if (!apcu_add($lockKey, 1, 60)) return; // refresh already in flight
-        }
-
-        register_shutdown_function(function () use ($cacheKey, $ttl, $lockKey) {
-            if (function_exists('fastcgi_finish_request')) {
-                @fastcgi_finish_request();
-            }
-            try {
-                $fleet = $this->collectFleetUncached();
-                $this->storeFleetCache($cacheKey, $fleet, $ttl);
-            } catch (\Throwable $e) {
-                error_log('[tcs_dashboard] background fleet refresh failed: '.$e->getMessage());
-            } finally {
-                if (function_exists('apcu_delete')) {
-                    apcu_delete($lockKey);
-                }
-            }
-        });
+        return $fleet;
     }
 
     /**

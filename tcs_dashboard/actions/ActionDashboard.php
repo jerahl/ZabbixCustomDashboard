@@ -78,18 +78,14 @@ class ActionDashboard extends ActionBase {
         if ($hostid !== '') {
             $boot['host']        = $this->collectHost($hostid);
             $boot['items']       = $this->collectItems($hostid);
-            $boot['systemInfo']  = $this->collectSystemInfo($hostid);
-            $boot['networkInfo'] = $this->collectNetworkInfo($hostid);
-            $boot['events']      = $this->collectEvents($hostid);
-            $boot['alerts']      = $this->collectAlertsSummary($hostid);
-            $boot['wiredPorts']  = $this->collectWiredPorts($hostid);
-            $boot['ssids']       = $this->collectSsidList($hostid);
-            $boot['alertsDetail']= $this->collectAlertsDetail($hostid);
-            $boot['pfAdminUrl']  = $this->resolvePfAdminUrl($hostid);
 
             // Fold per-AP fields from the XIQ fleet host into the host
             // record so device card / page header have clients/location/
             // model/connected without a second backend round trip.
+            //
+            // Order matters: apStatus is composed here so the downstream
+            // PF collectors (collectEvents auth merge, collectPacketFence)
+            // can skip their round-trips when the AP is fully down.
             if ($boot['host']) {
                 $fleet = $this->resolveXiqFleetFields($hostid, [
                     'clients', 'building', 'floor', 'location', 'model',
@@ -149,12 +145,24 @@ class ActionDashboard extends ActionBase {
                 );
             }
 
+            $boot['systemInfo']  = $this->collectSystemInfo($hostid);
+            $boot['networkInfo'] = $this->collectNetworkInfo($hostid);
+            $boot['events']      = $this->collectEvents($hostid, $boot['host']);
+            $boot['alerts']      = $this->collectAlertsSummary($hostid);
+            $boot['wiredPorts']  = $this->collectWiredPorts($hostid);
+            $boot['ssids']       = $this->collectSsidList($hostid);
+            $boot['alertsDetail']= $this->collectAlertsDetail($hostid);
+            $boot['pfAdminUrl']  = $this->resolvePfAdminUrl($hostid);
+
             [$pfClients, $pfAuthFails] = $this->collectPacketFence($hostid, $boot['host']);
             // Prefer XIQ /clients/active enriched with PacketFence for the
             // Clients tab — canonical per-AP source, works without PF being
-            // configured. Falls back to PF-only when XIQ isn't available.
+            // configured. Fall back to PF-only when XIQ couldn't run
+            // (null: missing device id / token, or API errored). An empty
+            // array from XIQ is authoritative — the AP genuinely has zero
+            // clients — and must NOT fall through to PF.
             $xiqClients          = $this->collectXiqClients($hostid);
-            $boot['pfClients']   = $xiqClients !== [] ? $xiqClients : $pfClients;
+            $boot['pfClients']   = $xiqClients !== null ? $xiqClients : $pfClients;
             $boot['pfAuthFails'] = $pfAuthFails;
             $boot['clientsDebug']    = $this->clientsDebug;
             $boot['pfApUplinkDebug'] = $this->pfApUplinkDebug;
@@ -530,7 +538,7 @@ class ActionDashboard extends ActionBase {
         return $out;
     }
 
-    private function collectEvents(string $hostid): array {
+    private function collectEvents(string $hostid, ?array $host = null): array {
         // Pull both trigger PROBLEM (value=1) and RECOVERY (value=0) events
         // so the tab can show the full state timeline, not just opens.
         // Zabbix 7.2: sortfield must be 'eventid'; selectAcknowledges
@@ -590,16 +598,23 @@ class ActionDashboard extends ActionBase {
         }
 
         // Merge PacketFence RADIUS reject events for this AP if PF is wired
-        // — same source field the EventsTab badge consumes. The AP's MAC
-        // is the called_station_id in PF's radius_audit_log, so we ask the
-        // PF client to look up failures keyed by the host's XIQ MAC.
-        $pfMacros = $this->resolvePfMacros($hostid);
+        // — same source field the EventsTab badge consumes. PF only
+        // populates nas_ip_address on failed auths (switch / switch_ip /
+        // switch_mac stay empty), so look up failures by the AP's Mgt0
+        // IPv4 from its primary Zabbix interface.
+        //
+        // Skip the PF round-trip when the AP is fully unreachable
+        // (apStatus === 'down' means XIQ, SNMP, and ping all report
+        // down) — there's no live auth traffic for PF to report and the
+        // call would just waste a token slot.
+        $apDown   = (string) ($host['apStatus'] ?? '') === 'down';
+        $pfMacros = $apDown ? null : $this->resolvePfMacros($hostid);
         if ($pfMacros !== null) {
-            $apMac = $this->readHostMacro($hostid, '{$XIQ_MAC}');
-            if ($apMac !== null && $apMac !== '') {
+            $apIp = $this->primaryInterfaceIp($hostid);
+            if ($apIp !== '') {
                 try {
                     $pf   = PFClient::fromMacros($pfMacros);
-                    $fails = $pf->authFailuresForNode($apMac, 25);
+                    $fails = $pf->authFailuresForNode($apIp, 25);
                     foreach ($fails as $f) {
                         $ts = isset($f['ts']) ? strtotime((string) $f['ts']) : 0;
                         if ($ts <= 0) $ts = time();
@@ -987,15 +1002,18 @@ class ActionDashboard extends ActionBase {
      *     can't be read back through the Zabbix API so the host-scoped
      *     {$XIQ_TOKEN} from the fleet template isn't usable here.
      *
-     * Returns [] when either piece is missing or the API call fails — the
-     * UI then falls back to PacketFence (or renders the empty state).
+     * Returns null when the XIQ path is unavailable (no device id, no token,
+     * or the API call errored) so the caller can fall back to PacketFence.
+     * Returns [] when XIQ ran successfully but reported zero clients — that
+     * authoritatively means the AP has no active associations and the PF
+     * fallback would only add noise.
      */
-    private function collectXiqClients(string $hostid): array {
+    private function collectXiqClients(string $hostid): ?array {
         $deviceId = $this->readHostMacro($hostid, '{$XIQ_DEVICE_ID}');
         if ($deviceId === null || !is_numeric($deviceId) || (int) $deviceId <= 0) {
             $this->clientsDebug['stage']  = 'no_xiq_device_id';
             $this->clientsDebug['detail'] = 'Host macro {$XIQ_DEVICE_ID} is empty or missing.';
-            return [];
+            return null;
         }
         $this->clientsDebug['deviceId'] = (int) $deviceId;
 
@@ -1003,7 +1021,7 @@ class ActionDashboard extends ActionBase {
         if ($token === null) {
             $this->clientsDebug['stage']  = 'no_xiq_token';
             $this->clientsDebug['detail'] = 'Global macro {$XIQ_API_TOKEN} (or {$XIQ_TOKEN}) is unset. SECRET_TEXT macros are unreadable by the API — set a non-secret read-side copy.';
-            return [];
+            return null;
         }
 
         try {
@@ -1015,13 +1033,13 @@ class ActionDashboard extends ActionBase {
             error_log('[tcs_dashboard] XIQClient::getClients failed: '.$msg);
             $this->clientsDebug['stage']  = 'xiq_call_failed';
             $this->clientsDebug['detail'] = $msg;
-            return [];
+            return null;
         }
         $this->clientsDebug['xiqRowCount'] = count($rows);
 
         if (!$rows) {
             $this->clientsDebug['stage']  = 'xiq_empty';
-            $this->clientsDebug['detail'] = 'XIQ /clients/active returned no rows for device '.$deviceId.'.';
+            $this->clientsDebug['detail'] = 'XIQ /clients/active returned no rows for device '.$deviceId.' — no PF fallback (XIQ is authoritative for the empty case).';
             return [];
         }
 
@@ -1179,6 +1197,22 @@ class ActionDashboard extends ActionBase {
      * random incorrect switch and port" symptom.
      */
     private array $pfApUplinkDebug = [];
+
+    /**
+     * IP of the host's primary (main=1) network interface — the Mgt0 IPv4
+     * for an XIQ AP. Empty string when the host has no interfaces or none
+     * marked main.
+     */
+    private function primaryInterfaceIp(string $hostid): string {
+        $ifaces = API::HostInterface()->get([
+            'output'  => ['ip', 'main'],
+            'hostids' => [$hostid]
+        ]) ?: [];
+        foreach ($ifaces as $i) {
+            if ((int) ($i['main'] ?? 0) === 1) return (string) ($i['ip'] ?? '');
+        }
+        return '';
+    }
 
     /** Read a single host-scoped user macro by name; null when unset. */
     private function readHostMacro(string $hostid, string $macro): ?string {
@@ -1752,19 +1786,30 @@ class ActionDashboard extends ActionBase {
     }
 
     private function collectPacketFence(string $hostid, ?array $host): array {
+        // Don't ask PF about an AP that's fully unreachable (apStatus
+        // === 'down' means XIQ + SNMP + ping all report down). No live
+        // clients can be on it and no auth traffic is flowing — the PF
+        // call would just be a wasted round-trip (and would still count
+        // against the PF token's request budget).
+        if ((string) ($host['apStatus'] ?? '') === 'down') {
+            return [[], []];
+        }
         $macros = $this->resolvePfMacros($hostid);
         if ($macros === null) {
             return [[], []];
         }
 
         try {
-            $pf = PFClient::fromMacros($macros);
-            $deviceId = (string) ($host['host'] ?? '');
-            if ($deviceId === '') return [[], []];
+            $pf     = PFClient::fromMacros($macros);
+            $hostIp = (string) ($host['ip'] ?? '');
+            if ($hostIp === '') return [[], []];
 
             return [
-                $pf->clientsForNode($deviceId),
-                $pf->authFailuresForNode($deviceId)
+                // clientsForNode → locationlogs/search filtered by switch_ip.
+                // authFailuresForNode → radius_audit_logs/search filtered
+                // by nas_ip_address. Both want the host's Mgt0 IPv4.
+                $pf->clientsForNode($hostIp),
+                $pf->authFailuresForNode($hostIp)
             ];
         }
         catch (\Throwable $e) {

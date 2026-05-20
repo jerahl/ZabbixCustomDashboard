@@ -74,31 +74,59 @@ class PFClient {
     /* ------------------------------------------------------------------ */
 
     /**
-     * Recent clients on a switch / AP. Result shape matches the rows
-     * window.PF_CLIENTS expects (assets/tabs.jsx).
+     * Currently-associated clients on a switch / AP, keyed by the device's
+     * IP. Result shape matches the rows window.PF_CLIENTS expects
+     * (assets/tabs.jsx).
+     *
+     * Uses POST /api/v1/locationlogs/search filtered to open sessions
+     * (end_time = '0000-00-00 00:00:00'). The /api/v1/nodes listing PF
+     * exposes does NOT accept locationlog.* filter params — it silently
+     * ignores them and returns nodes for the entire cluster, which is
+     * how this method previously over-reported by 200 rows.
      *
      * @return array<int, array<string, mixed>>
      */
-    public function clientsForNode(string $deviceId, int $limit = 200): array {
-        $rows = $this->get('/api/v1/nodes', [
-            'fields' => 'mac,computername,ip4log.ip,last_seen,status,category_id,'
-                       .'locationlog.switch,locationlog.port,locationlog.ssid',
-            'limit'  => $limit,
-            'sort'   => 'last_seen DESC',
-            'locationlog.switch' => $deviceId
-        ]);
+    public function clientsForNode(string $deviceIp, int $limit = 200): array {
+        $body = [
+            'cursor' => 0,
+            'limit'  => max(1, $limit),
+            'sort'   => ['start_time DESC'],
+            'fields' => [
+                'mac', 'switch', 'switch_ip', 'port', 'vlan', 'role',
+                'ssid', 'connection_type', 'connection_sub_type',
+                'dot1x_username', 'realm', 'ifDesc', 'start_time', 'end_time'
+            ],
+            'query'  => [
+                'op' => 'and',
+                'values' => [
+                    ['op' => 'equals', 'field' => 'switch_ip', 'value' => $deviceIp],
+                    ['op' => 'equals', 'field' => 'end_time',  'value' => '0000-00-00 00:00:00'],
+                ]
+            ]
+        ];
+        try {
+            $rows = $this->call('POST', '/api/v1/locationlogs/search', [], $body);
+        } catch (\RuntimeException $e) {
+            // PF answers 404 instead of 200+empty when nothing matches.
+            if (str_contains($e->getMessage(), 'HTTP 404')) return [];
+            throw $e;
+        }
 
         $out = [];
         foreach (($rows['items'] ?? []) as $r) {
             $out[] = [
                 'mac'      => (string) ($r['mac'] ?? ''),
-                'name'     => (string) ($r['computername'] ?? ''),
-                'ip'       => (string) ($r['ip4log.ip'] ?? ''),
-                'port'     => (string) ($r['locationlog.port'] ?? ''),
-                'ssid'     => (string) ($r['locationlog.ssid'] ?? ''),
-                'status'   => (string) ($r['status'] ?? ''),
-                'category' => (string) ($r['category_id'] ?? ''),
-                'lastSeen' => (string) ($r['last_seen'] ?? '')
+                'name'     => '',
+                'ip'       => '',
+                'port'     => (string) ($r['port'] ?? ($r['ifDesc'] ?? '')),
+                'ssid'     => (string) ($r['ssid'] ?? ''),
+                'vlan'     => (string) ($r['vlan'] ?? ''),
+                'role'     => (string) ($r['role'] ?? ''),
+                'user'     => (string) ($r['dot1x_username'] ?? ''),
+                'auth'     => (string) ($r['connection_sub_type'] ?? ($r['connection_type'] ?? '')),
+                'status'   => '',
+                'category' => '',
+                'lastSeen' => (string) ($r['start_time'] ?? '')
             ];
         }
         return $out;
@@ -311,23 +339,46 @@ class PFClient {
     /**
      * Recent 802.1X auth failures (radius_audit_logs filtered to reject).
      *
+     * Filters by `nas_ip_address` — the IP of the NAS (AP / switch) that
+     * initiated the RADIUS request. Callers must pass the device's IP,
+     * not its MAC or hostname.
+     *
      * @return array<int, array<string, mixed>>
      */
     public function authFailuresForNode(string $deviceId, int $limit = 50): array {
-        $rows = $this->get('/api/v1/radius_audit_logs', [
-            'fields'      => 'mac,user_name,switch,port,auth_status,reason,created_at',
-            'limit'       => $limit,
-            'sort'        => 'created_at DESC',
-            'switch'      => $deviceId,
-            'auth_status' => 'reject'
-        ]);
+        // PF's /search endpoint requires the `query` field, returns 404
+        // ("entries not found") when zero rows match, and only accepts
+        // the `equals` / `contains` operator family (NOT `is`).
+        $body = [
+            'cursor' => 0,
+            'limit'  => max(1, $limit),
+            'sort'   => ['created_at DESC'],
+            'fields' => [
+                'mac', 'user_name', 'nas_ip_address', 'nas_port_id',
+                'auth_status', 'reason', 'created_at'
+            ],
+            'query'  => [
+                'op' => 'and',
+                'values' => [
+                    ['op' => 'equals', 'field' => 'auth_status',    'value' => 'reject'],
+                    ['op' => 'equals', 'field' => 'nas_ip_address', 'value' => $deviceId],
+                ]
+            ]
+        ];
+        try {
+            $rows = $this->call('POST', '/api/v1/radius_audit_logs/search', [], $body);
+        } catch (\RuntimeException $e) {
+            // PF answers 404 instead of 200+empty when nothing matches.
+            if (str_contains($e->getMessage(), 'HTTP 404')) return [];
+            throw $e;
+        }
 
         $out = [];
         foreach (($rows['items'] ?? []) as $r) {
             $out[] = [
                 'mac'    => (string) ($r['mac'] ?? ''),
                 'user'   => (string) ($r['user_name'] ?? ''),
-                'port'   => (string) ($r['port'] ?? ''),
+                'port'   => (string) ($r['nas_port_id'] ?? ''),
                 'reason' => (string) ($r['reason'] ?? ''),
                 'ts'     => (string) ($r['created_at'] ?? '')
             ];

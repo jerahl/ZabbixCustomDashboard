@@ -113,9 +113,22 @@ const Icon = ({ name, size = 16 }) => {
   }
 };
 
+// Red banner shown on tabs / pages still rendering hardcoded demo
+// content. `name` is the human-readable label of the surface being
+// shown (e.g. "Topology", "Surveillance NOC Overview").
+const DemoBanner = ({ name }) => (
+  <div className="demo-banner" role="alert">
+    <span className="demo-banner-pill">DEMO</span>
+    <span>
+      This data is for Demo only and not live. The <b>{name}</b> page is part of the roadmap.
+    </span>
+  </div>
+);
+
 window.SourceBadge = SourceBadge;
 window.Sparkline = Sparkline;
 window.Ring = Ring;
 window.StatusDot = StatusDot;
 window.Sev = Sev;
 window.Icon = Icon;
+window.DemoBanner = DemoBanner;

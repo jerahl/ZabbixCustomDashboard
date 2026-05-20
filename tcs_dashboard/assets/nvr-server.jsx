@@ -57,6 +57,7 @@ const ServerDetail = () => {
         </div>
 
         <div className="body" data-screen-label={`Server · ${s.id}`}>
+          <DemoBanner name="Recording Server Detail" />
           {/* TOP KPI strip */}
           <div className="card" style={{ marginBottom: 14 }}>
             <div className="stat-grid" style={{ gridTemplateColumns: "repeat(6, 1fr)" }}>
