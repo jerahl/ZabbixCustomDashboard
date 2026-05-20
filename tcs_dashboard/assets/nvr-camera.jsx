@@ -47,6 +47,7 @@ const CameraDetail = () => {
         </div>
 
         <div className="body" data-screen-label={`Camera · ${cam.id}`}>
+          <DemoBanner name="Camera Detail" />
           <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: 14 }}>
             {/* Sidecar */}
             <div className="card">

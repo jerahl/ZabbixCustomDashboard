@@ -58,6 +58,7 @@ const NVRApp = () => {
         </div>
 
         <div className="body" data-screen-label="Surveillance Overview">
+          <DemoBanner name="Surveillance NOC Overview" />
           <FleetWidgets />
         </div>
       </div>
