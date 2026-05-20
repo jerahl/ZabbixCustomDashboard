@@ -307,6 +307,23 @@ const ApPfActionRow = ({ mac, uplink }) => {
     setTimeout(() => setMsg({ kind: "", text: "" }), 6000);
   }, [pfMac, busy]);
 
+  const runReboot = React.useCallback(async () => {
+    if (busy) return;
+    if (typeof window.tcsXiqRebootAp !== "function") {
+      setMsg({ kind: "err", text: "endpoint missing" });
+      return;
+    }
+    if (!window.confirm("Reboot this AP via XIQ? Clients will disassociate while it restarts.")) return;
+    setBusy("xiq_reboot");
+    setMsg({ kind: "", text: "rebooting…" });
+    const r = await window.tcsXiqRebootAp();
+    setBusy(null);
+    setMsg(r && r.ok
+      ? { kind: "", text: r.message || "reboot requested" }
+      : { kind: "err", text: (r && (r.error || r.message)) || "failed" });
+    setTimeout(() => setMsg({ kind: "", text: "" }), 8000);
+  }, [busy]);
+
   const runCycle = React.useCallback(async () => {
     if (busy) return;
     if (typeof window.tcsCyclePoeOnSwitch !== "function") {
@@ -350,6 +367,15 @@ const ApPfActionRow = ({ mac, uplink }) => {
             : "AP MAC not known — set the {$XIQ_MAC} macro"}
         >
           <Icon name="refresh" size={11}/> {busy === "reevaluate_access" ? "REEVALUATING…" : "Reevaluate access"}
+        </button>
+        <button
+          type="button"
+          className="pf-btn warn"
+          onClick={runReboot}
+          disabled={!!busy}
+          title="Reboot this AP via XIQ (POST /devices/:reboot)"
+        >
+          <Icon name="refresh" size={11}/> {busy === "xiq_reboot" ? "REBOOTING…" : "Reboot AP"}
         </button>
         <button
           type="button"

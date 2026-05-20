@@ -64,6 +64,7 @@ $asset_base = 'modules/tcs_dashboard/assets';
     window.TCS_DATA_URL = 'zabbix.php?action=tcs.dashboard.data';
     window.TCS_PF_DEVICE_URL = 'zabbix.php?action=tcs.pf.device';
     window.TCS_SWITCH_CYCLEPOE_URL = 'zabbix.php?action=tcs.switch.cyclepoe';
+    window.TCS_XIQ_REBOOT_URL = 'zabbix.php?action=tcs.xiq.ap.reboot';
 </script>
 
 <!-- React + Babel via CDN. For air-gapped installs, vendor these into assets/ and update the src= paths. -->

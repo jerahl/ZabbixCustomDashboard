@@ -113,6 +113,11 @@
             "layout": "layout.json",
             "view": null
         },
+        "tcs.xiq.ap.reboot": {
+            "class": "ActionXiqApReboot",
+            "layout": "layout.json",
+            "view": null
+        },
         "tcs.pf.device": {
             "class": "ActionPfDevice",
             "layout": "layout.json",

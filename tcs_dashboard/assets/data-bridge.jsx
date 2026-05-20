@@ -273,6 +273,33 @@
         }
     };
 
+    // Reboot the current AP via XIQ. Resolves the host's {$XIQ_DEVICE_ID}
+    // server-side and issues POST /devices/:reboot. Same envelope as the
+    // other write helpers: { ok, message? } / { ok:false, error }.
+    window.tcsXiqRebootAp = async function () {
+        const actionUrl = window.TCS_XIQ_REBOOT_URL;
+        const hid       = window.ZBX_HOST && window.ZBX_HOST.hostid;
+        if (!actionUrl) return { ok: false, error: "endpoint not configured" };
+        if (!hid)       return { ok: false, error: "no hostid" };
+        try {
+            const form = new URLSearchParams({ hostid: String(hid) });
+            const resp = await fetch(actionUrl, {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {
+                    "Accept": "application/json",
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
+                },
+                body: form.toString()
+            });
+            const body = await resp.json().catch(() => ({}));
+            if (!resp.ok) return { ok: false, error: body.error || `HTTP ${resp.status}` };
+            return body;
+        } catch (e) {
+            return { ok: false, error: String(e && e.message ? e.message : e) };
+        }
+    };
+
     if (hostid && url) {
         setInterval(tick, REFRESH_MS);
     }
