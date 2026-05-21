@@ -396,28 +396,48 @@ class ActionSurveillanceData extends ActionDataBase {
                 $agent_host  = $agent_hid !== null ? ($hosts[$agent_hid] ?? null) : null;
                 $vals        = $agent_hid !== null ? ($metrics[$agent_hid] ?? []) : [];
 
-                // Status combines Milestone view + agent reachability.
-                $state = $enabled !== 'true' ? 'err' : ($stale ? 'warn' : 'ok');
-                if ($agent_host && (int) ($agent_host['_unreachable'] ?? 0) === 1 && $state === 'ok') {
-                    $state = 'warn';
-                }
+                // State precedence (worst wins):
+                //   1. Milestone says RS disabled                     → err
+                //   2. iDRAC global status critical / nonRecoverable  → err
+                //   3. Milestone handshake stale (>5m)                → warn
+                //   4. iDRAC global status nonCritical                → warn
+                //   5. Agent main interface unreachable               → warn
+                //   default                                           → ok
+                $hwStatus = $vals['hwStatus'] ?? null;
+                $unreachable = $agent_host && (int) ($agent_host['_unreachable'] ?? 0) === 1;
+                $state = 'ok';
+                if      ($enabled !== 'true')   $state = 'err';
+                elseif  ($hwStatus === 'err')   $state = 'err';
+                elseif  ($stale)                $state = 'warn';
+                elseif  ($hwStatus === 'warn')  $state = 'warn';
+                elseif  ($unreachable)          $state = 'warn';
+
+                // RAID indicator on the tile: surface the iDRAC overall
+                // hardware status (folds physical / virtual disks,
+                // controllers, PSUs, CPUs, memory). 'ok' until we have
+                // a reading.
+                $raid = $hwStatus ?? 'ok';
 
                 $out[] = [
                     'id'           => $rs_hostname ?: $rs_id,
                     'rsid'         => $rs_id,
                     'site'         => $site_label,
                     'role'         => 'Recording Server',
-                    'os'           => $vals['os']      ?? null,
-                    'cpu'          => $vals['cpu']     ?? null,
-                    'mem'          => $vals['mem']     ?? null,
-                    'disk'         => $vals['disk']    ?? null,
-                    'raid'         => null,
+                    'os'           => $vals['os']       ?? null,
+                    'model'        => $vals['model']    ?? null,
+                    'serial'       => $vals['serial']   ?? null,
+                    'firmware'     => $vals['firmware'] ?? null,
+                    'cpu'          => $vals['cpu']      ?? null,
+                    'mem'          => $vals['mem']      ?? null,
+                    'disk'         => $vals['disk']     ?? null,
+                    'raid'         => $raid,
+                    'hwStatus'     => $hwStatus,
                     'chans'        => null,
                     'recording'    => null,
                     'archiveLagH'  => null,
                     'agent'        => $vals['agentVer'] ?? null,
-                    'ip'           => $vals['ip']      ?? null,
-                    'uptimeD'      => $vals['uptimeD'] ?? null,
+                    'ip'           => $vals['ip']       ?? null,
+                    'uptimeD'      => $vals['uptimeD']  ?? null,
                     'lastBackup'   => null,
                     'state'        => $state,
                     'handshakeAge' => $age,
@@ -509,14 +529,28 @@ class ActionSurveillanceData extends ActionDataBase {
         }
         $matched_hids = array_values(array_unique($by_name));
 
-        // One item.get over the matched hosts for the standard agent keys.
+        // One item.get over the matched hosts for the standard agent keys
+        // PLUS the Dell iDRAC by SNMP template's identity/health items —
+        // every DVR carries both templates, and the iDRAC stack gives us
+        // the authoritative hardware state for the RS tiles. First-key-
+        // wins inside each logical group lets the same key map work on
+        // Windows + Linux + iDRAC fall-backs.
         $key_map = [
-            'cpu'      => ['system.cpu.util', 'system.cpu.util[,,avg1]'],
-            'mem'      => ['vm.memory.utilization', 'vm.memory.size[pused]'],
-            'disk'     => ['vfs.fs.size[C:,pused]', 'vfs.fs.size[/,pused]', 'vfs.fs.pused[/]'],
-            'uptime'   => ['system.uptime'],
-            'os'       => ['system.sw.os', 'system.sw.os[full]'],
-            'agentVer' => ['agent.version']
+            'cpu'         => ['system.cpu.util', 'system.cpu.util[,,avg1]'],
+            'mem'         => ['vm.memory.utilization', 'vm.memory.size[pused]'],
+            'disk'        => ['vfs.fs.size[C:,pused]', 'vfs.fs.size[/,pused]', 'vfs.fs.pused[/]'],
+            // iDRAC hrSystemUptime is more reliable than the OS-agent
+            // uptime — counts hardware-boot time, not just service restart.
+            'uptime'      => ['system.hw.uptime[hrSystemUptime.0]', 'system.uptime'],
+            'os'          => ['system.sw.os[systemOSName]', 'system.sw.os', 'system.sw.os[full]'],
+            'agentVer'    => ['agent.version'],
+            'model'       => ['system.hw.model'],
+            'serial'      => ['system.hw.serialnumber'],
+            'firmware'    => ['system.hw.firmware'],
+            // Overall hardware health from iDRAC. Enum: 1 other, 2 unknown,
+            // 3 ok, 4 nonCritical, 5 critical, 6 nonRecoverable.
+            'idracStatus' => ['system.status[globalSystemStatus.0]'],
+            'snmpAvail'   => ['zabbix[host,snmp,available]']
         ];
         $all_keys = [];
         foreach ($key_map as $keys) foreach ($keys as $k) $all_keys[] = $k;
@@ -549,7 +583,27 @@ class ActionSurveillanceData extends ActionDataBase {
             if (isset($logical['cpu']))    $logical['cpu']    = round((float) $logical['cpu'], 1);
             if (isset($logical['mem']))    $logical['mem']    = round((float) $logical['mem'], 1);
             if (isset($logical['disk']))   $logical['disk']   = round((float) $logical['disk'], 1);
-            if (isset($logical['uptime'])) $logical['uptimeD'] = (int) floor((float) $logical['uptime'] / 86400);
+            if (isset($logical['uptime'])) {
+                $u = (float) $logical['uptime'];
+                // hrSystemUptime is in hundredths of a second; agent's
+                // system.uptime is in seconds. Detect the iDRAC scale by
+                // whether the source key matched the SNMP item.
+                $usedKey = $row['system.hw.uptime[hrSystemUptime.0]'] ?? null;
+                if ($usedKey !== null && $usedKey === $logical['uptime']) {
+                    $u = $u / 100;
+                }
+                $logical['uptimeD'] = (int) floor($u / 86400);
+            }
+            // Map iDRAC status enum → simple state token.
+            if (isset($logical['idracStatus'])) {
+                $code = (int) $logical['idracStatus'];
+                $logical['hwStatus'] = match ($code) {
+                    3       => 'ok',
+                    4       => 'warn',
+                    5, 6    => 'err',
+                    default => 'unknown'
+                };
+            }
 
             // Primary interface IP.
             $host = $candidates[$hid] ?? null;

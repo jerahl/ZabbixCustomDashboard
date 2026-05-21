@@ -260,24 +260,53 @@ const SparkCellM = ({ label, v, unit, data, color }) => (
   </div>
 );
 
-const ServerMini = ({ s }) => (
-  <a className="server-tile" href={`Server Detail.html?id=${s.id}`} style={{ textDecoration: "none", color: "inherit" }}>
-    <div className="head">
-      <StatusDot state={s.disk > 90 || s.cpu > 80 ? "warn" : "ok"} />
-      <div className="id">{s.id}</div>
-      <span className="role">{s.role.replace(" Server", "")}</span>
-    </div>
-    <div className="stats">
-      <div>CPU<div className="v">{s.cpu}%</div></div>
-      <div>Mem<div className="v">{s.mem}%</div></div>
-      <div>Disk<div className="v" style={s.disk > 90 ? {color:"var(--warn)"} : {}}>{s.disk}%</div></div>
-    </div>
-    <div className="meta">
-      <span>{s.site}</span>
-      <span>{s.recording}/{s.chans} ch</span>
-    </div>
-  </a>
-);
+const ServerMini = ({ s }) => {
+  // Combined dot precedence (worst wins): bridge-derived state covers
+  // Milestone + iDRAC; the resource-usage thresholds below only matter
+  // when there's no hardware-level alert already.
+  const cpu  = _ovNz(s.cpu);
+  const mem  = _ovNz(s.mem);
+  const disk = _ovNz(s.disk);
+  let dotState = s.state || "ok";
+  if (dotState === "ok" && (disk > 90 || cpu > 80 || mem > 90)) dotState = "warn";
+  // RAID/hardware mini-indicator next to the role chip. Hidden when
+  // iDRAC hasn't reported yet (raid === "unknown") so the green dot
+  // doesn't lie about untested hardware.
+  const raid = s.raid;
+  return (
+    <a className="server-tile" href={`zabbix.php?action=tcs.server.view&hostid=${s.agentHostid || ""}`}
+       style={{ textDecoration: "none", color: "inherit" }}>
+      <div className="head">
+        <StatusDot state={dotState} />
+        <div className="id">{s.id}</div>
+        <span className="role">{(s.role || "").replace(" Server", "")}</span>
+        {raid && raid !== "unknown" && (
+          <span className={"raid-pill " + raid}
+                title={"iDRAC hardware status: " + raid}
+                style={{
+                  fontSize: 9, marginLeft: 6, padding: "1px 6px",
+                  borderRadius: 8, fontFamily: "var(--mono)",
+                  background: raid === "ok" ? "rgba(52, 211, 153, 0.15)"
+                            : raid === "warn" ? "rgba(245, 179, 0, 0.18)"
+                            : "rgba(255, 70, 92, 0.18)",
+                  color:      raid === "ok" ? "var(--ok)"
+                            : raid === "warn" ? "var(--warn)"
+                            : "var(--err)"
+                }}>RAID</span>
+        )}
+      </div>
+      <div className="stats">
+        <div>CPU<div className="v" style={cpu > 80 ? {color:"var(--warn)"} : {}}>{cpu}%</div></div>
+        <div>Mem<div className="v" style={mem > 90 ? {color:"var(--warn)"} : {}}>{mem}%</div></div>
+        <div>Disk<div className="v" style={disk > 90 ? {color:"var(--warn)"} : {}}>{disk}%</div></div>
+      </div>
+      <div className="meta">
+        <span>{s.site}</span>
+        <span>{s.model || (s.uptimeD ? `up ${s.uptimeD}d` : "—")}</span>
+      </div>
+    </a>
+  );
+};
 
 const CamThumb = ({ c }) => {
   const now = new Date();
