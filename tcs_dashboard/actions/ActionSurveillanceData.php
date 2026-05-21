@@ -374,11 +374,10 @@ class ActionSurveillanceData extends ActionDataBase {
                 $enabled = strtolower((string) ($cam['enabled'] ?? ''));
                 if ($enabled !== 'true') continue;
                 $status = (int) ($cam['status'] ?? 0);
-                // 0 OK, 1 ESS fault, 2 ping down, 3 offline (both), -1 disabled
-                if ($status === 0)      $online++;
-                elseif ($status === 1)  { $online++; $warn++; }
-                elseif ($status >= 2)   { $err++; }
-                else                    $online++;
+                $cls = $this->camStatusClass($status);
+                if      ($cls === 'ok')   $online++;
+                elseif  ($cls === 'warn') { $online++; $warn++; }
+                else                       $err++;
             }
 
             // Primary recording server (first RS) for the server label.
@@ -494,11 +493,10 @@ class ActionSurveillanceData extends ActionDataBase {
                         }
                         if (!$st) { $sites[$key]['online']++; continue; }
                         if (!$st['enabled']) continue;
-                        $code = $st['status'];
-                        if      ($code === 0)  $sites[$key]['online']++;
-                        elseif  ($code === 1)  { $sites[$key]['online']++; $sites[$key]['warn']++; }
-                        elseif  ($code >= 2)   $sites[$key]['err']++;
-                        else                   $sites[$key]['online']++;
+                        $cls = $this->camStatusClass($st['status']);
+                        if      ($cls === 'ok')   $sites[$key]['online']++;
+                        elseif  ($cls === 'warn') { $sites[$key]['online']++; $sites[$key]['warn']++; }
+                        else                       $sites[$key]['err']++;
                     }
                 } elseif (!empty($grp['cameraCount'])) {
                     $sites[$key]['cams']   = (int) $grp['cameraCount'];
@@ -821,10 +819,7 @@ class ActionSurveillanceData extends ActionDataBase {
                 $state = match (true) {
                     $status === null    => 'unknown',
                     $status === -1      => 'disabled',
-                    $status === 0       => 'ok',
-                    $status === 1       => 'warn',
-                    $status >= 2        => 'err',
-                    default             => 'unknown'
+                    default             => $this->camStatusClass($status)
                 };
                 $cam_host = $cam_host_by_id[$cam_id] ?? null;
                 $ip = $cam['address'] ?? '';
@@ -928,6 +923,27 @@ class ActionSurveillanceData extends ActionDataBase {
     }
 
     /* --------------------------------------------------------------------- */
+
+    /**
+     * Map the bit-summed milestone.cam.status code to a UI status class.
+     *
+     * The calc on the Site template folds three independent signals into
+     * one integer (-1 disabled, 0 OK, +1 ESS comm fault, +2 ICMP down,
+     * +4 SNMP down). Translate to:
+     *   ok   = 0                        every signal healthy
+     *   warn = 1, 4, 5                  device is pingable; service-level fault
+     *   err  = 2, 3, 6, 7               ICMP down (device unreachable)
+     *
+     * Values outside that range (e.g. no data yet, or pre-SNMP cameras
+     * that returned the old 0-3 codes) fall through to 'ok' so we don't
+     * paint historical OK cameras red after the template upgrade.
+     */
+    private function camStatusClass(int $code): string {
+        if ($code === 0)                return 'ok';
+        if ($code & 2)                  return 'err';   // ICMP bit set → unreachable
+        if ($code === 1 || $code === 4 || $code === 5) return 'warn';
+        return 'ok';
+    }
 
     /** Open problems across the Milestone fleet → VMS_ALARMS rows. */
     private function collectProblems(array $host_ids): array {
