@@ -421,22 +421,38 @@ class ActionSurveillanceData extends ActionDataBase {
         // Camera-status lookup keyed by camera GUID (folds enabled / status
         // across every host so a group with cameras spread over multiple
         // hosts still gets the right rollup).
-        $cam_state = [];   // cam_id => ['enabled' => bool, 'status' => int]
+        $cam_state = [];   // cam_id => ['enabled' => bool, 'status' => int, 'rsid' => string]
         foreach ($site_items as $bundle) {
             foreach ($bundle['cam'] ?? [] as $cam_id => $cam) {
                 $enabled = strtolower((string) ($cam['enabled'] ?? '')) === 'true';
                 $status  = isset($cam['status']) ? (int) $cam['status'] : -2; // -2 = no data
-                $cam_state[$cam_id] = ['enabled' => $enabled, 'status' => $status];
+                $cam_state[$cam_id] = [
+                    'enabled' => $enabled,
+                    'status'  => $status,
+                    'rsid'    => (string) ($cam['rsid'] ?? '')
+                ];
             }
         }
 
-        // Camera → recording-server lookup. Each per-camera item gives
-        // us 'rs' (which is actually the parent-hardware GUID, named
-        // historically; see milestone.cam.rs definition). To attribute
-        // a group to an RS we'd need hardware → RS, which the template
-        // doesn't surface today. Until that arrives, leave the server
-        // column blank rather than misattributing every group to the
-        // first RS on the Milestone host.
+        // RS GUID → display hostname. Populated from each Milestone host's
+        // recording-server LLD so we can label a group with the human
+        // hostname instead of the bare GUID.
+        $rs_hostname_by_id = [];
+        foreach ($site_items as $bundle) {
+            foreach ($bundle['rs'] ?? [] as $rs_id => $rs) {
+                $hostname = $rs['hostname'] ?? '';
+                if ($hostname !== '') {
+                    $rs_hostname_by_id[(string) $rs_id] = (string) $hostname;
+                }
+            }
+        }
+
+        // Per-group RS attribution: walk each group's cameraIds and tally
+        // which recording server hosts most of them. If a group's cameras
+        // are all on one RS → show that RS hostname. Mixed groups (rare,
+        // but possible if a logical site has redundant recorders) → show
+        // "(multiple)". Groups with no cameraIds yet (LLD fresh or role
+        // permissions still blocking) → '—'.
         $sites = [];
         foreach ($site_items as $hid => $bundle) {
             foreach ($bundle['grp'] ?? [] as $grp_id => $grp) {
@@ -450,10 +466,6 @@ class ActionSurveillanceData extends ActionDataBase {
                         'online'       => 0,
                         'warn'         => 0,
                         'err'          => 0,
-                        // Per-group RS attribution would need a cam→
-                        // hardware→RS map we don't have yet. Show '—'
-                        // until we wire that lookup in, rather than
-                        // misattributing every group to the same RS.
                         'server'       => '—',
                         'storageGB'    => null,
                         'storageCapGB' => null,
@@ -469,10 +481,17 @@ class ActionSurveillanceData extends ActionDataBase {
                 // best-effort total. If neither is present, the row
                 // honestly shows 0 cameras instead of guessing.
                 $cam_ids = is_array($grp['cameraIds'] ?? null) ? $grp['cameraIds'] : [];
+                $rs_tally = [];  // rs_id => count
                 if ($cam_ids) {
                     foreach ($cam_ids as $cid) {
                         $sites[$key]['cams']++;
                         $st = $cam_state[(string) $cid] ?? null;
+                        if ($st) {
+                            $rsid = $st['rsid'];
+                            if ($rsid !== '') {
+                                $rs_tally[$rsid] = ($rs_tally[$rsid] ?? 0) + 1;
+                            }
+                        }
                         if (!$st) { $sites[$key]['online']++; continue; }
                         if (!$st['enabled']) continue;
                         $code = $st['status'];
@@ -484,6 +503,22 @@ class ActionSurveillanceData extends ActionDataBase {
                 } elseif (!empty($grp['cameraCount'])) {
                     $sites[$key]['cams']   = (int) $grp['cameraCount'];
                     $sites[$key]['online'] = (int) $grp['cameraCount'];
+                }
+
+                // Attribute the group to an RS.
+                if ($rs_tally) {
+                    if (count($rs_tally) === 1) {
+                        $rs_id = array_key_first($rs_tally);
+                        $sites[$key]['server'] = $rs_hostname_by_id[$rs_id] ?? $rs_id;
+                    } else {
+                        // Mixed group — name the dominant RS plus a "+N"
+                        // hint so operators know it's a multi-RS group.
+                        arsort($rs_tally);
+                        $rs_id = array_key_first($rs_tally);
+                        $extra = count($rs_tally) - 1;
+                        $sites[$key]['server'] = ($rs_hostname_by_id[$rs_id] ?? $rs_id)
+                            . " +{$extra}";
+                    }
                 }
             }
         }
