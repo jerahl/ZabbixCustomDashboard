@@ -8,21 +8,21 @@ use CControllerResponseFatal;
 /**
  * GET zabbix.php?action=tcs.surveillance.view
  *
- * Currently renders the Milestone XProtect surveillance NOC view from the
- * mock data baked into nvr-data.jsx. To wire it to real data, do one of:
- *
- *   - Hit XProtect's REST API (Management Server /api/rest/v1/) and pass the
- *     payload to the view as $data['boot'], parallel to ActionDashboard. Then
- *     write a surveillance bridge (similar to data-bridge.jsx) that adapts
- *     window.SURVEILLANCE_BOOT into the window globals nvr-data.jsx defines.
- *   - Or pull camera-up/down state from Zabbix items templated against your
- *     XProtect recording servers, if you've SNMP-monitored them.
+ * Renders the Milestone XProtect surveillance NOC view. Server-collected
+ * boot data comes from ActionSurveillanceData::collect() and is embedded
+ * as window.SURVEILLANCE_BOOT by surveillance.view.php; the on-page
+ * surveillance-bridge.jsx then normalises it into the window.MILESTONE /
+ * SITES / SERVERS / CAMERAS / VMS_ALARMS globals that nvr-overview.jsx
+ * consumes. Fields not yet templated (storage TB, Smart Client sessions,
+ * camera bitrate / FPS, …) fall through to the mock baseline in
+ * nvr-data.jsx so the UI keeps rendering while the backend grows.
  */
 class ActionSurveillance extends ActionBase {
 
     protected function checkInput(): bool {
         $fields = [
-            'view' => 'string'  // 'overview' (default), 'cameras', 'servers'
+            'view'   => 'string',  // 'overview' (default), 'cameras', 'servers'
+            'hostid' => 'string'
         ];
 
         $ret = $this->validateInput($fields);
@@ -35,12 +35,14 @@ class ActionSurveillance extends ActionBase {
     }
 
     protected function doAction(): void {
+        $hostid = $this->getInput('hostid', '');
+        $boot   = (new ActionSurveillanceData())->collect($hostid);
+
         $data = [
-            'title' => _('TCS Surveillance NOC'),
-            'view'  => $this->getInput('view', 'overview'),
-            // No server-collected boot data yet — view loads nvr-data.jsx
-            // which self-populates window.MILESTONE / window.SITES with mock
-            // values.
+            'title'  => _('TCS Surveillance NOC'),
+            'view'   => $this->getInput('view', 'overview'),
+            'hostid' => $hostid,
+            'boot'   => $boot
         ];
 
         $response = new CControllerResponseData($data);

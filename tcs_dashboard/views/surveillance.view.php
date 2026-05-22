@@ -41,15 +41,22 @@ $asset_base = 'modules/tcs_dashboard/assets';
 
 <div id="root"></div>
 
+<script>
+    window.SURVEILLANCE_BOOT         = <?= json_encode($data['boot']   ?? null, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+    window.SURVEILLANCE_HOSTID       = <?= json_encode($data['hostid'] ?? '',   JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+    window.TCS_SURVEILLANCE_DATA_URL = "zabbix.php?action=tcs.surveillance.data";
+</script>
+
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
 
-<!-- Order matters: tweaks → primitives → data → shell → page → app entry -->
+<!-- Order matters: tweaks → primitives → live data bridge → shell → overview → tabs → app entry -->
 <script type="text/babel" src="<?= $asset_base ?>/tweaks-panel.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/primitives.jsx"></script>
-<script type="text/babel" src="<?= $asset_base ?>/nvr-data.jsx"></script>
+<script type="text/babel" src="<?= $asset_base ?>/surveillance-bridge.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/global-nav.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/nvr-shell.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/nvr-overview.jsx"></script>
+<script type="text/babel" src="<?= $asset_base ?>/nvr-tabs.jsx"></script>
 <script type="text/babel" src="<?= $asset_base ?>/nvr-app.jsx"></script>

@@ -33,6 +33,11 @@
             "view": "surveillance.view",
             "layout": "layout.htmlpage"
         },
+        "tcs.surveillance.data": {
+            "class": "ActionSurveillanceData",
+            "layout": "layout.json",
+            "view": null
+        },
         "tcs.switches.view": {
             "class": "ActionSwitches",
             "view": "switches.view",

@@ -1,14 +1,58 @@
 // Surveillance NOC Overview dashboard widgets
 
+// Defensive defaults — if surveillance-bridge.jsx hasn't published yet
+// (cache race, fetch error, …) every read here falls back to 0 / "" so
+// no .toFixed / .toLocaleString throws on undefined.
+const _OV_MS_DEFAULTS = {
+  product: "—", version: "—", managementServer: "—",
+  licenseDeviceTotal: 0, licenseDeviceUsed: 0, licenseHwTotal: 0,
+  recordingServers: 0, recordingServersOnline: 0,
+  failoverServers: 0, mobileServers: 0,
+  smartClientSessions: 0, webClientSessions: 0,
+  activeAlarms: 0, alarmsAck: 0,
+  retentionDays: 0, storageTotalTB: 0, storageUsedTB: 0,
+  evidenceLockSlots: 0, evidenceLockUsed: 0
+};
+const _OV_HISTORY_KEYS = [
+  "totalIngressGbps", "storageWriteMBps", "recordingServersCpu",
+  "camerasOnline", "alarmsPerHour", "archiveLagMin"
+];
+const _ovZ = (n) => { const a = new Array(n); for (let i = 0; i < n; i++) a[i] = 0; return a; };
+const _ovHist = () => {
+  const h = Object.assign({}, window.FLEET_HISTORY || {});
+  for (const k of _OV_HISTORY_KEYS) if (!Array.isArray(h[k]) || !h[k].length) h[k] = _ovZ(48);
+  return h;
+};
+const _ovNz = (v, d = 0) => (typeof v === "number" && !Number.isNaN(v) ? v : d);
+
 const FleetWidgets = () => {
-  const M = window.MILESTONE;
-  const H = window.FLEET_HISTORY;
-  const totalCams = window.SITES.reduce((s, x) => s + x.cams, 0);
-  const onlineCams = window.SITES.reduce((s, x) => s + x.online, 0);
-  const warnCams = window.SITES.reduce((s, x) => s + x.warn, 0);
-  const errCams = window.SITES.reduce((s, x) => s + x.err, 0);
-  const storagePct = (M.storageUsedTB / M.storageTotalTB) * 100;
-  const licensePct = (M.licenseDeviceUsed / M.licenseDeviceTotal) * 100;
+  const M = Object.assign({}, _OV_MS_DEFAULTS, window.MILESTONE || {});
+  const H = _ovHist();
+  const SITES   = Array.isArray(window.SITES)      ? window.SITES      : [];
+  const SERVERS = Array.isArray(window.SERVERS)    ? window.SERVERS    : [];
+  const CAMERAS = Array.isArray(window.CAMERAS)    ? window.CAMERAS    : [];
+  const ALARMS  = Array.isArray(window.VMS_ALARMS) ? window.VMS_ALARMS : [];
+  const totalCams = SITES.reduce((s, x) => s + _ovNz(x.cams), 0);
+  const onlineCams = SITES.reduce((s, x) => s + _ovNz(x.online), 0);
+  const warnCams = SITES.reduce((s, x) => s + _ovNz(x.warn), 0);
+  const errCams = SITES.reduce((s, x) => s + _ovNz(x.err), 0);
+  const storagePct = M.storageTotalTB > 0 ? (M.storageUsedTB / M.storageTotalTB) * 100 : 0;
+  const licensePct = M.licenseDeviceTotal > 0 ? (M.licenseDeviceUsed / M.licenseDeviceTotal) * 100 : 0;
+
+  // Tail-of-series helpers so spark-cells show their actual last value.
+  const tail = (arr) => Array.isArray(arr) && arr.length ? arr[arr.length - 1] : 0;
+  const sum  = (arr) => Array.isArray(arr) ? arr.reduce((a, b) => a + (Number(b) || 0), 0) : 0;
+
+  // Alarm-severity breakdown from local snapshot.
+  const alarmSev = ALARMS.reduce((acc, a) => {
+    acc[a.sev] = (acc[a.sev] || 0) + 1; return acc;
+  }, {});
+  const alarmSubline = [
+    alarmSev.disaster ? `${alarmSev.disaster} disaster` : null,
+    alarmSev.high     ? `${alarmSev.high} high`         : null,
+    alarmSev.warning  ? `${alarmSev.warning} warning`   : null,
+    alarmSev.info     ? `${alarmSev.info} info`         : null
+  ].filter(Boolean).join(" · ") || "no active alarms";
 
   return (
     <div>
@@ -22,18 +66,24 @@ const FleetWidgets = () => {
           </div>
           <div className="stat-cell">
             <div className="lbl"><Icon name="ethernet" size={11}/> Recording Servers <SourceBadge src="zbx" /></div>
-            <div className="val">{M.recordingServersOnline}<span className="u">/ {M.recordingServers} +{M.failoverServers} failover</span></div>
-            <div className="sub ok">All recording · 0 in failover</div>
+            <div className="val">{M.recordingServersOnline}<span className="u">/ {M.recordingServers}{M.failoverServers > 0 ? ` +${M.failoverServers} failover` : ""}</span></div>
+            <div className={"sub " + (M.recordingServers === 0 ? "" : M.recordingServersOnline === M.recordingServers ? "ok" : "warn")}>
+              {M.recordingServers === 0
+                ? "no recording servers discovered"
+                : M.recordingServersOnline === M.recordingServers
+                  ? "all online"
+                  : `${M.recordingServers - M.recordingServersOnline} offline`}
+            </div>
           </div>
           <div className="stat-cell">
             <div className="lbl"><Icon name="alert" size={11}/> Active VMS Alarms <SourceBadge src="ext" /></div>
-            <div className="val" style={{ color: "var(--err)" }}>{M.activeAlarms}<span className="u" style={{color:"var(--muted)"}}>· {M.alarmsAck} ack</span></div>
-            <div className="sub warn">2 high · 5 warning · 5 info</div>
+            <div className="val" style={{ color: M.activeAlarms > 0 ? "var(--err)" : "var(--ok)" }}>{M.activeAlarms}<span className="u" style={{color:"var(--muted)"}}>{M.alarmsAck > 0 ? `· ${M.alarmsAck} ack` : ""}</span></div>
+            <div className={"sub " + (M.activeAlarms > 0 ? "warn" : "ok")}>{alarmSubline}</div>
           </div>
           <div className="stat-cell">
             <div className="lbl"><Icon name="user" size={11}/> Smart Client Sessions <SourceBadge src="ext" /></div>
             <div className="val">{M.smartClientSessions}<span className="u">+ {M.webClientSessions} web</span></div>
-            <div className="sub">peak 31 today · {M.evidenceLockUsed} evidence locks active</div>
+            <div className="sub">{M.evidenceLockUsed} / {M.evidenceLockSlots} evidence locks active</div>
           </div>
         </div>
       </div>
@@ -67,7 +117,7 @@ const FleetWidgets = () => {
               <span className="v">{storagePct.toFixed(0)}<span style={{ fontSize: 18 }}>%</span></span>
               <span className="u">used · {(M.storageTotalTB - M.storageUsedTB).toFixed(1)} TB free</span>
             </div>
-            {window.SITES.map(s => {
+            {SITES.map(s => {
               const pct = (s.storageGB / s.storageCapGB) * 100;
               return (
                 <div key={s.name} className="storage-bar compact">
@@ -85,10 +135,10 @@ const FleetWidgets = () => {
             <FleetChart data={H.totalIngressGbps} label="Ingress" unit="Gbps" max={3} color="var(--zbx)" />
           </div>
           <div className="spark-strip" style={{ borderTop: "1px solid var(--line)" }}>
-            <SparkCellM label="Storage Write" v={832} unit="MB/s" data={H.storageWriteMBps} color="var(--info)" />
-            <SparkCellM label="Avg CPU (rec srvs)" v={42} unit="%" data={H.recordingServersCpu} color="var(--pf)" />
+            <SparkCellM label="Storage Write" v={tail(H.storageWriteMBps)} unit="MB/s" data={H.storageWriteMBps} color="var(--info)" />
+            <SparkCellM label="Avg CPU (rec srvs)" v={tail(H.recordingServersCpu)} unit="%" data={H.recordingServersCpu} color="var(--pf)" />
             <SparkCellM label="Cameras Online" v={onlineCams} unit="" data={H.camerasOnline} color="var(--ok)" />
-            <SparkCellM label="Alarms / hr" v={4} unit="" data={H.alarmsPerHour} color="var(--warn)" />
+            <SparkCellM label="Alarms / hr" v={sum(H.alarmsPerHour) > 0 ? (sum(H.alarmsPerHour) / 24).toFixed(1) : 0} unit="" data={H.alarmsPerHour} color="var(--warn)" />
           </div>
         </div>
       </div>
@@ -98,7 +148,7 @@ const FleetWidgets = () => {
         <div className="card">
           <div className="card-h"><h3>Sites</h3><SourceBadge src="ext"/><div className="h-spacer"/><span className="h-meta">click to drill into a site</span></div>
           <div>
-            {window.SITES.map(s => {
+            {SITES.map(s => {
               const pct = (s.storageGB / s.storageCapGB) * 100;
               return (
                 <div className="site-row" key={s.name}>
@@ -123,7 +173,7 @@ const FleetWidgets = () => {
         <div className="card">
           <div className="card-h"><h3>Recording Servers</h3><SourceBadge src="zbx"/><div className="h-spacer"/><span className="h-meta">zabbix-agent2 + Milestone WMI plugin</span></div>
           <div className="stat-grid" style={{ gridTemplateColumns: "repeat(2, 1fr)" }}>
-            {window.SERVERS.filter(s => s.role !== "Failover").slice(0, 6).map(s => (
+            {SERVERS.filter(s => s.role !== "Failover").slice(0, 6).map(s => (
               <ServerMini key={s.id} s={s} />
             ))}
           </div>
@@ -140,7 +190,7 @@ const FleetWidgets = () => {
           <span className="h-link">Open full alarm log <Icon name="external" size={11}/></span>
         </div>
         <div>
-          {window.VMS_ALARMS.map((a, i) => (
+          {ALARMS.map((a, i) => (
             <div key={i} className={"alarm-row " + (a.ack ? "ack" : "")}>
               <div className="ts">{a.ts}</div>
               <Sev level={a.sev}/>
@@ -154,18 +204,29 @@ const FleetWidgets = () => {
       </div>
 
       {/* Camera wall */}
-      <div className="card">
-        <div className="card-h">
-          <h3>Camera Wall · Bryant HS</h3>
-          <SourceBadge src="ext"/>
-          <div className="h-spacer"/>
-          <span className="h-meta">live preview · 8s thumb refresh</span>
-          <span className="h-link">Open in Smart Client <Icon name="external" size={11}/></span>
-        </div>
-        <div className="cam-grid">
-          {window.CAMERAS.filter(c => c.site === "Bryant HS").map(c => <CamThumb key={c.id} c={c}/>)}
-        </div>
-      </div>
+      {(() => {
+        // Read the tweak panel's selection from the parent (NVRApp publishes
+        // it onto window so widget code doesn't need the prop chain).
+        // Falls back to the first discovered site.
+        const wallSite = (window.TCS_WALL_SITE && SITES.some(s => s.name === window.TCS_WALL_SITE))
+          ? window.TCS_WALL_SITE
+          : (SITES[0] && SITES[0].name) || "—";
+        const camsAtSite = CAMERAS.filter(c => c.site === wallSite);
+        return (
+          <div className="card">
+            <div className="card-h">
+              <h3>Camera Wall · {wallSite}</h3>
+              <SourceBadge src="ext"/>
+              <div className="h-spacer"/>
+              <span className="h-meta">{camsAtSite.length.toLocaleString()} cameras at this site</span>
+              <span className="h-link">Open in Smart Client <Icon name="external" size={11}/></span>
+            </div>
+            <div className="cam-grid">
+              {camsAtSite.slice(0, 24).map(c => <CamThumb key={c.id} c={c}/>)}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };
@@ -199,24 +260,53 @@ const SparkCellM = ({ label, v, unit, data, color }) => (
   </div>
 );
 
-const ServerMini = ({ s }) => (
-  <a className="server-tile" href={`Server Detail.html?id=${s.id}`} style={{ textDecoration: "none", color: "inherit" }}>
-    <div className="head">
-      <StatusDot state={s.disk > 90 || s.cpu > 80 ? "warn" : "ok"} />
-      <div className="id">{s.id}</div>
-      <span className="role">{s.role.replace(" Server", "")}</span>
-    </div>
-    <div className="stats">
-      <div>CPU<div className="v">{s.cpu}%</div></div>
-      <div>Mem<div className="v">{s.mem}%</div></div>
-      <div>Disk<div className="v" style={s.disk > 90 ? {color:"var(--warn)"} : {}}>{s.disk}%</div></div>
-    </div>
-    <div className="meta">
-      <span>{s.site}</span>
-      <span>{s.recording}/{s.chans} ch</span>
-    </div>
-  </a>
-);
+const ServerMini = ({ s }) => {
+  // Combined dot precedence (worst wins): bridge-derived state covers
+  // Milestone + iDRAC; the resource-usage thresholds below only matter
+  // when there's no hardware-level alert already.
+  const cpu  = _ovNz(s.cpu);
+  const mem  = _ovNz(s.mem);
+  const disk = _ovNz(s.disk);
+  let dotState = s.state || "ok";
+  if (dotState === "ok" && (disk > 90 || cpu > 80 || mem > 90)) dotState = "warn";
+  // RAID/hardware mini-indicator next to the role chip. Hidden when
+  // iDRAC hasn't reported yet (raid === "unknown") so the green dot
+  // doesn't lie about untested hardware.
+  const raid = s.raid;
+  return (
+    <a className="server-tile" href={`zabbix.php?action=tcs.server.view&hostid=${s.agentHostid || ""}`}
+       style={{ textDecoration: "none", color: "inherit" }}>
+      <div className="head">
+        <StatusDot state={dotState} />
+        <div className="id">{s.id}</div>
+        <span className="role">{(s.role || "").replace(" Server", "")}</span>
+        {raid && raid !== "unknown" && (
+          <span className={"raid-pill " + raid}
+                title={"iDRAC hardware status: " + raid}
+                style={{
+                  fontSize: 9, marginLeft: 6, padding: "1px 6px",
+                  borderRadius: 8, fontFamily: "var(--mono)",
+                  background: raid === "ok" ? "rgba(52, 211, 153, 0.15)"
+                            : raid === "warn" ? "rgba(245, 179, 0, 0.18)"
+                            : "rgba(255, 70, 92, 0.18)",
+                  color:      raid === "ok" ? "var(--ok)"
+                            : raid === "warn" ? "var(--warn)"
+                            : "var(--err)"
+                }}>RAID</span>
+        )}
+      </div>
+      <div className="stats">
+        <div>CPU<div className="v" style={cpu > 80 ? {color:"var(--warn)"} : {}}>{cpu}%</div></div>
+        <div>Mem<div className="v" style={mem > 90 ? {color:"var(--warn)"} : {}}>{mem}%</div></div>
+        <div>Disk<div className="v" style={disk > 90 ? {color:"var(--warn)"} : {}}>{disk}%</div></div>
+      </div>
+      <div className="meta">
+        <span>{s.site}</span>
+        <span>{s.model || (s.uptimeD ? `up ${s.uptimeD}d` : "—")}</span>
+      </div>
+    </a>
+  );
+};
 
 const CamThumb = ({ c }) => {
   const now = new Date();
