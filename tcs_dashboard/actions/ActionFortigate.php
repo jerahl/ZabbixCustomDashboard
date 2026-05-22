@@ -8,10 +8,10 @@ use CControllerResponseFatal;
 /**
  * GET zabbix.php?action=tcs.fortigate.view
  *
- * Renders the FortiGate firewall dashboard from the mock data in
- * fortigate-data.jsx. To wire to live data, poll the FortiGate via SNMP
- * (FORTINET-FORTIGATE-MIB) and/or the REST API and pass the payload as
- * $data['boot'].
+ * Renders the FortiGate firewall dashboard shell. ActionFortigateData drives
+ * the real rollup — this action emits a minimal SSR boot envelope so
+ * fortigate-bridge.jsx can paint immediately with loading shells, then swap
+ * in the live payload after fetching tcs.fortigate.data.
  */
 class ActionFortigate extends ActionBase {
 
@@ -24,8 +24,10 @@ class ActionFortigate extends ActionBase {
     }
 
     protected function doAction(): void {
+        $boot = ActionFortigateData::emptyPayload() + ['async' => true];
         $response = new CControllerResponseData([
-            'title' => _('TCS FortiGate')
+            'title' => _('TCS FortiGate'),
+            'boot'  => $boot,
         ]);
         $response->setTitle(_('TCS FortiGate'));
         $this->setResponse($response);

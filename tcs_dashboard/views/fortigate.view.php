@@ -28,6 +28,31 @@ $v = static function (string $rel) use ($asset_base, $asset_dir): string {
 <link rel="stylesheet" href="<?= $v('xiq.css') ?>">
 <link rel="stylesheet" href="<?= $v('fortigate.css') ?>">
 
+<script>
+    // SSR snapshot from ActionFortigate; fortigate-bridge.jsx unpacks this into
+    // the window.FG_* globals fortigate-app.jsx reads, then refreshes via
+    // tcs.fortigate.data.
+    window.FG_BOOT = <?= json_encode($data['boot'] ?? new stdClass(), JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) ?>;
+    window.TCS_FORTIGATE_DATA_URL = "zabbix.php?action=tcs.fortigate.data";
+
+    // Disable Zabbix's whole-page refresh on this view (same dance as
+    // switches.view.php / xiq.view.php).
+    (function disableZabbixRefresh() {
+        const kill = () => {
+            try {
+                if (window.PageRefresh && typeof window.PageRefresh.stop === "function") {
+                    window.PageRefresh.stop();
+                }
+            } catch (e) { /* no-op */ }
+            document.querySelectorAll('meta[http-equiv="refresh" i]').forEach(m => m.remove());
+        };
+        kill();
+        document.addEventListener("DOMContentLoaded", kill);
+        setTimeout(kill, 0);
+        setTimeout(kill, 250);
+    })();
+</script>
+
 <style>
     html.hide-src-badges .src-badge { display: none !important; }
     .app[data-density="dense"]    .card-b       { padding: 10px; }
@@ -59,5 +84,5 @@ $v = static function (string $rel) use ($asset_base, $asset_dir): string {
 <script type="text/babel" src="<?= $v('tweaks-panel.jsx') ?>"></script>
 <script type="text/babel" src="<?= $v('primitives.jsx') ?>"></script>
 <script type="text/babel" src="<?= $v('global-nav.jsx') ?>"></script>
-<script type="text/babel" src="<?= $v('fortigate-data.jsx') ?>"></script>
+<script type="text/babel" src="<?= $v('fortigate-bridge.jsx') ?>"></script>
 <script type="text/babel" src="<?= $v('fortigate-app.jsx') ?>"></script>

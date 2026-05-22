@@ -5,6 +5,43 @@
 
 const { useState, useEffect } = React;
 
+// ───────── Live data bindings ─────────
+// Data globals are populated by fortigate-bridge.jsx (from window.FG_BOOT on
+// first paint, then refreshed by fetch to tcs.fortigate.data). These `let`s
+// are live bindings — child components reference them by name and pick up
+// reassignments when the bridge fires "tcs:fortigate-data". App listens for
+// that event and bumps a render counter to force the tree to re-evaluate.
+let FG_DEVICE           = window.FG_DEVICE           || {};
+let FG_TOTALS           = window.FG_TOTALS           || {};
+let FG_HA               = window.FG_HA               || { members: [], hbInterfaces: [] };
+let FG_INTERFACES       = window.FG_INTERFACES       || [];
+let FG_IPSEC            = window.FG_IPSEC            || [];
+let FG_SSLVPN           = window.FG_SSLVPN           || [];
+let FG_SDWAN            = window.FG_SDWAN            || { sla: [], latencyHistory: {}, preferredLink: "" };
+let FG_UTM              = window.FG_UTM              || [];
+let FG_TOP_THREATS      = window.FG_TOP_THREATS      || [];
+let FG_TOP_POLICIES     = window.FG_TOP_POLICIES     || [];
+let FG_SESSIONS_24H     = window.FG_SESSIONS_24H     || new Array(24).fill(0);
+let FG_NEW_SESSIONS_24H = window.FG_NEW_SESSIONS_24H || new Array(24).fill(0);
+let FG_THROUGHPUT_24H   = window.FG_THROUGHPUT_24H   || { ingress: new Array(24).fill(0), egress: new Array(24).fill(0) };
+let FG_EVENTS           = window.FG_EVENTS           || [];
+window.addEventListener("tcs:fortigate-data", () => {
+  FG_DEVICE           = window.FG_DEVICE           || FG_DEVICE;
+  FG_TOTALS           = window.FG_TOTALS           || FG_TOTALS;
+  FG_HA               = window.FG_HA               || FG_HA;
+  FG_INTERFACES       = window.FG_INTERFACES       || FG_INTERFACES;
+  FG_IPSEC            = window.FG_IPSEC            || FG_IPSEC;
+  FG_SSLVPN           = window.FG_SSLVPN           || FG_SSLVPN;
+  FG_SDWAN            = window.FG_SDWAN            || FG_SDWAN;
+  FG_UTM              = window.FG_UTM              || FG_UTM;
+  FG_TOP_THREATS      = window.FG_TOP_THREATS      || FG_TOP_THREATS;
+  FG_TOP_POLICIES     = window.FG_TOP_POLICIES     || FG_TOP_POLICIES;
+  FG_SESSIONS_24H     = window.FG_SESSIONS_24H     || FG_SESSIONS_24H;
+  FG_NEW_SESSIONS_24H = window.FG_NEW_SESSIONS_24H || FG_NEW_SESSIONS_24H;
+  FG_THROUGHPUT_24H   = window.FG_THROUGHPUT_24H   || FG_THROUGHPUT_24H;
+  FG_EVENTS           = window.FG_EVENTS           || FG_EVENTS;
+});
+
 // Reuse XIQ's severity palette for cards.
 const fgSev = {
   ok:       { bg: "rgba(52,211,153,0.10)",  bd: "rgba(52,211,153,0.35)", fg: "var(--ok)"   },
@@ -56,15 +93,16 @@ const FGHeader = ({ now, timeRange, setTimeRange }) => {
 // ───────── KPI strip (6 cells) ─────────
 const FGKPIStrip = () => {
   const t = FG_TOTALS;
-  const sessPct = (t.sessions.active / t.sessions.limit) * 100;
+  const sessLimit = t.sessions.limit || 0;
+  const sessPct   = sessLimit > 0 ? (t.sessions.active / sessLimit) * 100 : 0;
   return (
     <div className="card" style={{ marginBottom: 14 }}>
       <div className="fg-kpi">
         <div className="fg-kpi-cell">
           <div className="fg-kpi-h"><span className="fg-kpi-lbl">Active Sessions</span><SourceBadge src="zbx" /></div>
           <div className="fg-kpi-v">{compact(t.sessions.active)}</div>
-          <div className="fg-kpi-bar"><div style={{ width: `${sessPct}%`, background: "var(--ok)" }} /></div>
-          <div className="fg-kpi-foot">{sessPct.toFixed(2)}% of {(t.sessions.limit/1e6).toFixed(0)}M cap · peak {compact(t.sessions.peak)}</div>
+          <div className="fg-kpi-bar"><div style={{ width: `${Math.min(100, sessPct)}%`, background: "var(--ok)" }} /></div>
+          <div className="fg-kpi-foot">{sessLimit > 0 ? `${sessPct.toFixed(2)}% of ${(sessLimit/1e6).toFixed(0)}M cap` : "cap unknown"} · peak {compact(t.sessions.peak)}</div>
         </div>
         <div className="fg-kpi-cell">
           <div className="fg-kpi-h"><span className="fg-kpi-lbl">New / sec</span><SourceBadge src="zbx" /></div>
@@ -100,7 +138,7 @@ const FGKPIStrip = () => {
 // ───────── Throughput 24h chart (SVG dual-area) ─────────
 const FGThroughputChart = () => {
   const { ingress, egress } = FG_THROUGHPUT_24H;
-  const max = Math.max(...ingress, ...egress) * 1.15;
+  const max = (Math.max(...ingress, ...egress) || 1) * 1.15;
   const W = 100, H = 100; // viewBox %
   const stepX = W / (ingress.length - 1);
   const toPath = (data, fillBottom = true) => {
@@ -153,6 +191,21 @@ const FGThroughputChart = () => {
 // ───────── HA cluster card ─────────
 const FGHACluster = () => {
   const ha = FG_HA;
+  if (!ha.members || ha.members.length === 0) {
+    return (
+      <div className="card">
+        <div className="card-h">
+          <h3>HA Cluster</h3>
+          <SourceBadge src="zbx" />
+          <div className="h-spacer" />
+          <span className="h-meta">{ha.mode || "—"}</span>
+        </div>
+        <div className="card-b tight" style={{ padding: "30px 14px", color: "var(--muted)", fontSize: 12, textAlign: "center" }}>
+          No HA members discovered. Standalone unit or HA stats not yet templated.
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="card">
       <div className="card-h">
@@ -210,9 +263,9 @@ const FGHACluster = () => {
         })}
       </div>
       <div className="ha-foot">
-        <span><span className="lbl">Heartbeat:</span> {ha.hbInterfaces.join(" + ")} · <span style={{ color: "var(--ok)" }}>{ha.hbLatencyMs} ms</span></span>
+        <span><span className="lbl">Heartbeat:</span> {(ha.hbInterfaces || []).join(" + ") || "—"} · <span style={{ color: "var(--ok)" }}>{ha.hbLatencyMs || 0} ms</span></span>
         <span><span className="ok-dot" /> Config checksum match</span>
-        <span><span className="lbl">Last failover:</span> {ha.members[1].lastFail}</span>
+        <span><span className="lbl">Last failover:</span> {(ha.members[1] && ha.members[1].lastFail) || "—"}</span>
       </div>
     </div>
   );
@@ -259,11 +312,13 @@ const FGSessions = () => (
 // ───────── Health rings strip (CPU, Mem, Disk, Sessions) ─────────
 const FGHealthStrip = () => {
   const t = FG_TOTALS;
+  const sessLimit = t.sessions.limit || 0;
+  const sessUtilPct = sessLimit > 0 ? (t.sessions.active / sessLimit) * 100 : 0;
   const items = [
     { v: t.cpu.now,  lbl: "CPU",      sub: `peak 15m ${t.cpu.peak15m}%`,  threshold: t.cpu.target, color: t.cpu.now > t.cpu.target ? "var(--err)" : t.cpu.now > 50 ? "var(--warn)" : "var(--ok)" },
     { v: t.mem.now,  lbl: "Memory",   sub: `peak 15m ${t.mem.peak15m}%`,  threshold: t.mem.target, color: t.mem.now > t.mem.target ? "var(--err)" : "var(--info)" },
     { v: t.disk.now, lbl: "Disk · /var/log", sub: "log rotation OK",      threshold: t.disk.target, color: t.disk.now > t.disk.target ? "var(--warn)" : "var(--ok)" },
-    { v: (t.sessions.active / t.sessions.limit) * 100, lbl: "Session cap", sub: `${compact(t.sessions.active)} / ${(t.sessions.limit/1e6).toFixed(0)}M`, color: "var(--ext)" },
+    { v: sessUtilPct, lbl: "Session cap", sub: sessLimit > 0 ? `${compact(t.sessions.active)} / ${(sessLimit/1e6).toFixed(0)}M` : compact(t.sessions.active), color: "var(--ext)" },
   ];
   return (
     <div className="card">
@@ -518,7 +573,7 @@ const FGTopThreats = () => (
 
 // ───────── Top policies ─────────
 const FGTopPolicies = () => {
-  const max = Math.max(...FG_TOP_POLICIES.map(p => p.hits24h));
+  const max = FG_TOP_POLICIES.length ? Math.max(...FG_TOP_POLICIES.map(p => p.hits24h)) : 1;
   return (
     <div className="card">
       <div className="card-h">
@@ -595,14 +650,45 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "view": "operations"
 }/*EDITMODE-END*/;
 
+// Banner shown when the bridge surfaces an error/warning (e.g. no FortiGate
+// host templated yet). Mirrors XIQBanner.
+const FGBanner = () => {
+  const b = window.FG_BANNER;
+  if (!b) return null;
+  const fg = b.kind === "error" ? "var(--err)" : "var(--warn)";
+  const bd = b.kind === "error" ? "rgba(242,95,92,0.45)" : "rgba(245,179,0,0.45)";
+  const bg = b.kind === "error" ? "rgba(242,95,92,0.10)" : "rgba(245,179,0,0.10)";
+  return (
+    <div style={{
+      margin: "0 14px 12px", padding: "10px 14px", borderRadius: 8,
+      border: `1px solid ${bd}`, background: bg, color: fg, fontSize: 12.5
+    }}>
+      <strong style={{ marginRight: 8, textTransform: "uppercase", letterSpacing: ".06em", fontSize: 10.5 }}>{b.kind}</strong>
+      {b.msg}
+    </div>
+  );
+};
+
 const App = () => {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [timeRange, setTimeRange] = useState("Last 1h");
   const [now, setNow] = useState("just now");
+  const [, setTick] = useState(0);
 
   useEffect(() => {
     document.documentElement.classList.toggle("hide-src-badges", !t.showSourceBadges);
   }, [t.showSourceBadges]);
+
+  // Re-render whenever fortigate-bridge.jsx swaps in a fresh
+  // tcs.fortigate.data payload.
+  useEffect(() => {
+    const onData = () => {
+      setNow(new Date().toLocaleTimeString());
+      setTick(n => n + 1);
+    };
+    window.addEventListener("tcs:fortigate-data", onData);
+    return () => window.removeEventListener("tcs:fortigate-data", onData);
+  }, []);
 
   return (
     <div className="app" data-density={t.density} data-screen-label="FortiGate Firewall">
@@ -613,8 +699,8 @@ const App = () => {
           search="Find policy, address object, signature, user…"
         />
         <FGHeader now={now} timeRange={timeRange} setTimeRange={setTimeRange} />
+        <FGBanner />
         <div className="body">
-          <DemoBanner name="FortiGate Firewall" />
           <FGKPIStrip />
           <FGThroughputChart />
 
@@ -679,8 +765,7 @@ const App = () => {
           <TweakToggle label="SD-WAN + UTM" value={t.showSDWAN} onChange={v => setTweak("showSDWAN", v)} />
         </TweakSection>
         <TweakSection label="Quick actions">
-          <TweakButton onClick={() => setNow(new Date().toLocaleTimeString())} label="Refresh now" />
-          <TweakButton onClick={() => alert("Would trigger SNMP poll of fw-tcs-co-01 + force HA sync verify.")} label="Force HA sync" />
+          <TweakButton onClick={() => { setNow(new Date().toLocaleTimeString()); if (window.tcsFortigateRefresh) window.tcsFortigateRefresh(); }} label="Refresh now" />
         </TweakSection>
       </TweaksPanel>
     </div>
