@@ -10,9 +10,10 @@ use CControllerResponseData;
  *
  * Rollup payload for the FortiGate firewall dashboard (fortigate-app.jsx).
  * Driven entirely by the "FortiGate by SNMP" template — pulls host metadata,
- * device-level counters (CPU/mem/disk/sessions/IPS/VPN), HA cluster members
- * (LLD), interfaces (LLD), SD-WAN links (LLD), and VPN tunnels (LLD), plus
- * recent host problems for the events stream.
+ * device-level counters (CPU/mem/disk/sessions/IPS/VPN), interfaces (LLD),
+ * SD-WAN links (LLD), and VPN tunnels (LLD), plus recent host problems for
+ * the events stream. The HA mode label is included in the header pill but
+ * the dashboard no longer renders a dedicated HA cluster tile.
  *
  * Discovery: any host whose template ancestry includes "FortiGate by SNMP".
  * When multiple FortiGate hosts exist (e.g. an HA pair monitored as two
@@ -86,7 +87,6 @@ class ActionFortigateData extends ActionDataBase {
             'loading'    => true,
             'device'     => self::emptyDevice(),
             'totals'     => self::emptyTotals(),
-            'ha'         => ['group' => 0, 'mode' => '—', 'syncStatus' => '—', 'members' => [], 'hbInterfaces' => [], 'hbLatencyMs' => 0],
             'interfaces' => [],
             'ipsec'      => [],
             'sslvpn'     => [],
@@ -184,25 +184,22 @@ class ActionFortigateData extends ActionDataBase {
         // 4. Totals (CPU / mem / disk / sessions / IPS / VPN)
         $payload['totals'] = self::buildTotals($byKey, $lldKeys);
 
-        // 5. HA cluster: members from ha.* LLD, plus optionally a peer host.
-        $payload['ha'] = self::buildHa($primary, $hosts, $byKey, $lldKeys);
-
-        // 6. Interfaces
+        // 5. Interfaces
         $payload['interfaces'] = self::buildInterfaces($lldKeys);
 
-        // 7. IPsec / VPN tunnels (status only — byte counters aren't in template)
+        // 6. IPsec / VPN tunnels (status only — byte counters aren't in template)
         $tunnels = self::buildIpsec($lldKeys);
         $payload['ipsec'] = $tunnels['rows'];
         $payload['totals']['vpn']['ipsec_up']    = $tunnels['up'];
         $payload['totals']['vpn']['ipsec_total'] = $tunnels['total'];
 
-        // 8. SD-WAN per-link SLA
+        // 7. SD-WAN per-link SLA
         $payload['sdwan'] = self::buildSdwan($lldKeys);
 
-        // 9. UTM rollup from ips.detected/blocked counters
+        // 8. UTM rollup from ips.detected/blocked counters
         $payload['utm'] = self::buildUtm($byKey);
 
-        // 10. Events from host problems
+        // 9. Events from host problems
         $payload['events'] = self::buildEvents(array_column($hosts, 'hostid'), $hosts);
 
         $payload['sources']['zbx'] = 'live';
@@ -463,88 +460,6 @@ class ActionFortigateData extends ActionDataBase {
             'wan_out_gbps' => round($wanTx / 1e9, 2),
             'lan_gbps'     => round($lan / 1e9, 2),
             'peak_gbps'    => round(($wanRx + $wanTx) / 1e9, 2),
-        ];
-    }
-
-    /**
-     * HA cluster — pull per-member rows from the ha.* LLD set.
-     * The template discovers HA stats from FORTINET-FORTIGATE-MIB::fgHaTables,
-     * one row per cluster member, each with a {#SNMPINDEX}.
-     */
-    private static function buildHa(array $primary, array $hosts, array $byKey, array $lld): array {
-        $members = [];
-
-        // Bucket every ha.* LLD item by SNMPINDEX.
-        $byIdx = [];
-        $haKeys = [
-            'ha.hostname'           => 'host',
-            'ha.cpu.usage'          => 'cpu',
-            'ha.mem.usage'          => 'mem',
-            'ha.session.count'      => 'sessions',
-            'ha.serialnumber'       => 'serial',
-            'ha.primary.serialnumber'=> 'primarySerial',
-            'ha.sync.status'        => 'syncCode',
-            'ha.net.usage'          => 'netUsage',
-            'ha.bytes.rate'         => 'bytesRate',
-            'ha.packets.rate'       => 'packetsRate',
-            'ha.ips.events'         => 'ipsEvents',
-            'ha.av.events'          => 'avEvents',
-        ];
-        foreach ($haKeys as $prefix => $field) {
-            foreach ($lld[$prefix] ?? [] as $r) {
-                $idx = (string) $r['_index'];
-                $byIdx[$idx] = $byIdx[$idx] ?? [];
-                $byIdx[$idx][$field] = $r['lastvalue'] ?? '';
-            }
-        }
-
-        // The primary serial is published on every HA stats row (each member
-        // reports who it considers the cluster master). All rows in a healthy
-        // cluster should agree, so the first non-empty value wins.
-        $primarySerial = '';
-        foreach ($byIdx as $row) {
-            if (!empty($row['primarySerial'])) { $primarySerial = (string) $row['primarySerial']; break; }
-        }
-
-        foreach ($byIdx as $idx => $row) {
-            $serial = (string) ($row['serial'] ?? '');
-            $role   = ($primarySerial !== '' && $serial === $primarySerial) ? 'Primary' : 'Secondary';
-            $sync   = (int) ($row['syncCode'] ?? 0); // 0=unsync, 1=sync per template valuemap
-            $members[] = [
-                'host'      => (string) ($row['host'] ?? ('member ' . $idx)),
-                'role'      => $role,
-                'priority'  => self::itemInt($byKey, 'ha.cluster.priority[fgHaPriority.0]'),
-                'serial'    => $serial,
-                'uptime'    => '—',
-                'cpu'       => (int) round((float) ($row['cpu'] ?? 0)),
-                'mem'       => (int) round((float) ($row['mem'] ?? 0)),
-                'sessions'  => (int) ($row['sessions'] ?? 0),
-                'sync'      => $sync === 1 ? 'in-sync' : 'out-of-sync',
-                'vcluster1' => '—',
-                'vcluster2' => '—',
-                'lastFail'  => '—',
-            ];
-        }
-        // Sort: primary first, then by hostname
-        usort($members, function ($a, $b) {
-            if ($a['role'] !== $b['role']) return $a['role'] === 'Primary' ? -1 : 1;
-            return strcmp((string) $a['host'], (string) $b['host']);
-        });
-
-        $haModeCode = self::itemInt($byKey, 'ha.mode[fgHaSystemMode.0]', 0);
-        $mode       = self::HA_MODE[$haModeCode] ?? '—';
-        $group      = self::itemInt($byKey, 'ha.cluster.group_id[fgHaGroupId.0]', 0);
-
-        return [
-            'group'        => $group,
-            'mode'         => $mode,
-            'members'      => $members,
-            'hbInterfaces' => [],
-            'hbLatencyMs'  => 0,
-            'syncStatus'   => $members
-                ? (count(array_filter($members, fn($m) => $m['sync'] === 'in-sync')) === count($members)
-                    ? 'all members in-sync' : 'sync drift detected')
-                : '—',
         ];
     }
 

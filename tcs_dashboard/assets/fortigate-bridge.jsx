@@ -2,7 +2,7 @@
 //
 // Data layer for the FortiGate Firewall page. ActionFortigate embeds an SSR
 // boot snapshot in window.FG_BOOT. This bridge unpacks it into the per-section
-// globals fortigate-app.jsx reads (FG_DEVICE / FG_TOTALS / FG_HA /
+// globals fortigate-app.jsx reads (FG_DEVICE / FG_TOTALS /
 // FG_INTERFACES / FG_IPSEC / FG_SSLVPN / FG_SDWAN / FG_UTM / FG_TOP_THREATS /
 // FG_TOP_POLICIES / FG_SESSIONS_24H / FG_NEW_SESSIONS_24H / FG_THROUGHPUT_24H
 // / FG_EVENTS), then fetches tcs.fortigate.data after first paint to refresh
@@ -27,7 +27,6 @@
             policies:    { total: 0, active: 0, unused_30d: 0 },
             fortiguard:  { ips: "—", av: "—", webfilter: "—", appctrl: "—", expiresDays: 0 },
         },
-        FG_HA:               { group: 0, mode: "—", members: [], hbInterfaces: [], hbLatencyMs: 0, syncStatus: "—" },
         FG_INTERFACES:       [],
         FG_IPSEC:            [],
         FG_SSLVPN:           [],
@@ -45,7 +44,6 @@
     const KEYS = [
         ["device",          "FG_DEVICE"],
         ["totals",          "FG_TOTALS"],
-        ["ha",              "FG_HA"],
         ["interfaces",      "FG_INTERFACES"],
         ["ipsec",           "FG_IPSEC"],
         ["sslvpn",          "FG_SSLVPN"],
@@ -111,7 +109,6 @@
             const j = await resp.json();
             apply(j || {});
             console.info("[tcs] fortigate refresh:",
-                ((j.ha && j.ha.members) || []).length, "HA member(s),",
                 (j.interfaces || []).length, "interface(s),",
                 (j.ipsec || []).length, "tunnel(s)");
             return j;

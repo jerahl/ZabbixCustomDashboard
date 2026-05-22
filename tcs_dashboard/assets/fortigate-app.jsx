@@ -1,6 +1,6 @@
 // FortiGate Firewall Status — single-device deep dive for the TCS Central Office
-// HA pair. Layout: header → KPI strip → throughput 24h → HA cluster / sessions →
-// health rings → interfaces → IPsec / SSL-VPN → SD-WAN SLA → UTM → top threats /
+// HA pair. Layout: header → KPI strip → throughput 24h → sessions → health
+// rings → interfaces → IPsec / SSL-VPN → SD-WAN SLA → UTM → top threats /
 // policies → events.
 
 const { useState, useEffect } = React;
@@ -13,7 +13,6 @@ const { useState, useEffect } = React;
 // that event and bumps a render counter to force the tree to re-evaluate.
 let FG_DEVICE           = window.FG_DEVICE           || {};
 let FG_TOTALS           = window.FG_TOTALS           || {};
-let FG_HA               = window.FG_HA               || { members: [], hbInterfaces: [] };
 let FG_INTERFACES       = window.FG_INTERFACES       || [];
 let FG_IPSEC            = window.FG_IPSEC            || [];
 let FG_SSLVPN           = window.FG_SSLVPN           || [];
@@ -28,7 +27,6 @@ let FG_EVENTS           = window.FG_EVENTS           || [];
 window.addEventListener("tcs:fortigate-data", () => {
   FG_DEVICE           = window.FG_DEVICE           || FG_DEVICE;
   FG_TOTALS           = window.FG_TOTALS           || FG_TOTALS;
-  FG_HA               = window.FG_HA               || FG_HA;
   FG_INTERFACES       = window.FG_INTERFACES       || FG_INTERFACES;
   FG_IPSEC            = window.FG_IPSEC            || FG_IPSEC;
   FG_SSLVPN           = window.FG_SSLVPN           || FG_SSLVPN;
@@ -183,89 +181,6 @@ const FGThroughputChart = () => {
             <div className="tput2-stat-v">{FG_TOTALS.throughput.lan_gbps.toFixed(2)}<span className="u">Gbps</span></div>
           </div>
         </div>
-      </div>
-    </div>
-  );
-};
-
-// ───────── HA cluster card ─────────
-const FGHACluster = () => {
-  const ha = FG_HA;
-  if (!ha.members || ha.members.length === 0) {
-    return (
-      <div className="card">
-        <div className="card-h">
-          <h3>HA Cluster</h3>
-          <SourceBadge src="zbx" />
-          <div className="h-spacer" />
-          <span className="h-meta">{ha.mode || "—"}</span>
-        </div>
-        <div className="card-b tight" style={{ padding: "30px 14px", color: "var(--muted)", fontSize: 12, textAlign: "center" }}>
-          No HA members discovered. Standalone unit or HA stats not yet templated.
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="card">
-      <div className="card-h">
-        <h3>HA Cluster · group {ha.group}</h3>
-        <SourceBadge src="zbx" />
-        <div className="h-spacer" />
-        <span className="h-meta">{ha.mode} · {ha.syncStatus}</span>
-      </div>
-      <div className="ha-grid">
-        {ha.members.map((m, i) => {
-          const role = m.role.toLowerCase();
-          const cpuColor = m.cpu > 70 ? "var(--err)" : m.cpu > 50 ? "var(--warn)" : "var(--ok)";
-          const memColor = m.mem > 80 ? "var(--err)" : m.mem > 60 ? "var(--warn)" : "var(--ok)";
-          return (
-            <React.Fragment key={m.host}>
-              <div className={"ha-node " + role}>
-                <div className="role-pill">
-                  <span className="dot" style={{ background: role === "primary" ? "var(--ok)" : "var(--muted)" }} />
-                  {m.role} · prio {m.priority}
-                </div>
-                <div className="ha-node-name">{m.host}</div>
-                <div className="ha-node-meta">
-                  <span>SN {m.serial}</span>
-                  <span>up {m.uptime}</span>
-                </div>
-                <div className="ha-node-stats">
-                  <div className="ha-node-stat">
-                    <div className="lbl">CPU</div>
-                    <div className="v">{m.cpu}%</div>
-                    <div className="bar"><div style={{ width: `${m.cpu}%`, background: cpuColor }} /></div>
-                  </div>
-                  <div className="ha-node-stat">
-                    <div className="lbl">Memory</div>
-                    <div className="v">{m.mem}%</div>
-                    <div className="bar"><div style={{ width: `${m.mem}%`, background: memColor }} /></div>
-                  </div>
-                  <div className="ha-node-stat">
-                    <div className="lbl">Sessions</div>
-                    <div className="v">{compact(m.sessions)}</div>
-                  </div>
-                  <div className="ha-node-stat">
-                    <div className="lbl">VCluster 1/2</div>
-                    <div className="v" style={{ fontSize: 11 }}>{m.vcluster1.slice(0,4)}/{m.vcluster2.slice(0,4)}</div>
-                  </div>
-                </div>
-              </div>
-              {i === 0 && (
-                <div className="ha-link">
-                  <div className="ha-link-line" />
-                  <div className="ha-link-lbl">SYNC</div>
-                </div>
-              )}
-            </React.Fragment>
-          );
-        })}
-      </div>
-      <div className="ha-foot">
-        <span><span className="lbl">Heartbeat:</span> {(ha.hbInterfaces || []).join(" + ") || "—"} · <span style={{ color: "var(--ok)" }}>{ha.hbLatencyMs || 0} ms</span></span>
-        <span><span className="ok-dot" /> Config checksum match</span>
-        <span><span className="lbl">Last failover:</span> {(ha.members[1] && ha.members[1].lastFail) || "—"}</span>
       </div>
     </div>
   );
@@ -645,7 +560,6 @@ const FGEvents = () => (
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "density": "balanced",
   "showSourceBadges": true,
-  "showHACluster": true,
   "showSDWAN": true,
   "view": "operations"
 }/*EDITMODE-END*/;
@@ -704,12 +618,9 @@ const App = () => {
           <FGKPIStrip />
           <FGThroughputChart />
 
-          {t.showHACluster && (
-            <div className="row" data-fg-row style={{ gridTemplateColumns: "1.3fr 1fr", marginBottom: 14 }}>
-              <FGHACluster />
-              <FGSessions />
-            </div>
-          )}
+          <div className="row" data-fg-row style={{ gridTemplateColumns: "1fr", marginBottom: 14 }}>
+            <FGSessions />
+          </div>
 
           <div className="row" data-fg-row style={{ gridTemplateColumns: "1fr", marginBottom: 14 }}>
             <FGHealthStrip />
@@ -761,7 +672,6 @@ const App = () => {
           <TweakToggle label="Show source badges (ZBX/PF)" value={t.showSourceBadges} onChange={v => setTweak("showSourceBadges", v)} />
         </TweakSection>
         <TweakSection label="Sections">
-          <TweakToggle label="HA cluster + sessions" value={t.showHACluster} onChange={v => setTweak("showHACluster", v)} />
           <TweakToggle label="SD-WAN + UTM" value={t.showSDWAN} onChange={v => setTweak("showSDWAN", v)} />
         </TweakSection>
         <TweakSection label="Quick actions">
