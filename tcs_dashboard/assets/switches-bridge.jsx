@@ -339,17 +339,22 @@
         const stack = buildStack(members, ports, poe);
         if (stack) window.ARC_MDF_STACK = stack;
 
-        // Per-stack-member CPU/mem/temp. Members come from the snapshot with
-        // null fields until the per-member-health template patch is applied;
-        // the Stack Health tab falls back to demo data when nothing useful
-        // has arrived yet.
+        // Per-stack-member CPU/mem/temp + inventory. Members come from the
+        // snapshot with null fields until the per-member-health template
+        // patch is applied; the Stack Health tab falls back to demo data
+        // when nothing useful has arrived yet.
         window.STACK_MEMBERS = members.map(m => ({
-            idx:   m.index,
-            role:  m.role,
-            cpu:   typeof m.cpu1m === "number" ? m.cpu1m : null,
-            cpu5:  typeof m.cpu5m === "number" ? m.cpu5m : null,
-            mem:   typeof m.mem   === "number" ? m.mem   : null,
-            temp:  typeof m.temp  === "number" ? m.temp  : null
+            idx:     m.index,
+            role:    m.role,
+            cpu:     typeof m.cpu1m === "number" ? m.cpu1m : null,
+            cpu5:    typeof m.cpu5m === "number" ? m.cpu5m : null,
+            mem:     typeof m.mem   === "number" ? m.mem   : null,
+            temp:    typeof m.temp  === "number" ? m.temp  : null,
+            serial:  (typeof m.serial  === "string" && m.serial)  ? m.serial  : null,
+            version: (typeof m.version === "string" && m.version) ? m.version : null,
+            uptime:  typeof m.uptime === "number" ? m.uptime : null,
+            fans:    Array.isArray(m.fans) ? m.fans : [],
+            psus:    Array.isArray(m.psus) ? m.psus : []
         }));
 
         const kpiVal = (k) => (kpis[k] && typeof kpis[k].lastvalue === "number") ? kpis[k].lastvalue : null;

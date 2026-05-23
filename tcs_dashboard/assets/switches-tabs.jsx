@@ -310,10 +310,17 @@ const HealthMetric = ({ label, val, unit, threshold, hist, color }) => {
 };
 
 // Merge live per-member snapshot data (window.STACK_MEMBERS) with the demo
-// rows. Live values win when present; the chassis fields the patch doesn't
-// cover yet (serial, exos version, uptime, fans, PSUs) stay on the demo row
-// so the card stays renderable. Returns one entry per slot the snapshot
-// reported, or the full demo set if the snapshot is empty.
+// rows. Live values win when present; demo fields are kept as fallback so
+// the card stays renderable while the template patch is still being rolled
+// out. Returns one entry per slot the snapshot reported, or the full demo
+// set if the snapshot is empty.
+const _fmtUptime = (sec) => {
+  if (sec == null || !isFinite(sec) || sec <= 0) return null;
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  return `${d}d ${String(h).padStart(2, "0")}h`;
+};
+
 const buildMemberRows = () => {
   const demo = window.TAB_STACK_HEALTH || [];
   const live = Array.isArray(window.STACK_MEMBERS) ? window.STACK_MEMBERS : [];
@@ -322,15 +329,39 @@ const buildMemberRows = () => {
   const demoByIdx = Object.fromEntries(demo.map(d => [d.idx, d]));
   return live.map(m => {
     const d = demoByIdx[m.idx] || demo[0] || {};
+    const liveUptime = _fmtUptime(m.uptime);
+    // Fans: snapshot returns the actual fans grouped to this slot. The card
+    // template only has two cells, so we take the first two; if the snapshot
+    // reports fewer (e.g. only fan-status, no slot mapping), we backfill
+    // from demo.
+    const fans = Array.isArray(m.fans) ? m.fans : [];
+    const psus = Array.isArray(m.psus) ? m.psus : [];
+    const fanCells = [0, 1].map(i => {
+      const f = fans[i];
+      if (!f) return null;
+      return { rpm: f.rpm || 0, ok: f.ok !== false };
+    });
+    const psuCells = [0, 1].map(i => {
+      const p = psus[i];
+      if (!p) return null;
+      return { watts: p.watts || 0, status: p.status || 0, present: !!p.present, ok: !!p.ok };
+    });
     return {
       ...d,
-      idx:   m.idx,
-      role:  m.role || d.role || "Member",
-      cpu:   m.cpu  != null ? Math.round(m.cpu)  : d.cpu,
-      cpu5:  m.cpu5 != null ? Math.round(m.cpu5) : d.cpu5,
-      mem:   m.mem  != null ? Math.round(m.mem)  : d.mem,
-      temp:  m.temp != null ? Math.round(m.temp) : d.temp,
-      _live: (m.cpu != null || m.mem != null || m.temp != null)
+      idx:     m.idx,
+      role:    m.role || d.role || "Member",
+      cpu:     m.cpu  != null ? Math.round(m.cpu)  : d.cpu,
+      cpu5:    m.cpu5 != null ? Math.round(m.cpu5) : d.cpu5,
+      mem:     m.mem  != null ? Math.round(m.mem)  : d.mem,
+      temp:    m.temp != null ? Math.round(m.temp) : d.temp,
+      serial:  m.serial  || d.serial,
+      version: m.version || d.version,
+      uptime:  liveUptime || d.uptime,
+      _fanCells: fanCells,
+      _psuCells: psuCells,
+      _live: (m.cpu != null || m.mem != null || m.temp != null
+              || m.serial != null || m.version != null
+              || fans.length > 0 || psus.length > 0)
     };
   });
 };
@@ -369,22 +400,43 @@ const TabStackHealth = () => {
               <HealthMetric label="Temp"    val={m.temp} unit="°C" threshold={72} hist={_spark(m.idx * 29, m.temp || 0, 5)} color="var(--pf)" />
             </div>
             <div className="hc-foot">
-              <div className="hcf-cell">
-                <span className="lbl">FAN 1</span>
-                <span className={"val " + (m.fan1 > 6000 ? "warn" : "")}>{m.fan1} RPM</span>
-              </div>
-              <div className="hcf-cell">
-                <span className="lbl">FAN 2</span>
-                <span className={"val " + (m.fan2 > 6000 ? "warn" : "")}>{m.fan2} RPM</span>
-              </div>
-              <div className="hcf-cell">
-                <span className="lbl">PSU 1</span>
-                <span className="val">{m.psu1} W</span>
-              </div>
-              <div className="hcf-cell">
-                <span className="lbl">PSU 2</span>
-                <span className={"val " + (m.psu2 === 0 ? "err" : "")}>{m.psu2 === 0 ? "absent" : `${m.psu2} W`}</span>
-              </div>
+              {[0, 1].map(i => {
+                const live = m._fanCells && m._fanCells[i];
+                const demoRpm = i === 0 ? m.fan1 : m.fan2;
+                const rpm = live ? live.rpm : demoRpm;
+                const failed = live ? !live.ok : false;
+                return (
+                  <div key={`fan${i}`} className="hcf-cell">
+                    <span className="lbl">FAN {i + 1}</span>
+                    <span className={"val " + (failed ? "err" : (rpm > 6000 ? "warn" : ""))}>
+                      {rpm > 0 ? `${rpm} RPM` : "—"}
+                    </span>
+                  </div>
+                );
+              })}
+              {[0, 1].map(i => {
+                const live = m._psuCells && m._psuCells[i];
+                const demoWatts = i === 0 ? m.psu1 : m.psu2;
+                if (live) {
+                  const absent = !live.present;
+                  return (
+                    <div key={`psu${i}`} className="hcf-cell">
+                      <span className="lbl">PSU {i + 1}</span>
+                      <span className={"val " + (absent ? "err" : (live.ok ? "" : "warn"))}>
+                        {absent ? "absent" : (live.watts > 0 ? `${live.watts} W` : (live.ok ? "ok" : "fault"))}
+                      </span>
+                    </div>
+                  );
+                }
+                return (
+                  <div key={`psu${i}`} className="hcf-cell">
+                    <span className="lbl">PSU {i + 1}</span>
+                    <span className={"val " + (demoWatts === 0 ? "err" : "")}>
+                      {demoWatts === 0 ? "absent" : `${demoWatts} W`}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
             {m.warn && (
               <div className="hc-alert">

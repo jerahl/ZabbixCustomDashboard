@@ -315,21 +315,31 @@ class SwitchClient {
             }
             if ($idx === null || $idx < 1 || $idx > self::STACK_LIMIT) continue;
             $out[$idx] = [
-                'index'  => $idx,
-                'role'   => self::stackRoleLabel((string) $it['lastvalue']),
-                'raw'    => (string) $it['lastvalue'],
-                'itemid' => (string) $it['itemid'],
-                'cpu1m'  => null,
-                'cpu5m'  => null,
-                'mem'    => null,
-                'temp'   => null
+                'index'   => $idx,
+                'role'    => self::stackRoleLabel((string) $it['lastvalue']),
+                'raw'     => (string) $it['lastvalue'],
+                'itemid'  => (string) $it['itemid'],
+                'cpu1m'   => null,
+                'cpu5m'   => null,
+                'mem'     => null,
+                'temp'    => null,
+                'serial'  => null,
+                'version' => null,
+                'uptime'  => null,
+                'fans'    => [],
+                'psus'    => []
             ];
         }
 
+        if (empty($out)) {
+            return [];
+        }
+
         // Per-member health metrics. The template ships memory util as a
-        // calculated item keyed by slot id (`vm.memory.util[<n>]`); CPU and
-        // temperature are added by the `per-member-health` template patch
-        // — see tcs_dashboard/notes/zabbix-template-patches/per-member-health.md.
+        // calculated item keyed by slot id (`vm.memory.util[<n>]`); CPU,
+        // temperature, EXOS image version and chassis serial are added by
+        // the `per-member-health` template patch — see
+        // tcs_dashboard/notes/zabbix-template-patches/per-member-health.md.
         // If the patch hasn't been applied yet, the keys are absent and the
         // members come back with null fields (the UI then falls back to its
         // demo data).
@@ -344,7 +354,34 @@ class SwitchClient {
             $val = trim((string) $it['lastvalue']);
             if ($val === '') continue;
 
-            $out[$slot][$field] = is_numeric($val) ? (float) $val : $val;
+            $isNumericField = in_array($field, ['cpu1m','cpu5m','mem','temp'], true);
+            $out[$slot][$field] = $isNumericField && is_numeric($val) ? (float) $val : $val;
+        }
+
+        // Stack-wide uptime. EXOS doesn't expose per-member uptime through a
+        // simple SNMP scalar (extremeStackMemberBootTime is DateAndTime which
+        // requires custom preprocessing); use the host-level uptime as a
+        // shared value across cards. Members that join mid-stack are rare and
+        // would warrant a dedicated boot-time item — track separately.
+        $uptime = self::extractHostUptime($items);
+        if ($uptime !== null) {
+            foreach ($out as $slot => $_) {
+                $out[$slot]['uptime'] = $uptime;
+            }
+        }
+
+        // Fans grouped by slot via the fan→slot mapping item the patch adds.
+        $fans = self::extractFansBySlot($items);
+        foreach ($fans as $slot => $list) {
+            if (isset($out[$slot])) $out[$slot]['fans'] = $list;
+        }
+
+        // PSUs grouped by slot via the {$PSU.PER.MEMBER} heuristic. Fans and
+        // PSUs both omit graceful fallback fields when their items aren't
+        // present — the UI sees an empty array and shows demo cells instead.
+        $psus = self::extractPsusBySlot($items, count($out));
+        foreach ($psus as $slot => $list) {
+            if (isset($out[$slot])) $out[$slot]['psus'] = $list;
         }
 
         ksort($out);
@@ -354,7 +391,7 @@ class SwitchClient {
     /**
      * Pull the slot id out of a per-member item key. Handles both the
      * memory-util keys (where the slot is the only bracket arg) and the
-     * cpu/temp keys (where it follows `…<descriptor>.<slot>`).
+     * cpu/temp/serial/version keys (where it follows `…<descriptor>.<slot>`).
      */
     private static function parseSlotFromKey(string $key): ?int {
         $patterns = [
@@ -363,7 +400,11 @@ class SwitchClient {
             // system.cpu.util[extremeCpuMonitorSystemUtilization1min.1]
             '/^system\.cpu\.util\[extremeCpuMonitorSystemUtilization(?:1min|5min)\.(\d+)\]$/',
             // sensor.temp.value[extremeStackMemberCurrentTemperature.1]
-            '/^sensor\.temp\.value\[extremeStackMemberCurrentTemperature\.(\d+)\]$/'
+            '/^sensor\.temp\.value\[extremeStackMemberCurrentTemperature\.(\d+)\]$/',
+            // system.hw.serialnumber[extremeSlotModuleSerialNumber.1]
+            '/^system\.hw\.serialnumber\[extremeSlotModuleSerialNumber\.(\d+)\]$/',
+            // system.hw.firmware[extremeStackMemberCurImageVersion.1]
+            '/^system\.hw\.firmware\[extremeStackMemberCurImageVersion\.(\d+)\]$/'
         ];
         foreach ($patterns as $rx) {
             if (preg_match($rx, $key, $m)) {
@@ -379,11 +420,123 @@ class SwitchClient {
      * Returns null for keys that don't carry health data.
      */
     private static function healthFieldFor(string $key): ?string {
-        if (str_starts_with($key, 'vm.memory.util['))                                      return 'mem';
-        if (str_starts_with($key, 'system.cpu.util[extremeCpuMonitorSystemUtilization1min.')) return 'cpu1m';
-        if (str_starts_with($key, 'system.cpu.util[extremeCpuMonitorSystemUtilization5min.')) return 'cpu5m';
-        if (str_starts_with($key, 'sensor.temp.value[extremeStackMemberCurrentTemperature.')) return 'temp';
+        if (str_starts_with($key, 'vm.memory.util['))                                              return 'mem';
+        if (str_starts_with($key, 'system.cpu.util[extremeCpuMonitorSystemUtilization1min.'))      return 'cpu1m';
+        if (str_starts_with($key, 'system.cpu.util[extremeCpuMonitorSystemUtilization5min.'))      return 'cpu5m';
+        if (str_starts_with($key, 'sensor.temp.value[extremeStackMemberCurrentTemperature.'))      return 'temp';
+        if (str_starts_with($key, 'system.hw.serialnumber[extremeSlotModuleSerialNumber.'))        return 'serial';
+        if (str_starts_with($key, 'system.hw.firmware[extremeStackMemberCurImageVersion.'))        return 'version';
         return null;
+    }
+
+    /**
+     * Host-level uptime in seconds, taken from hrSystemUptime.0 if present.
+     * The Extreme EXOS template ships uptime in 1/100s ticks; convert to
+     * whole seconds for the UI. Returns null when no candidate item is found.
+     */
+    private static function extractHostUptime(array $items): ?int {
+        foreach ($items as $it) {
+            $k = (string) $it['key_'];
+            if ($k !== 'system.hw.uptime[hrSystemUptime.0]'
+                && !str_starts_with($k, 'system.net.uptime[')
+                && !str_starts_with($k, 'system.uptime')) {
+                continue;
+            }
+            $v = (float) $it['lastvalue'];
+            if ($v <= 0) continue;
+            // The template's preprocessing usually already converts to
+            // seconds (DURATION units). Heuristic: values larger than ~10y
+            // in seconds suggest raw 1/100s ticks — divide.
+            return $v > 315_360_000 ? (int) round($v / 100) : (int) $v;
+        }
+        return null;
+    }
+
+    /**
+     * Group fan speeds by stack slot using extremeFanPositionSlotNum.
+     * Returns map of slot → [{idx, rpm, ok}, …]. Empty when the patch
+     * isn't applied (no `sensor.fan.slot[…]` items exist).
+     *
+     * @return array<int, array<int, array{idx:int, rpm:int, ok:bool}>>
+     */
+    private static function extractFansBySlot(array $items): array {
+        $slotByFan = [];
+        $rpmByFan  = [];
+        $okByFan   = [];
+        foreach ($items as $it) {
+            $k = (string) $it['key_'];
+            if (preg_match('/^sensor\.fan\.slot\[extremeFanPositionSlotNum\.(\d+)\]$/', $k, $m)) {
+                $slotByFan[(int) $m[1]] = (int) $it['lastvalue'];
+            } elseif (preg_match('/^sensor\.fan\.speed\[extremeFanSpeed\.(\d+)\]$/', $k, $m)) {
+                $rpmByFan[(int) $m[1]] = (int) round((float) $it['lastvalue']);
+            } elseif (preg_match('/^sensor\.fan\.status\[extremeFanOperational\.(\d+)\]$/', $k, $m)) {
+                // Truthvalue: 1=true(ok), 2=false(failed).
+                $okByFan[(int) $m[1]] = ((int) $it['lastvalue']) === 1;
+            }
+        }
+        $out = [];
+        foreach ($slotByFan as $fanIdx => $slot) {
+            if ($slot < 1 || $slot > self::STACK_LIMIT) continue;
+            $out[$slot][] = [
+                'idx' => $fanIdx,
+                'rpm' => $rpmByFan[$fanIdx] ?? 0,
+                'ok'  => $okByFan[$fanIdx] ?? true
+            ];
+        }
+        foreach ($out as $slot => $list) {
+            usort($out[$slot], fn($a, $b) => $a['idx'] <=> $b['idx']);
+        }
+        return $out;
+    }
+
+    /**
+     * Group PSU status + wattage by stack slot using the
+     * {$PSU.PER.MEMBER} heuristic: PSU number N belongs to slot
+     * ceil(N / PSU_PER_MEMBER). Returns map of slot → [{idx, watts, ok,
+     * status}, …]. Status 1=notPresent, 2=presentOK, 3=presentNotOK,
+     * 4=presentPowerOff.
+     *
+     * @return array<int, array<int, array{idx:int, watts:int, ok:bool, present:bool, status:int}>>
+     */
+    private static function extractPsusBySlot(array $items, int $memberCount): array {
+        $statusByPsu = [];
+        $wattsByPsu  = [];
+        foreach ($items as $it) {
+            $k = (string) $it['key_'];
+            if (preg_match('/^sensor\.psu\.status\[extremePowerSupplyStatus\.(\d+)\]$/', $k, $m)) {
+                $statusByPsu[(int) $m[1]] = (int) $it['lastvalue'];
+            } elseif (preg_match('/^sensor\.psu\.wattage\[extremePowerSupplyWattage\.(\d+)\]$/', $k, $m)) {
+                $wattsByPsu[(int) $m[1]] = (int) round((float) $it['lastvalue']);
+            }
+        }
+        if (empty($statusByPsu) && empty($wattsByPsu)) return [];
+
+        // {$PSU.PER.MEMBER} would let an operator override the heuristic,
+        // but reading host macros requires an extra API call. For now,
+        // derive it from the PSU count: total / member count, clamped to
+        // 1..4. This handles 1-PSU-per-member and 2-PSU-per-member layouts
+        // without configuration.
+        $psuKeys   = array_unique(array_merge(array_keys($statusByPsu), array_keys($wattsByPsu)));
+        $psuTotal  = count($psuKeys);
+        $perMember = $memberCount > 0 ? max(1, min(4, (int) round($psuTotal / $memberCount))) : 2;
+
+        $out = [];
+        foreach ($psuKeys as $psuIdx) {
+            $slot = (int) ceil($psuIdx / $perMember);
+            if ($slot < 1 || $slot > self::STACK_LIMIT) continue;
+            $status = $statusByPsu[$psuIdx] ?? 0;
+            $out[$slot][] = [
+                'idx'     => $psuIdx,
+                'watts'   => $wattsByPsu[$psuIdx] ?? 0,
+                'status'  => $status,
+                'present' => $status !== 0 && $status !== 1,
+                'ok'      => $status === 2
+            ];
+        }
+        foreach ($out as $slot => $list) {
+            usort($out[$slot], fn($a, $b) => $a['idx'] <=> $b['idx']);
+        }
+        return $out;
     }
 
     /** @param array<int,array<string,mixed>> $items */
