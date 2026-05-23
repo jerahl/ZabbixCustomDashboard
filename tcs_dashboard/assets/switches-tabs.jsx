@@ -1,4 +1,4 @@
-// Switches dashboard — extra tab views (Topology, Stack Health, VLAN/EAPS, PoE, Macros/CLI, Triggers, Backups)
+// Switches dashboard — extra tab views (Topology, Stack Health, VLAN, PoE, Macros/CLI, Triggers, Backups)
 
 const { useState: useStateTAB } = React;
 
@@ -58,20 +58,6 @@ window.TAB_VLANS = [
   { id: 999,  name: "BLACKHOLE",   ports: 2,   tagged: 0,  ip: "—",            desc: "Disabled ports",         active: true  },
 ];
 
-window.TAB_EAPS = [
-  {
-    name: "ARC-CORE-RING", id: 1, state: "complete", master: "ARC-MDF (this)", primary: "1:57", secondary: "1:59",
-    ctrlVlan: 4090, protectedVlans: "20,30,40,50,60,80,100",
-    members: [
-      { id: "ARC-MDF",     role: "master",  state: "up" },
-      { id: "ARC-IDF-109", role: "transit", state: "up" },
-      { id: "ARC-IDF-217", role: "transit", state: "up" },
-      { id: "ARC-GYM",     role: "transit", state: "up" },
-    ],
-    flaps24h: 0,
-  },
-];
-
 window.TAB_POE = {
   budget: 720,
   drawn: 428,
@@ -109,7 +95,6 @@ window.TAB_MACROS = [
   { k: "{$SNMP.COMMUNITY}",             v: "********",           ctx: "Template Net Generic SNMPv2", sys: true },
   { k: "{$SNMP.TIMEOUT}",               v: "5s",                 ctx: "Template Net Generic SNMPv2", sys: true },
   { k: "{$LLDP.NEIGHBOR.CHECK}",        v: "1",                  ctx: "Template Net Extreme EXOS", sys: false },
-  { k: "{$EAPS.RING.NAME}",             v: "ARC-CORE-RING",      ctx: "ARC-MDF (override)",        sys: false },
 ];
 
 window.TAB_CLI = `* (Slot-1) ARC-MDF.1 # show stacking
@@ -151,14 +136,13 @@ window.TAB_TRIGGERS = [
   { sev: "average",  expr: "last(/ARC-MDF/cpu.util[5m])>{$CPU.UTIL.MAX}",         name: "CPU utilization above 85%",            status: "enabled", deps: 0, fires24h: 0, history: _spark(37, 22, 6) },
   { sev: "average",  expr: "last(/ARC-MDF/vm.memory.util)>{$MEM.UTIL.MAX}",       name: "Memory utilization above 90%",         status: "enabled", deps: 0, fires24h: 0, history: _spark(41, 36, 4) },
   { sev: "info",     expr: "change(/ARC-MDF/extreme.cfg.hash)<>0",                name: "Running config changed",               status: "enabled", deps: 0, fires24h: 1, history: _spark(43, 0, 0) },
-  { sev: "info",     expr: "change(/ARC-MDF/extreme.eaps.state)<>0",              name: "EAPS state changed",                   status: "enabled", deps: 0, fires24h: 0, history: _spark(47, 0, 0) },
 ];
 
 window.TAB_BACKUPS = [
   { ts: "2026-05-09 04:00:02", user: "auto (zbx-conf)", method: "SSH+SCP", size: "118.4 KB", lines: 4112, changed: 0,  hash: "9c4e…f30a", note: "Nightly scheduled backup" },
   { ts: "2026-05-08 14:18:55", user: "ksimmons@tcs",    method: "Web UI",  size: "118.4 KB", lines: 4112, changed: 2,  hash: "9c4e…f30a", note: "Added VLAN 100 untagged to 2:31" },
   { ts: "2026-05-08 04:00:01", user: "auto (zbx-conf)", method: "SSH+SCP", size: "118.3 KB", lines: 4110, changed: 0,  hash: "8b9d…2e74", note: "Nightly scheduled backup" },
-  { ts: "2026-05-07 11:42:11", user: "tservice@tcs",    method: "SSH",     size: "118.3 KB", lines: 4110, changed: 5,  hash: "8b9d…2e74", note: "EAPS shared-port secondary swap" },
+  { ts: "2026-05-07 11:42:11", user: "tservice@tcs",    method: "SSH",     size: "118.3 KB", lines: 4110, changed: 5,  hash: "8b9d…2e74", note: "Updated uplink trunk config" },
   { ts: "2026-05-07 04:00:01", user: "auto (zbx-conf)", method: "SSH+SCP", size: "117.9 KB", lines: 4105, changed: 0,  hash: "73af…ec01", note: "Nightly scheduled backup" },
   { ts: "2026-05-06 09:11:48", user: "ksimmons@tcs",    method: "Web UI",  size: "117.9 KB", lines: 4105, changed: 1,  hash: "73af…ec01", note: "Updated SNMP location string" },
 ];
@@ -169,11 +153,6 @@ window.TAB_DIFF = [
   { type: "del",  ln: 1244, txt: "configure vlan PRINTERS add ports 2:31 untagged" },
   { type: "add",  ln: 1244, txt: "configure vlan CAMERAS add ports 2:31 untagged" },
   { type: "ctx",  ln: 1245, txt: "configure vlan VOIP add ports 1:42,4:11 untagged" },
-  { type: "ctx",  ln: 1246, txt: "" },
-  { type: "ctx",  ln: 1247, txt: "# ─── EAPS ───" },
-  { type: "del",  ln: 1248, txt: "configure eaps ARC-CORE-RING add secondary 1:60" },
-  { type: "add",  ln: 1248, txt: "configure eaps ARC-CORE-RING add secondary 1:59" },
-  { type: "ctx",  ln: 1249, txt: "enable eaps ARC-CORE-RING" },
 ];
 
 // ───────────────────────────────────────────────────────────────────
@@ -420,11 +399,10 @@ const TabStackHealth = () => {
 };
 
 // ───────────────────────────────────────────────────────────────────
-// 3. VLAN / EAPS
+// 3. VLAN
 // ───────────────────────────────────────────────────────────────────
-const TabVlanEaps = () => {
+const TabVlan = () => {
   const V = window.TAB_VLANS;
-  const E = window.TAB_EAPS[0];
   const [sel, setSel] = useStateTAB(20);
   return (
     <div className="tab-pane">
@@ -471,54 +449,6 @@ const TabVlanEaps = () => {
         </div>
 
         <div style={{display:"flex", flexDirection:"column", gap: 14, minWidth: 0}}>
-          <div className="card">
-            <div className="card-h">
-              <h3>EAPS — {E.name}</h3>
-              <SourceBadge src="ext" />
-              <span className={"eaps-state " + E.state}>{E.state.toUpperCase()}</span>
-              <div className="h-spacer" />
-              <span className="h-meta">CtrlVLAN {E.ctrlVlan} · {E.flaps24h} flaps/24h</span>
-            </div>
-            <div className="eaps-body">
-              <div className="eaps-svg">
-                <svg viewBox="0 0 220 220">
-                  <circle cx="110" cy="110" r="85" className="ring-bg" />
-                  <circle cx="110" cy="110" r="85" className="ring-fg" />
-                  {E.members.map((mem, i) => {
-                    const a = (i / E.members.length) * 2 * Math.PI - Math.PI / 2;
-                    const x = 110 + 85 * Math.cos(a);
-                    const y = 110 + 85 * Math.sin(a);
-                    return (
-                      <g key={mem.id} transform={`translate(${x},${y})`} className={"eaps-node " + mem.role}>
-                        <circle r="11" />
-                        <text textAnchor="middle" dy="3" className="n-label">{mem.role === "master" ? "M" : "T"}</text>
-                      </g>
-                    );
-                  })}
-                  {/* secondary blocked tick */}
-                  <line x1="110" y1="25" x2="110" y2="15" className="block-tick" />
-                  <text x="116" y="20" className="block-label">blocked</text>
-                </svg>
-              </div>
-              <div className="eaps-side">
-                {E.members.map(m => (
-                  <div key={m.id} className="eaps-member">
-                    <span className={"role-pill " + m.role}>{m.role}</span>
-                    <span className="m-name">{m.id}</span>
-                    <span className={"state-dot " + (m.state === "up" ? "ok" : "err")} />
-                  </div>
-                ))}
-                <div className="eaps-kvs">
-                  <div className="kv"><span>Primary</span><b>{E.primary}</b></div>
-                  <div className="kv"><span>Secondary</span><b>{E.secondary} <span className="muted">blocked</span></b></div>
-                  <div className="kv"><span>Protected</span><b>{E.protectedVlans}</b></div>
-                  <div className="kv"><span>Hello</span><b>1.0s</b></div>
-                  <div className="kv"><span>Fail-timer</span><b>3.0s</b></div>
-                </div>
-              </div>
-            </div>
-          </div>
-
           <div className="card">
             <div className="card-h">
               <h3>VLAN {sel} · port membership</h3>
@@ -712,7 +642,6 @@ const TabMacros = ({ host }) => {
               <span className="ct active">show stacking</span>
               <span className="ct">show ports info</span>
               <span className="ct">show power budget</span>
-              <span className="ct">show eaps detail</span>
               <span className="ct">show fdb</span>
               <span className="ct">show log</span>
             </div>
@@ -891,7 +820,7 @@ window.SWITCH_TABS = [
   { id: "ports",    label: "Port Status",   badge: null },
   { id: "topo",     label: "Topology",      badge: null },
   { id: "health",   label: "Stack Health",  badge: null },
-  { id: "vlan",     label: "VLAN / EAPS",   badge: null },
+  { id: "vlan",     label: "VLAN",          badge: null },
   { id: "poe",      label: "PoE Budget",    badge: null },
   { id: "macros",   label: "Macros · CLI",  badge: null },
   { id: "triggers", label: "Triggers",      badge: { v: 3, kind: "warn" } },
@@ -900,7 +829,7 @@ window.SWITCH_TABS = [
 
 window.TabTopology    = TabTopology;
 window.TabStackHealth = TabStackHealth;
-window.TabVlanEaps    = TabVlanEaps;
+window.TabVlan        = TabVlan;
 window.TabPoe         = TabPoe;
 window.TabMacros      = TabMacros;
 window.TabTriggers    = TabTriggers;
