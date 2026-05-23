@@ -163,6 +163,11 @@
             "view": "fortigate.view",
             "layout": "layout.htmlpage"
         },
+        "tcs.fortigate.data": {
+            "class": "ActionFortigateData",
+            "layout": "layout.json",
+            "view": null
+        },
         "tcs.xdr.view": {
             "class": "ActionXdr",
             "view": "xdr.view",
