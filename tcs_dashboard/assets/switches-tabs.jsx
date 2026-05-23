@@ -368,20 +368,16 @@ const buildMemberRows = () => {
 
 const TabStackHealth = () => {
   const H = buildMemberRows();
-  const anyLive = H.some(m => m._live);
   return (
     <div className="tab-pane">
       <div className="card-h-bar">
-        <span className="h-title">Stack member health · last 24h</span>
+        <span className="h-title">Stack member health</span>
         <SourceBadge src="zbx" />
         <div className="h-spacer" />
-        <span className="h-meta">
-          {anyLive ? "SNMP · live from Zabbix" : "demo — apply per-member-health template patch"}
-        </span>
       </div>
       <div className="health-grid">
         {H.map(m => (
-          <div key={m.idx} className={"card health-card " + (m.warn ? "warn" : "")}>
+          <div key={m.idx} className="card health-card">
             <div className="hc-head">
               <div className="hc-id-block">
                 <div className="hc-id">MEMBER {m.idx}</div>
@@ -438,42 +434,8 @@ const TabStackHealth = () => {
                 );
               })}
             </div>
-            {m.warn && (
-              <div className="hc-alert">
-                <Icon name="alert" size={11} /> {m.warn}
-              </div>
-            )}
           </div>
         ))}
-      </div>
-
-      <div className="card" style={{marginTop: 14}}>
-        <div className="card-h">
-          <h3>Per-member temperature · 24h</h3>
-          <SourceBadge src="zbx" />
-          <div className="h-spacer" />
-          <span className="h-meta">{`>72°C `}warning · {`>78°C `}critical</span>
-        </div>
-        <div className="thermal-strip">
-          {H.map(m => {
-            const hist = _spark(m.idx * 53, m.temp || 0, 6, 48);
-            return (
-              <div key={m.idx} className="ts-row">
-                <div className="ts-lbl">M{m.idx}</div>
-                <div className="ts-cells">
-                  {hist.map((v, i) => {
-                    const cls = v >= 78 ? "crit" : v >= 72 ? "warn" : "ok";
-                    return <i key={i} className={cls} title={`${v}°C`} />;
-                  })}
-                </div>
-                <div className="ts-cur">{m.temp != null ? `${m.temp}°C` : "—"}</div>
-              </div>
-            );
-          })}
-          <div className="ts-axis">
-            <span>−24h</span><span>−18h</span><span>−12h</span><span>−6h</span><span>now</span>
-          </div>
-        </div>
       </div>
     </div>
   );

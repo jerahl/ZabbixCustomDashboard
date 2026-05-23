@@ -185,7 +185,6 @@ const SwitchesApp = () => {
           )}
           {activeTab === "health" && (
             <React.Fragment>
-              <DemoBanner name="Stack Health" />
               <div className="switch-layout-2col">
                 <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
                 <TabStackHealth />
