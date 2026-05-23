@@ -80,11 +80,22 @@ already come from the existing `snmp.interfaces.poe.mpower[…]` items.
   speak LLDP but not EDP), while EDP gives crisper Extreme↔Extreme
   edges.
 
-## What's NOT available via SNMP
+## Port authentication sessions
 
-### Netlogin sessions per port
+**Update:** an earlier draft of this doc said per-port auth sessions
+weren't pollable via SNMP. That was wrong — the `extremeNetlogin*` OIDs
+*are* trap-only, but the **`ETSYS-MULTI-AUTH-MIB`** session table is
+fully pollable and covers all EXOS auth methods (802.1X, MAC-auth, web-
+auth, CEP, etc.) in one place. See `port-auth.md` / `port-auth.yaml` in
+this folder.
 
-EXOS does not expose active netlogin sessions through a pollable SNMP table.
+The notes below are kept for reference — they're alternative paths if
+the MultiAuth MIB doesn't fit (e.g., if you need real-time event
+streaming rather than a 5-minute poll, or if you're on a hardware/OS
+combo where the MIB isn't implemented).
+
+### Legacy alternatives (mostly superseded by port-auth.yaml)
+
 The `extremeNetlogin*` OIDs (in `EXTREME-SECURITY-MIB`,
 1.3.6.1.4.1.1916.1.42 area) are all `MAX-ACCESS accessible-for-notify` —
 they only appear inside SNMP trap PDUs, not as gettable values.
