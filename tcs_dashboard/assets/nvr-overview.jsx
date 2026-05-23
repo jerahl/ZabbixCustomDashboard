@@ -36,7 +36,6 @@ const FleetWidgets = () => {
   const onlineCams = SITES.reduce((s, x) => s + _ovNz(x.online), 0);
   const warnCams = SITES.reduce((s, x) => s + _ovNz(x.warn), 0);
   const errCams = SITES.reduce((s, x) => s + _ovNz(x.err), 0);
-  const storagePct = M.storageTotalTB > 0 ? (M.storageUsedTB / M.storageTotalTB) * 100 : 0;
   const licensePct = M.licenseDeviceTotal > 0 ? (M.licenseDeviceUsed / M.licenseDeviceTotal) * 100 : 0;
 
   // Tail-of-series helpers so spark-cells show their actual last value.
@@ -88,8 +87,8 @@ const FleetWidgets = () => {
         </div>
       </div>
 
-      {/* MIDDLE — Milestone summary | Storage | Live ingress chart */}
-      <div className="row" style={{ gridTemplateColumns: "1.1fr 1fr 1.4fr", marginBottom: 14 }}>
+      {/* MIDDLE — Milestone summary | Live ingress chart */}
+      <div className="row" style={{ gridTemplateColumns: "1.1fr 1.4fr", marginBottom: 14 }}>
         <div className="card">
           <div className="card-h"><h3>Milestone XProtect</h3><SourceBadge src="ext"/><div className="h-spacer"/><span className="h-meta">{M.product}</span></div>
           <div className="card-b" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -107,25 +106,6 @@ const FleetWidgets = () => {
               <div className="k">Retention</div><div className="v">{M.retentionDays} days standard</div><div className="b"><SourceBadge src="ext"/></div>
               <div className="k">Evidence lock</div><div className="v">{M.evidenceLockUsed} / {M.evidenceLockSlots} active</div><div className="b"><SourceBadge src="ext"/></div>
             </div>
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="card-h"><h3>Recording Storage</h3><SourceBadge src="zbx"/><div className="h-spacer"/><span className="h-meta">{M.storageUsedTB.toFixed(1)} / {M.storageTotalTB} TB</span></div>
-          <div className="card-b" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <div className="big-metric">
-              <span className="v">{storagePct.toFixed(0)}<span style={{ fontSize: 18 }}>%</span></span>
-              <span className="u">used · {(M.storageTotalTB - M.storageUsedTB).toFixed(1)} TB free</span>
-            </div>
-            {SITES.map(s => {
-              const pct = (s.storageGB / s.storageCapGB) * 100;
-              return (
-                <div key={s.name} className="storage-bar compact">
-                  <div className="label-row"><span className="name">{s.name}</span><span className="pct">{pct.toFixed(0)}%</span></div>
-                  <div className="track"><div className={"fill " + (pct > 90 ? "err" : pct > 80 ? "warn" : "")} style={{ width: `${pct}%` }}/></div>
-                </div>
-              );
-            })}
           </div>
         </div>
 

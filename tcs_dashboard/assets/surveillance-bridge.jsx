@@ -113,6 +113,7 @@
             online:       num(s.online),
             warn:         num(s.warn),
             err:          num(s.err),
+            hwCount:      num(s.hwCount),
             server:       str(s.server, "—"),
             // Default capacity to 1 so percent-of math doesn't divide by zero.
             storageGB:    num(s.storageGB),

@@ -222,16 +222,30 @@ class ActionSurveillanceData extends ActionDataBase {
             if (preg_match('/^milestone\.grp\.([a-z.]+)\[([^\]]+)\]$/i', $key, $m)) {
                 $field  = $m[1];
                 $grp_id = trim($m[2], '"\'');
+                $out[$hid]['grp'][$grp_id] ??= [];
                 if ($field === 'raw' && $val !== '') {
                     $blob = json_decode($val, true);
                     if (is_array($blob)) {
-                        $out[$hid]['grp'][$grp_id] = array_merge(
-                            $out[$hid]['grp'][$grp_id] ?? [],
-                            $blob
-                        );
+                        // Don't clobber per-item scalars (e.g.
+                        // milestone.grp.name[<id>]) with an empty value
+                        // from the blob — the API returns items in no
+                        // guaranteed order, so a "name": "" in the JSON
+                        // could otherwise shadow a real Bryant HS coming
+                        // from the direct item.
+                        foreach ($blob as $k => $v) {
+                            $existing = $out[$hid]['grp'][$grp_id][$k] ?? null;
+                            if ($existing === null || $existing === '' || $existing === []) {
+                                $out[$hid]['grp'][$grp_id][$k] = $v;
+                            }
+                        }
                     }
                 } else {
-                    $out[$hid]['grp'][$grp_id][$field] = $val;
+                    // Symmetric: an empty direct-item value won't blank a
+                    // field the blob already filled in.
+                    $existing = $out[$hid]['grp'][$grp_id][$field] ?? null;
+                    if ($val !== '' || $existing === null || $existing === '') {
+                        $out[$hid]['grp'][$grp_id][$field] = $val;
+                    }
                 }
                 continue;
             }
@@ -365,8 +379,9 @@ class ActionSurveillanceData extends ActionDataBase {
         // Fallback: one row per Zabbix site host (the original behaviour).
         $out = [];
         foreach ($site_hosts as $hid => $h) {
-            $bundle = $site_items[$hid] ?? ['site' => [], 'rs' => [], 'cam' => []];
-            $name   = $bundle['site']['siteName'] ?? ($h['name'] ?: $h['host']);
+            $bundle    = $site_items[$hid] ?? ['site' => [], 'rs' => [], 'cam' => []];
+            $site_name = trim((string) ($bundle['site']['siteName'] ?? ''));
+            $name      = $site_name !== '' ? $site_name : ($h['name'] ?: $h['host']);
 
             $cams = 0; $online = 0; $warn = 0; $err = 0;
             foreach ($bundle['cam'] ?? [] as $cam_id => $cam) {
@@ -457,8 +472,24 @@ class ActionSurveillanceData extends ActionDataBase {
             foreach ($bundle['grp'] ?? [] as $grp_id => $grp) {
                 $key = (string) $grp_id;
                 if (!isset($sites[$key])) {
+                    // Label hierarchy:
+                    //   milestone.grp.name[<id>]           direct per-group item
+                    //   raw-blob path tail (/Root/Bryant HS → Bryant HS)
+                    //   group GUID                          (last resort)
+                    // ?? would let an empty-string "name" win over "path"
+                    // so we explicitly skip blanks.
+                    $name = '';
+                    foreach (['name', 'path'] as $field) {
+                        $v = trim((string) ($grp[$field] ?? ''));
+                        if ($v !== '') { $name = $v; break; }
+                    }
+                    if ($name !== '' && str_contains($name, '/')) {
+                        $tail = trim((string) strrchr($name, '/'), '/');
+                        if ($tail !== '') $name = $tail;
+                    }
+                    if ($name === '') $name = (string) $grp_id;
                     $sites[$key] = [
-                        'name'         => (string) ($grp['name'] ?? $grp['path'] ?? $grp_id),
+                        'name'         => $name,
                         'groupId'      => (string) $grp_id,
                         'hostid'       => $hid,
                         'cams'         => 0,
@@ -498,9 +529,27 @@ class ActionSurveillanceData extends ActionDataBase {
                         elseif  ($cls === 'warn') { $sites[$key]['online']++; $sites[$key]['warn']++; }
                         else                       $sites[$key]['err']++;
                     }
-                } elseif (!empty($grp['cameraCount'])) {
-                    $sites[$key]['cams']   = (int) $grp['cameraCount'];
-                    $sites[$key]['online'] = (int) $grp['cameraCount'];
+                } else {
+                    // No cameraIds list to walk — fall back to the direct
+                    // milestone.grp.cam.count[<id>] / hw.count[<id>] items
+                    // (or the raw-blob camelCase equivalents if only the
+                    // blob is templated). Without per-camera state we
+                    // can't break the count into ok/warn/err, so the row
+                    // optimistically reports the whole count as online;
+                    // the camera-host bridge will correct it once LLD
+                    // discovers individual cameras.
+                    $cam_n = (int) ($grp['cam.count'] ?? $grp['cameraCount'] ?? 0);
+                    if ($cam_n > 0) {
+                        $sites[$key]['cams']   = $cam_n;
+                        $sites[$key]['online'] = $cam_n;
+                    }
+                }
+                // hw.count is informational (Milestone hardware devices,
+                // some of which may carry multiple cameras). Surface it
+                // so the bridge / UI can display it later — kept
+                // alongside cams without overwriting the per-camera roll.
+                if (isset($grp['hw.count']) || isset($grp['hardwareCount'])) {
+                    $sites[$key]['hwCount'] = (int) ($grp['hw.count'] ?? $grp['hardwareCount']);
                 }
 
                 // Attribute the group to an RS.
@@ -543,8 +592,9 @@ class ActionSurveillanceData extends ActionDataBase {
 
         $out = [];
         foreach ($site_hosts as $hid => $h) {
-            $bundle = $site_items[$hid] ?? [];
-            $site_label = $bundle['site']['siteName'] ?? ($h['name'] ?: $h['host']);
+            $bundle     = $site_items[$hid] ?? [];
+            $sn         = trim((string) ($bundle['site']['siteName'] ?? ''));
+            $site_label = $sn !== '' ? $sn : ($h['name'] ?: $h['host']);
             foreach ($bundle['rs'] ?? [] as $rs_id => $rs) {
                 $enabled = strtolower((string) ($rs['enabled'] ?? ''));
                 $age     = (int) ($rs['handshake.age'] ?? 0);
@@ -812,8 +862,9 @@ class ActionSurveillanceData extends ActionDataBase {
 
         $out = [];
         foreach ($site_hosts as $hid => $h) {
-            $bundle = $site_items[$hid] ?? [];
-            $site_label = $bundle['site']['siteName'] ?? ($h['name'] ?: $h['host']);
+            $bundle     = $site_items[$hid] ?? [];
+            $sn         = trim((string) ($bundle['site']['siteName'] ?? ''));
+            $site_label = $sn !== '' ? $sn : ($h['name'] ?: $h['host']);
             foreach ($bundle['cam'] ?? [] as $cam_id => $cam) {
                 $status = isset($cam['status']) ? (int) $cam['status'] : null;
                 $state = match (true) {
