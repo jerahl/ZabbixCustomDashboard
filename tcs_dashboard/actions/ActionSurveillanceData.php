@@ -365,8 +365,9 @@ class ActionSurveillanceData extends ActionDataBase {
         // Fallback: one row per Zabbix site host (the original behaviour).
         $out = [];
         foreach ($site_hosts as $hid => $h) {
-            $bundle = $site_items[$hid] ?? ['site' => [], 'rs' => [], 'cam' => []];
-            $name   = $bundle['site']['siteName'] ?? ($h['name'] ?: $h['host']);
+            $bundle    = $site_items[$hid] ?? ['site' => [], 'rs' => [], 'cam' => []];
+            $site_name = trim((string) ($bundle['site']['siteName'] ?? ''));
+            $name      = $site_name !== '' ? $site_name : ($h['name'] ?: $h['host']);
 
             $cams = 0; $online = 0; $warn = 0; $err = 0;
             foreach ($bundle['cam'] ?? [] as $cam_id => $cam) {
@@ -457,8 +458,26 @@ class ActionSurveillanceData extends ActionDataBase {
             foreach ($bundle['grp'] ?? [] as $grp_id => $grp) {
                 $key = (string) $grp_id;
                 if (!isset($sites[$key])) {
+                    // ?? only catches null — milestone.grp.name often arrives
+                    // as "" when the Milestone group has no Name field set or
+                    // only the raw JSON's path is populated, so the empty
+                    // string would pass through to the UI as a blank cell.
+                    // Walk name → path → last segment of path → groupId,
+                    // skipping any blank along the way.
+                    $name = '';
+                    foreach (['name', 'path'] as $field) {
+                        $v = trim((string) ($grp[$field] ?? ''));
+                        if ($v !== '') { $name = $v; break; }
+                    }
+                    if ($name !== '' && str_contains($name, '/')) {
+                        // Milestone paths come through as "/Root/Bryant HS";
+                        // the trailing segment is what operators recognise.
+                        $tail = trim((string) strrchr($name, '/'), '/');
+                        if ($tail !== '') $name = $tail;
+                    }
+                    if ($name === '') $name = (string) $grp_id;
                     $sites[$key] = [
-                        'name'         => (string) ($grp['name'] ?? $grp['path'] ?? $grp_id),
+                        'name'         => $name,
                         'groupId'      => (string) $grp_id,
                         'hostid'       => $hid,
                         'cams'         => 0,
@@ -543,8 +562,9 @@ class ActionSurveillanceData extends ActionDataBase {
 
         $out = [];
         foreach ($site_hosts as $hid => $h) {
-            $bundle = $site_items[$hid] ?? [];
-            $site_label = $bundle['site']['siteName'] ?? ($h['name'] ?: $h['host']);
+            $bundle     = $site_items[$hid] ?? [];
+            $sn         = trim((string) ($bundle['site']['siteName'] ?? ''));
+            $site_label = $sn !== '' ? $sn : ($h['name'] ?: $h['host']);
             foreach ($bundle['rs'] ?? [] as $rs_id => $rs) {
                 $enabled = strtolower((string) ($rs['enabled'] ?? ''));
                 $age     = (int) ($rs['handshake.age'] ?? 0);
@@ -812,8 +832,9 @@ class ActionSurveillanceData extends ActionDataBase {
 
         $out = [];
         foreach ($site_hosts as $hid => $h) {
-            $bundle = $site_items[$hid] ?? [];
-            $site_label = $bundle['site']['siteName'] ?? ($h['name'] ?: $h['host']);
+            $bundle     = $site_items[$hid] ?? [];
+            $sn         = trim((string) ($bundle['site']['siteName'] ?? ''));
+            $site_label = $sn !== '' ? $sn : ($h['name'] ?: $h['host']);
             foreach ($bundle['cam'] ?? [] as $cam_id => $cam) {
                 $status = isset($cam['status']) ? (int) $cam['status'] : null;
                 $state = match (true) {
