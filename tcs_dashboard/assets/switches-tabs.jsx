@@ -594,35 +594,45 @@ const TabPoe = () => {
     else                 { psuLabel = "N+1"; psuClass = "ok";   psuSub = `${allPsus.length} PSUs ok`; }
   }
 
+  // Stack-wide totals from the available PSE envelope (sum of per-member
+  // extremePethSlotMaxAvailPower) and the measured draw — fall back to
+  // the allocated/configured-limit fields when those aren't present so
+  // the headline still populates.
+  const hlMeasured  = totals.measured > 0 ? totals.measured : totals.drawn;
+  const hlAvailable = members.reduce((acc, m) => acc + (m.available != null ? m.available : (m.capacity != null ? m.capacity : m.budget)), 0)
+                      || totals.budget;
+  const hlPct       = hlAvailable > 0 ? Math.round((hlMeasured / hlAvailable) * 100) : 0;
+  const hlHeadroom  = Math.max(0, hlAvailable - hlMeasured);
+
   return (
     <div className="tab-pane">
       <div className="poe-top">
         <div className="card poe-headline">
           <div className="poe-hl-left">
             <Ring
-              value={totals.drawn}
-              max={Math.max(totals.budget, totals.drawn, 1)}
+              value={hlMeasured}
+              max={Math.max(hlAvailable, hlMeasured, 1)}
               size={140}
               color="var(--warn)"
-              label={`${Math.round(totals.drawn)} W`}
-              sub={`of ${Math.round(totals.budget)} W budget`}
-              threshold={totals.budget * 0.85}
+              label={`${Math.round(hlMeasured)} W`}
+              sub={`of ${Math.round(hlAvailable)} W available`}
+              threshold={hlAvailable * 0.85}
             />
           </div>
           <div className="poe-hl-stats">
             <div className="phs">
-              <span className="lbl">Drawn (allocated)</span>
-              <span className="v warn">{Math.round(totals.drawn)} W</span>
-              <span className="sub">{totals.pct}% utilised</span>
-            </div>
-            <div className="phs">
               <span className="lbl">Measured</span>
-              <span className="v">{Math.round(totals.measured)} W</span>
-              <span className="sub">actual draw across PSEs</span>
+              <span className="v warn">{Math.round(hlMeasured)} W</span>
+              <span className="sub">{hlPct}% utilised</span>
             </div>
             <div className="phs">
-              <span className="lbl">Available</span>
-              <span className="v ok">{Math.round(totals.available)} W</span>
+              <span className="lbl">Max available</span>
+              <span className="v">{Math.round(hlAvailable)} W</span>
+              <span className="sub">across {members.length} member{members.length === 1 ? "" : "s"}</span>
+            </div>
+            <div className="phs">
+              <span className="lbl">Headroom</span>
+              <span className="v ok">{Math.round(hlHeadroom)} W</span>
               <span className="sub">{ports.length} port{ports.length === 1 ? "" : "s"} drawing</span>
             </div>
             <div className="phs">
