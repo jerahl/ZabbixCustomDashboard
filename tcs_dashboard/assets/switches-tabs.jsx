@@ -690,7 +690,7 @@ const TabPoe = () => {
                 <th style={{width: 60}}>Port</th>
                 <th>Device</th>
                 <th>Vendor</th>
-                <th style={{width: 70}}>Class</th>
+                <th style={{width: 90}}>Class</th>
                 <th style={{width: 160}}>Draw</th>
                 <th style={{width: 80, textAlign:"right"}}>Watts</th>
               </tr>
