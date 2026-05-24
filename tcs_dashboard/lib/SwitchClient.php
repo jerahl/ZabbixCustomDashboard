@@ -927,40 +927,98 @@ class SwitchClient {
             }
         }
 
-        // Per-member: also count how many ports on the slot are drawing
-        // power, for the "X ports" column in the per-member table.
-        $portCount = [];
+        // Per-member drawn comes from summing the per-port mpower items
+        // — always accurate even on stack platforms where
+        // extremePethPseSlotTable reports identical chassis-wide values
+        // on every row instead of true per-slot figures.
+        $drawnBySlot   = [];
+        $portCountBySlot = [];
         foreach ($perPortWatts as $mp => $w) {
             [$mem] = explode('.', $mp);
-            $portCount[(int) $mem] = ($portCount[(int) $mem] ?? 0) + 1;
+            $slot = (int) $mem;
+            $drawnBySlot[$slot]     = ($drawnBySlot[$slot]     ?? 0.0) + $w;
+            $portCountBySlot[$slot] = ($portCountBySlot[$slot] ?? 0)   + 1;
         }
 
+        // Detect chassis-wide reporting: multiple slot rows but every one
+        // has the same `budget` value. EXOS does this on the 5520 /
+        // 5320 stack platforms. In that case the table's totals are
+        // already the chassis totals — don't sum them, just take one
+        // representative slot.
+        $slotBudgets = [];
+        foreach ($perSlot as $row) {
+            if (isset($row['budget'])) $slotBudgets[] = (float) $row['budget'];
+        }
+        $chassisWide = count($slotBudgets) > 1 && count(array_unique($slotBudgets)) === 1;
+
         $members = [];
-        $totalDrawn     = 0.0;
         $totalBudget    = 0.0;
         $totalAvailable = 0.0;
         $totalMeasured  = 0.0;
-        foreach ($perSlot as $slot => $row) {
-            $drawn     = (float) ($row['drawn']     ?? 0);
-            $budget    = (float) ($row['budget']    ?? 0);
-            $available = (float) ($row['available'] ?? max(0.0, $budget - $drawn));
-            $measured  = $row['measured'] ?? null;
-            $totalDrawn     += $drawn;
-            $totalBudget    += $budget;
-            $totalAvailable += $available;
-            if ($measured !== null) $totalMeasured += (float) $measured;
-            $members[] = [
-                'idx'       => $slot,
-                'drawn'     => $drawn,
-                'budget'    => $budget,
-                'available' => $available,
-                'measured'  => $measured !== null ? (float) $measured : null,
-                'capacity'  => isset($row['capacity']) ? (float) $row['capacity'] : null,
-                'status'    => isset($row['status'])   ? (int)   $row['status']   : null,
-                'portCount' => $portCount[$slot] ?? 0
-            ];
+        $memberSlots = array_unique(array_merge(array_keys($perSlot), array_keys($drawnBySlot)));
+        sort($memberSlots);
+
+        if ($chassisWide) {
+            // One row carries the chassis-wide envelope; distribute the
+            // budget evenly across the actual stack members (those that
+            // reported any port draws OR have a per-slot row). Drawn /
+            // ports come from per-port mpower aggregation.
+            $first = reset($perSlot);
+            $chassisBudget    = (float) ($first['budget']    ?? 0);
+            $chassisMeasured  = isset($first['measured'])    ? (float) $first['measured']    : null;
+            $chassisCapacity  = isset($first['capacity'])    ? (float) $first['capacity']    : null;
+            $chassisStatus    = isset($first['status'])      ? (int)   $first['status']      : null;
+            $memberCount = max(1, count($memberSlots));
+            $perMemberBudget = $chassisBudget / $memberCount;
+
+            foreach ($memberSlots as $slot) {
+                $drawn = round($drawnBySlot[$slot] ?? 0.0, 1);
+                $available = round(max(0.0, $perMemberBudget - $drawn), 1);
+                $members[] = [
+                    'idx'       => $slot,
+                    'drawn'     => $drawn,
+                    'budget'    => round($perMemberBudget, 1),
+                    'available' => $available,
+                    'measured'  => null, // chassis-only — header carries it
+                    'capacity'  => null,
+                    'status'    => $chassisStatus,
+                    'portCount' => $portCountBySlot[$slot] ?? 0
+                ];
+            }
+            $totalBudget    = $chassisBudget;
+            $totalAvailable = max(0.0, $chassisBudget - array_sum($drawnBySlot));
+            $totalMeasured  = $chassisMeasured ?? 0.0;
+        } else {
+            // True per-slot reporting — trust the MIB. Drawn still uses
+            // per-port aggregation when available (more accurate than
+            // extremePethSlotConsumptionPower which only counts allocated
+            // power per device class, not actual measurement).
+            foreach ($memberSlots as $slot) {
+                $row = $perSlot[$slot] ?? [];
+                $drawnFromPorts = $drawnBySlot[$slot] ?? null;
+                $drawn = $drawnFromPorts !== null
+                    ? round($drawnFromPorts, 1)
+                    : (float) ($row['drawn'] ?? 0);
+                $budget    = (float) ($row['budget'] ?? 0);
+                $available = (float) ($row['available'] ?? max(0.0, $budget - $drawn));
+                $measured  = $row['measured'] ?? null;
+                $totalBudget    += $budget;
+                $totalAvailable += $available;
+                if ($measured !== null) $totalMeasured += (float) $measured;
+                $members[] = [
+                    'idx'       => $slot,
+                    'drawn'     => $drawn,
+                    'budget'    => $budget,
+                    'available' => $available,
+                    'measured'  => $measured !== null ? (float) $measured : null,
+                    'capacity'  => isset($row['capacity']) ? (float) $row['capacity'] : null,
+                    'status'    => isset($row['status'])   ? (int)   $row['status']   : null,
+                    'portCount' => $portCountBySlot[$slot] ?? 0
+                ];
+            }
         }
-        usort($members, fn($a, $b) => $a['idx'] <=> $b['idx']);
+
+        $totalDrawn = array_sum($drawnBySlot);
 
         $ports = [];
         foreach ($perPortWatts as $mp => $watts) {
@@ -982,8 +1040,9 @@ class SwitchClient {
                 'measured'  => round($totalMeasured, 1),
                 'pct'       => $totalBudget > 0 ? (int) round(($totalDrawn / $totalBudget) * 100) : 0
             ],
-            'members' => $members,
-            'ports'   => $ports
+            'members'      => $members,
+            'ports'        => $ports,
+            'chassisWide'  => $chassisWide
         ];
     }
 

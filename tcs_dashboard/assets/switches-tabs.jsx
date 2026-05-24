@@ -637,6 +637,12 @@ const TabPoe = () => {
           <div className="card-h">
             <h3>Per-member draw</h3>
             <SourceBadge src="zbx" />
+            <div className="h-spacer" />
+            {P.chassisWide && (
+              <span className="h-meta" title="EXOS reports chassis-wide PoE totals on stack platforms; per-member budget is the chassis budget split evenly, per-member draw is summed from per-port mpower readings.">
+                chassis-split
+              </span>
+            )}
           </div>
           <div className="poe-perm-body">
             {members.length === 0 && (
