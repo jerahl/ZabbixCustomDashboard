@@ -475,11 +475,41 @@ class SwitchClient {
                 $okByFan[(int) $m[1]] = ((int) $it['lastvalue']) === 1;
             }
         }
+
+        // Two ways to recover the (slot, fanInSlot) pairing:
+        //   1. Explicit map from sensor.fan.slot[extremeFanPositionSlotNum.<n>]
+        //      — present when the per-member-health template patch's fan
+        //      slot-mapping prototype is rolled out.
+        //   2. Convention encoded in the fan index itself: <member><fan>
+        //      where fan is the last two digits and member is everything
+        //      above them. e.g. 101 → member 1 fan 1, 306 → member 3 fan 6.
+        //      EXOS uses this scheme for stacked fan numbering when the
+        //      explicit mapping isn't available.
         $out = [];
-        foreach ($slotByFan as $fanIdx => $slot) {
+        $fanIdxs = array_unique(array_merge(
+            array_keys($slotByFan),
+            array_keys($rpmByFan),
+            array_keys($okByFan)
+        ));
+        foreach ($fanIdxs as $fanIdx) {
+            $slot       = $slotByFan[$fanIdx] ?? null;
+            $fanInSlot  = null;
+            if ($slot === null && $fanIdx >= 100) {
+                $slot      = intdiv($fanIdx, 100);
+                $fanInSlot = $fanIdx % 100;
+            } elseif ($slot === null) {
+                // Standalone switch (no encoded member) — bucket under slot 1.
+                $slot      = 1;
+                $fanInSlot = $fanIdx;
+            } else {
+                // We have explicit slot but no in-slot index; preserve
+                // ordering by global fan index instead.
+                $fanInSlot = $fanIdx;
+            }
             if ($slot < 1 || $slot > self::STACK_LIMIT) continue;
+
             $out[$slot][] = [
-                'idx' => $fanIdx,
+                'idx' => $fanInSlot,
                 'rpm' => $rpmByFan[$fanIdx] ?? 0,
                 'ok'  => $okByFan[$fanIdx] ?? true
             ];
