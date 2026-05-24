@@ -680,7 +680,6 @@ const SwitchPortWidget = ({ host, selected, onSelectPort }) => {
         <span className="chip-btn warn"><span className="dot" style={{ background: "var(--warn)" }} /><span className="lbl-mono">{host.temp}°C</span></span>
         <span className="chip-btn ok"><span className="dot" style={{ background: "var(--ok)" }} /><span className="lbl-mono">PSU</span></span>
         <span className="chip-btn ok"><span className="dot" style={{ background: "var(--ok)" }} /><span className="lbl-mono">FAN</span></span>
-        <div className="ip-badge">IP ADDRESS <span className="v">{host.ip}</span></div>
       </div>
 
       {stack.map(m => (
