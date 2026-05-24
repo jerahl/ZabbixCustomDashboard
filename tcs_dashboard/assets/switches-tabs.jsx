@@ -645,13 +645,22 @@ const TabPoe = () => {
               </div>
             )}
             {members.map(m => {
-              const pct = m.budget > 0 ? Math.round((m.drawn / m.budget) * 100) : 0;
+              // Show actual measured PSE draw against the slot's max
+              // available power envelope. measured =
+              // extremePethSlotMeasuredPower, available =
+              // extremePethSlotMaxAvailPower (the operational ceiling
+              // given the current PSU mode and status).
+              const measured = m.measured != null ? m.measured : m.drawn;
+              const cap = m.available != null && m.available > 0
+                ? m.available
+                : (m.capacity != null ? m.capacity : m.budget);
+              const pct = cap > 0 ? Math.round((measured / cap) * 100) : 0;
               return (
                 <div key={m.idx} className="ppm-row">
                   <div className="ppm-id">MEMBER {m.idx}</div>
                   <div className="ppm-bar">
                     <i className={pct > 80 ? "warn" : ""} style={{ width: `${Math.min(100, pct)}%` }} />
-                    <span className="ppm-val">{Math.round(m.drawn)} / {Math.round(m.budget)} W</span>
+                    <span className="ppm-val">{Math.round(measured)} / {Math.round(cap)} W</span>
                   </div>
                   <div className="ppm-ports">{m.portCount} port{m.portCount === 1 ? "" : "s"}</div>
                   <div className="ppm-pct">{pct}%</div>
