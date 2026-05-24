@@ -53,6 +53,7 @@
         window.EDP_NEIGHBORS   = [];
         window.VLANS           = [];
         window.POE_BUDGET      = null;
+        window.PORT_AUTH       = {};
         window.SWITCH_PROBLEMS = [];
         window.SWITCH_LOADING  = { ...window.SWITCH_LOADING, snapshot: true };
         window.dispatchEvent(new CustomEvent("tcs:switch-data", { detail: { section: "navigate" } }));
@@ -80,6 +81,9 @@
     // PoE budget snapshot. null until the snapshot arrives; empty
     // members/ports arrays once it does if the patch isn't applied.
     window.POE_BUDGET       = null;
+    // Per-port auth sessions, keyed by "m.p". Empty until the port-auth
+    // patch is applied.
+    window.PORT_AUTH        = {};
     window.SWITCH_SITES     = [];
     window.SWITCH_INFO      = {};
     window.PF_ADMIN_BASE    = "";
@@ -122,6 +126,49 @@
         const t = Date.parse(String(lastSeen).replace(" ", "T"));
         if (!isFinite(t)) return 0;
         return Math.max(0, Math.round((Date.now() - t) / 60000));
+    };
+
+    // Static policy-profile lookup — RADIUS Filter-ID maps to a policy
+    // profile index, which on Extreme stacks corresponds to a named
+    // entry in the policy profile config. Static because the profile
+    // names rarely change and aren't pollable via SNMP.
+    window.POLICY_PROFILES = {
+        1:  "Failsafe",
+        2:  "Teachers",
+        3:  "Administrator",
+        4:  "isolation",
+        5:  "ITAdmins",
+        6:  "Voice",
+        7:  "Door Access",
+        8:  "CNP",
+        9:  "Guest Access",
+        10: "Permit Traffic",
+        11: "Computers",
+        12: "Projectors",
+        13: "Deny Access",
+        14: "WirelessAP",
+        15: "Unregistered",
+        16: "Printers",
+        17: "Registration",
+        18: "gaming",
+        19: "SecCameras",
+        20: "HVAC",
+        21: "Students"
+    };
+
+    // Find the untagged VLAN for a given member+port from the live
+    // VLAN snapshot. Returns {vid, name} or null when no VLAN claims
+    // the port as untagged (typical for trunk/uplink ports or ports
+    // not in the snapshot yet).
+    const _portUntaggedVlan = (member, portNum) => {
+        const vlans = Array.isArray(window.VLANS) ? window.VLANS : [];
+        for (const v of vlans) {
+            const slotPorts = (v.untaggedPorts || {})[member];
+            if (Array.isArray(slotPorts) && slotPorts.includes(portNum)) {
+                return { vid: v.vid, name: v.name };
+            }
+        }
+        return null;
     };
 
     window.makePortDetail = function (memberIdx, port) {
@@ -172,6 +219,22 @@
         const discIn  = tr ? (tr.discIn  || 0) : 0;
         const discOut = tr ? (tr.discOut || 0) : 0;
 
+        // Port's static untagged VLAN (from extremeVlanOpaqueTable).
+        const portVlan = _portUntaggedVlan(memberIdx, port.n);
+
+        // Auth sessions on this port from etsysMultiAuthSessionStationTable.
+        // Pre-sorted server-side so applied sessions come first.
+        const authSessions = (window.PORT_AUTH || {})[`${memberIdx}.${port.n}`] || [];
+        // Decorate each session with the human policy-profile name so the
+        // detail pane can render it directly. policyName is "" when the
+        // index isn't in POLICY_PROFILES.
+        const policyName = (idx) => (window.POLICY_PROFILES || {})[idx] || "";
+        const decoratedSessions = authSessions.map(s => ({
+            ...s,
+            policyName: s.policy != null ? policyName(s.policy) : ""
+        }));
+        const primaryAuth = decoratedSessions.find(s => s.applied) || decoratedSessions[0] || null;
+
         return {
             label:      `${memberIdx}:${port.n}`,
             state:      port.state,
@@ -197,7 +260,14 @@
                 : (macs.length > 1 ? macs.length - 1 : 0),
             macs,
             ifIndex:    (Number(memberIdx) || 1) * 1000 + (Number(port.n) || 0),
-            ageMin:     device ? pfAgeMin(device.lastSeen) : 0
+            ageMin:     device ? pfAgeMin(device.lastSeen) : 0,
+            // Static port VLAN: vid + name (e.g., "FACULTY"); null when the
+            // port isn't untagged on any VLAN (trunk port etc.).
+            portVlan,
+            // Auth sessions: primaryAuth is the active "applied" session;
+            // authSessions is the full list (typically 0..2 entries).
+            authSessions: decoratedSessions,
+            primaryAuth
         };
     };
 
@@ -333,6 +403,7 @@
         const edp      = Array.isArray(snap.edpNeighbors) ? snap.edpNeighbors : [];
         const vlans    = Array.isArray(snap.vlans)        ? snap.vlans        : [];
         const poeBudget = (snap.poeBudget && typeof snap.poeBudget === "object") ? snap.poeBudget : null;
+        const portAuth  = (snap.portAuth  && typeof snap.portAuth  === "object") ? snap.portAuth  : {};
         const kpis     = (snap.kpis    && typeof snap.kpis    === "object") ? snap.kpis    : {};
         const history  = (snap.history && typeof snap.history === "object") ? snap.history : {};
         const traffic  = (snap.traffic && typeof snap.traffic === "object") ? snap.traffic : {};
@@ -350,6 +421,9 @@
         // wattages (sorted desc) ready to join with PF data for the
         // top-consumers table.
         window.POE_BUDGET = poeBudget;
+        // Per-port authenticated sessions from etsysMultiAuthSessionStationTable
+        // (port-auth template patch). Keyed by "<member>.<port>".
+        window.PORT_AUTH = portAuth;
 
         // Stash speeds for buildStack to consume.
         window._tcsSpeedByKey = speeds;

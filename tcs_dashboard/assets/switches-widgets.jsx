@@ -569,6 +569,68 @@ const PortDetailPane = ({ detail, onClose }) => {
             <div className="pd-mid" />
             <div className="pd-val">{detail.speed >= 1000 ? `${detail.speed/1000} Gbps` : `${detail.speed} Mbps`}</div>
           </div>
+          <div className="pd-row">
+            <div className="pd-lbl">VLAN</div>
+            <div className="pd-mid" />
+            <div className="pd-val">
+              {detail.portVlan
+                ? <span><span style={{color:"var(--accent)",fontFamily:"var(--mono)"}}>{detail.portVlan.vid}</span>{detail.portVlan.name ? ` · ${detail.portVlan.name}` : ""}</span>
+                : <span style={{color:"var(--muted)"}}>—</span>}
+            </div>
+          </div>
+          {detail.primaryAuth && (() => {
+            const a = detail.primaryAuth;
+            // etsysMultiAuthSessionStationAuthStatus codes
+            const statusLabels = { 1: "authSuccess", 2: "authFail", 3: "authInProgress", 4: "authIdle", 5: "authTerminated" };
+            const statusLabel  = statusLabels[a.status] || `status ${a.status || "?"}`;
+            const statusClass  = a.status === 1 ? "ok" : a.status === 3 ? "warn" : "err";
+            return (
+              <React.Fragment>
+                <div className="pd-row">
+                  <div className="pd-lbl">Auth Session</div>
+                  <div className="pd-mid">
+                    <span style={{ fontSize: 11, color: "var(--fg)" }}>{a.agentLabel}</span>
+                    {a.mac && (
+                      <span style={{ fontSize: 10.5, color: "var(--muted)", marginLeft: 8, fontFamily: "var(--mono)" }}>
+                        {a.mac}
+                      </span>
+                    )}
+                  </div>
+                  <div className="pd-val">
+                    <span className={"pd-state-badge " + (a.applied ? "up" : "down")}
+                          title={a.applied ? "policy applied" : "not applied"}>
+                      {a.applied ? "APPLIED" : "INACTIVE"}
+                    </span>
+                  </div>
+                </div>
+                <div className="pd-row">
+                  <div className="pd-lbl">Auth Status</div>
+                  <div className="pd-mid" />
+                  <div className={"pd-val " + statusClass}>
+                    {statusLabel}
+                  </div>
+                </div>
+                <div className="pd-row">
+                  <div className="pd-lbl">Policy</div>
+                  <div className="pd-mid" />
+                  <div className="pd-val">
+                    {a.policy != null
+                      ? <span><span style={{color:"var(--accent)",fontFamily:"var(--mono)"}}>{a.policy}</span>{a.policyName ? ` · ${a.policyName}` : ""}</span>
+                      : <span style={{color:"var(--muted)"}}>—</span>}
+                  </div>
+                </div>
+                {detail.authSessions.length > 1 && (
+                  <div className="pd-row">
+                    <div className="pd-lbl">Other sessions</div>
+                    <div className="pd-mid" style={{ fontSize: 10.5, color: "var(--muted)" }}>
+                      {detail.authSessions.filter(s => s !== a).map(s => s.agentLabel).join(", ")}
+                    </div>
+                    <div className="pd-val muted">{detail.authSessions.length - 1}</div>
+                  </div>
+                )}
+              </React.Fragment>
+            );
+          })()}
         </div>
       </div>
     </div>

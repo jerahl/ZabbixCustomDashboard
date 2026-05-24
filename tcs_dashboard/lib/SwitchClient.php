@@ -201,7 +201,8 @@ class SwitchClient {
             'info'         => $this->extractHostInfo($items),
             'edpNeighbors' => $this->extractEdpNeighbors($items),
             'vlans'        => $this->extractVlans($items),
-            'poeBudget'    => $this->extractPoeBudget($items)
+            'poeBudget'    => $this->extractPoeBudget($items),
+            'portAuth'     => $this->extractPortAuth($items)
         ];
     }
 
@@ -984,6 +985,123 @@ class SwitchClient {
             'members' => $members,
             'ports'   => $ports
         ];
+    }
+
+    /**
+     * Per-port authenticated sessions from the port-auth template patch.
+     *
+     * Keys: extreme.portauth.{status, agent, duration, idle, vlan, policy,
+     * applied}[<idx>]
+     *
+     * Index encoding (etsysMultiAuthSessionStationTable, 4-tuple
+     * (StationAddrType, StationAddr, ifIndex, AgentType)) for MAC-keyed
+     * sessions is 10 components: "3.6.<m1>.<m2>.<m3>.<m4>.<m5>.<m6>.<ifIndex>.<agentType>"
+     * — addrType=3 (mac), addrLen=6, then 6 MAC bytes, then ifIndex,
+     * then agentType. We extract the MAC, port ifIndex (→ member.port),
+     * and agentType from the index components and group sessions under
+     * the local port key "<m>.<p>".
+     *
+     * AgentType values: 1=ieee8021x, 2=pwa, 3=macAuth, 4=cep,
+     *                   5=radiusSnooping, 6=autoTracking, 7=quarantineAgent
+     *
+     * @return array<string, array<int, array{
+     *     mac:string, agent:int, agentLabel:string, status:int,
+     *     applied:bool, policy:int|null, vlan:int|null,
+     *     duration:int|null, idle:int|null
+     * }>>
+     */
+    private function extractPortAuth(array $items): array {
+        $bag = []; // by index → fields
+        $fieldMap = [
+            'extreme.portauth.status['   => 'status',
+            'extreme.portauth.agent['    => 'agent',
+            'extreme.portauth.duration[' => 'duration',
+            'extreme.portauth.idle['     => 'idle',
+            'extreme.portauth.vlan['     => 'vlan',
+            'extreme.portauth.policy['   => 'policy',
+            'extreme.portauth.applied['  => 'applied'
+        ];
+
+        foreach ($items as $it) {
+            $k = (string) $it['key_'];
+            foreach ($fieldMap as $prefix => $field) {
+                if (!str_starts_with($k, $prefix)) continue;
+                $idx = substr($k, strlen($prefix), -1);
+                if ($idx === '') break;
+                $row = $bag[$idx] ?? ['_idx' => $idx];
+                $val = trim((string) $it['lastvalue']);
+                if ($val !== '' && is_numeric($val)) {
+                    $row[$field] = (int) $val;
+                }
+                $bag[$idx] = $row;
+                break;
+            }
+        }
+
+        $out = [];
+        $agentLabels = [
+            1 => '802.1X',
+            2 => 'web-auth',
+            3 => 'MAC-auth',
+            4 => 'CEP',
+            5 => 'RADIUS-snoop',
+            6 => 'auto-track',
+            7 => 'quarantine'
+        ];
+        foreach ($bag as $idx => $row) {
+            $parts = explode('.', $idx);
+            if (count($parts) < 10) continue;
+
+            // addrType.addrLen.<6 MAC bytes>.<ifIndex>.<agentType>
+            $addrType = (int) $parts[0];
+            $addrLen  = (int) $parts[1];
+            if ($addrType !== 3 || $addrLen !== 6) continue;
+
+            $macBytes  = array_slice($parts, 2, 6);
+            $mac       = implode(':', array_map(
+                fn($b) => sprintf('%02x', max(0, min(255, (int) $b))),
+                $macBytes
+            ));
+            $ifIndex   = (int) $parts[8];
+            $agentType = (int) $parts[9];
+
+            // Decode ifIndex → (member, port) using the same Extreme EXOS
+            // convention used elsewhere in this client.
+            $member = null; $port = null;
+            if ($ifIndex > 0 && $ifIndex < 1000) {
+                $member = 1; $port = $ifIndex;
+            } elseif ($ifIndex >= 1000) {
+                $m = intdiv($ifIndex, 1000);
+                $p = $ifIndex % 1000;
+                if ($m >= 1 && $m <= self::STACK_LIMIT && $p > 0) {
+                    $member = $m; $port = $p;
+                }
+            }
+            if ($member === null || $port === null) continue;
+
+            $key = "{$member}.{$port}";
+            $out[$key][] = [
+                'mac'        => $mac,
+                'agent'      => $agentType,
+                'agentLabel' => $agentLabels[$agentType] ?? "agent-{$agentType}",
+                'status'     => $row['status'] ?? 0,
+                'applied'    => ($row['applied'] ?? 0) === 1,
+                'policy'     => $row['policy'] ?? null,
+                'vlan'       => $row['vlan'] ?? null,
+                'duration'   => $row['duration'] ?? null,
+                'idle'       => $row['idle'] ?? null
+            ];
+        }
+
+        // Sort each port's sessions so applied entries come first.
+        foreach ($out as $key => $list) {
+            usort($out[$key], function ($a, $b) {
+                if ($a['applied'] !== $b['applied']) return $a['applied'] ? -1 : 1;
+                return ($b['duration'] ?? 0) <=> ($a['duration'] ?? 0);
+            });
+        }
+
+        return $out;
     }
 
     /** @param array<int,array<string,mixed>> $items */
