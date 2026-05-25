@@ -187,6 +187,24 @@ class ActionEventsData extends ActionDataBase {
             fn($p) => empty($p['r_eventid']) || (int) $p['r_eventid'] === 0
         ));
 
+        // Drop problems whose underlying trigger has been disabled. Zabbix
+        // does not fire a recovery event when a trigger is disabled, so the
+        // problem row keeps showing up with r_eventid=0 indefinitely even
+        // though it is effectively dead.
+        $trigger_ids = array_unique(array_column($problems, 'objectid'));
+        if ($trigger_ids) {
+            $enabled_triggers = $this->safeGet(fn() => API::Trigger()->get([
+                'output'       => ['triggerid'],
+                'triggerids'   => array_values($trigger_ids),
+                'filter'       => ['status' => 0],
+                'preservekeys' => true
+            ]));
+            $problems = array_values(array_filter(
+                $problems,
+                fn($p) => isset($enabled_triggers[(string) $p['objectid']])
+            ));
+        }
+
         $trigger_ids   = array_unique(array_column($problems, 'objectid'));
         $trigger_hosts = $this->resolveTriggerHosts($trigger_ids);
 
