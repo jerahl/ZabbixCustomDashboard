@@ -1,44 +1,113 @@
 // Zabbix Server + Proxy Status — internal-side view of the monitoring platform itself.
 
-const StatusHeader = () => (
-  <div className="page-header" style={{ alignItems: "center" }}>
-    <div style={{ flex: 1 }}>
-      <div className="host-title">
-        <h1>Zabbix · Server &amp; Proxy Status</h1>
-        <span className="role-tag" style={{ fontSize: 10, padding: "1px 8px", background: "rgba(217,41,41,0.10)", color: "var(--zbx)", border: "1px solid rgba(217,41,41,0.4)" }}>
-          MONITORING · CORE
-        </span>
-        <span className="role-tag faculty" style={{ fontSize: 10, padding: "1px 8px" }}>HA CLUSTER</span>
+const { useState, useEffect } = React;
+
+// ───────── Live data bindings ─────────
+// Globals are populated by zbx-status-bridge.jsx (from window.ZBX_BOOT on
+// first paint, then refreshed by fetch to tcs.zbx.status.data). These `let`s
+// are live bindings — child components reference them by name and pick up
+// reassignments when the bridge fires "tcs:zbx-status-data". The root App
+// listens for that event and bumps a render counter.
+let ZBX_SUMMARY       = window.ZBX_SUMMARY       || {};
+let ZBX_NODES         = window.ZBX_NODES         || [];
+let ZBX_PROCESSES     = window.ZBX_PROCESSES     || [];
+let ZBX_CACHES        = window.ZBX_CACHES        || [];
+let ZBX_PROXIES       = window.ZBX_PROXIES       || [];
+let ZBX_NVPS_TIMELINE  = window.ZBX_NVPS_TIMELINE  || [];
+let ZBX_QUEUE_TIMELINE = window.ZBX_QUEUE_TIMELINE || [];
+let ZBX_CACHE_TIMELINE = window.ZBX_CACHE_TIMELINE || [];
+let ZBX_EVENTS        = window.ZBX_EVENTS        || [];
+window.addEventListener("tcs:zbx-status-data", () => {
+  ZBX_SUMMARY        = window.ZBX_SUMMARY        || ZBX_SUMMARY;
+  ZBX_NODES          = window.ZBX_NODES          || ZBX_NODES;
+  ZBX_PROCESSES      = window.ZBX_PROCESSES      || ZBX_PROCESSES;
+  ZBX_CACHES         = window.ZBX_CACHES         || ZBX_CACHES;
+  ZBX_PROXIES        = window.ZBX_PROXIES        || ZBX_PROXIES;
+  ZBX_NVPS_TIMELINE  = window.ZBX_NVPS_TIMELINE  || ZBX_NVPS_TIMELINE;
+  ZBX_QUEUE_TIMELINE = window.ZBX_QUEUE_TIMELINE || ZBX_QUEUE_TIMELINE;
+  ZBX_CACHE_TIMELINE = window.ZBX_CACHE_TIMELINE || ZBX_CACHE_TIMELINE;
+  ZBX_EVENTS         = window.ZBX_EVENTS         || ZBX_EVENTS;
+});
+
+const tail = (arr, fallback = 0) =>
+  Array.isArray(arr) && arr.length ? arr[arr.length - 1] : fallback;
+
+const LiveBanner = () => {
+  const b = window.ZBX_BANNER;
+  if (!b) return null;
+  const color = b.kind === "error" ? "var(--err)" : "var(--warn)";
+  const bg    = b.kind === "error" ? "rgba(242,95,92,0.10)" : "rgba(245,179,0,0.10)";
+  return (
+    <div style={{ margin: "0 0 14px", padding: "8px 12px", border: "1px solid " + color, background: bg, color: color, fontSize: 12, borderRadius: 4 }}>
+      <strong style={{ marginRight: 8, textTransform: "uppercase", letterSpacing: ".06em", fontSize: 10.5 }}>{b.kind}</strong>
+      {b.msg}
+    </div>
+  );
+};
+
+const StatusHeader = () => {
+  const s = ZBX_SUMMARY || {};
+  const px = s.proxies || { total: 0, offline: 0, drift: 0 };
+  const hosts    = (s.hosts    || {});
+  const items    = (s.items    || {});
+  const triggers = (s.triggers || {});
+  const offline  = px.offline || 0;
+  const drift    = px.drift   || 0;
+  const dotColor = offline > 0 ? "var(--err)" : drift > 0 ? "var(--warn)" : "var(--ok)";
+  const summaryMsg =
+    offline > 0 ? `Cluster healthy · ${offline} proxy ${offline === 1 ? "unreachable" : "unreachable"}` :
+    drift   > 0 ? `Cluster healthy · ${drift} proxy ${drift === 1 ? "version drift" : "with version drift"}` :
+    px.total > 0 ? `Cluster healthy · ${px.total} ${px.total === 1 ? "proxy" : "proxies"} online` :
+    "Cluster healthy";
+  return (
+    <div className="page-header" style={{ alignItems: "center" }}>
+      <div style={{ flex: 1 }}>
+        <div className="host-title">
+          <h1>Zabbix · Server &amp; Proxy Status</h1>
+          <span className="role-tag" style={{ fontSize: 10, padding: "1px 8px", background: "rgba(217,41,41,0.10)", color: "var(--zbx)", border: "1px solid rgba(217,41,41,0.4)" }}>
+            MONITORING · CORE
+          </span>
+          <span className="role-tag faculty" style={{ fontSize: 10, padding: "1px 8px" }}>
+            {ZBX_NODES.length > 1 ? "HA CLUSTER" : "STANDALONE"}
+          </span>
+        </div>
+        <div className="host-meta">
+          <span className="pill"><span className="dot" style={{ background: dotColor }} /> {summaryMsg}</span>
+          <span className="pill"><span className="lbl">Version</span> <span className="v">{s.version || "—"}</span></span>
+          <span className="pill"><span className="lbl">Active node</span> <span className="v">{s.primary || "—"}</span></span>
+          <span className="pill"><span className="lbl">Up</span> <span className="v">{s.upHuman || "—"}</span></span>
+          <span className="pill"><span className="lbl">Hosts</span> <span className="v">{(hosts.monitored || 0).toLocaleString()}</span></span>
+          <span className="pill"><span className="lbl">Items</span> <span className="v">{(items.enabled || 0).toLocaleString()}</span></span>
+          <span className="pill"><span className="lbl">Triggers</span> <span className="v">{(triggers.enabled || 0).toLocaleString()} ({triggers.problem || 0} problem)</span></span>
+        </div>
       </div>
-      <div className="host-meta">
-        <span className="pill"><span className="dot" style={{ background: "var(--ok)" }} /> Cluster healthy · 1 proxy unreachable</span>
-        <span className="pill"><span className="lbl">Version</span> <span className="v">{ZBX_SUMMARY.version}</span></span>
-        <span className="pill"><span className="lbl">Active node</span> <span className="v">{ZBX_SUMMARY.primary}</span></span>
-        <span className="pill"><span className="lbl">Up</span> <span className="v">{ZBX_SUMMARY.upHuman}</span></span>
-        <span className="pill"><span className="lbl">Hosts</span> <span className="v">{ZBX_SUMMARY.hosts.monitored.toLocaleString()}</span></span>
-        <span className="pill"><span className="lbl">Items</span> <span className="v">{ZBX_SUMMARY.items.enabled.toLocaleString()}</span></span>
-        <span className="pill"><span className="lbl">Triggers</span> <span className="v">{ZBX_SUMMARY.triggers.enabled.toLocaleString()} ({ZBX_SUMMARY.triggers.problem} problem)</span></span>
+      <div className="timerange">
+        <Icon name="calendar" />
+        <span className="range-val">Last 1h</span>
+        <Icon name="chevron" />
       </div>
     </div>
-    <div className="timerange">
-      <Icon name="calendar" />
-      <span className="range-val">Last 1h</span>
-      <Icon name="chevron" />
-    </div>
-  </div>
-);
+  );
+};
 
 // ───────── KPI strip ─────────
 const PerfKPIs = () => {
-  const s = ZBX_SUMMARY;
-  const reqRatio = ((s.actPerf / s.reqPerf) * 100).toFixed(0);
+  const s = ZBX_SUMMARY || {};
+  const hosts    = s.hosts    || {};
+  const items    = s.items    || {};
+  const triggers = s.triggers || {};
+  const queue    = s.queue    || {};
+  const proxies  = s.proxies  || { total: 0, online: 0, offline: 0, drift: 0 };
+  const reqPerf  = s.reqPerf  || 0;
+  const actPerf  = s.actPerf  || 0;
+  const reqRatio = reqPerf > 0 ? Math.round((actPerf / reqPerf) * 100) : 0;
   const cells = [
-    { lbl: "NVPS · actual",     v: s.actPerf.toLocaleString(), unit: "/s", note: `req ${s.reqPerf.toLocaleString()}/s · ${reqRatio}% of req`, cls: "" },
-    { lbl: "Hosts monitored",   v: s.hosts.monitored.toLocaleString(), note: `${s.hosts.disabled} disabled · ${s.hosts.templates} templates`, cls: "" },
-    { lbl: "Items enabled",     v: (s.items.enabled / 1000).toFixed(1) + "k", note: `${s.items.notSupported} not supported`, cls: "" },
-    { lbl: "Queue · total",     v: s.queue.total.toString(), note: `${s.queue.ten_min} > 10m · ${s.queue.half_hr} > 30m`, cls: s.queue.total > 100 ? "warn" : "" },
-    { lbl: "Problems",          v: s.triggers.problem.toString(), note: `${s.triggers.suppressed} suppressed · ${s.triggers.ok.toLocaleString()} OK`, cls: "warn" },
-    { lbl: "Proxies online",    v: "7 / 8", note: "1 unreachable · 1 ver. drift", cls: "warn" },
+    { lbl: "NVPS · actual",     v: actPerf.toLocaleString(), unit: "/s", note: `req ${reqPerf.toLocaleString()}/s · ${reqRatio}% of req`, cls: "" },
+    { lbl: "Hosts monitored",   v: (hosts.monitored || 0).toLocaleString(), note: `${hosts.disabled || 0} disabled · ${hosts.templates || 0} templates`, cls: "" },
+    { lbl: "Items enabled",     v: ((items.enabled || 0) / 1000).toFixed(1) + "k", note: `${items.notSupported || 0} not supported`, cls: "" },
+    { lbl: "Queue · total",     v: String(queue.total || 0), note: `${queue.ten_min || 0} > 10m · ${queue.half_hr || 0} > 30m`, cls: (queue.total || 0) > 100 ? "warn" : "" },
+    { lbl: "Problems",          v: String(triggers.problem || 0), note: `${triggers.suppressed || 0} suppressed · ${(triggers.ok || 0).toLocaleString()} OK`, cls: (triggers.problem || 0) > 0 ? "warn" : "" },
+    { lbl: "Proxies online",    v: `${proxies.online || 0} / ${proxies.total || 0}`, note: `${proxies.offline || 0} unreachable · ${proxies.drift || 0} ver. drift`, cls: (proxies.offline || 0) > 0 ? "warn" : "" },
   ];
   return (
     <div className="card" style={{ marginBottom: 14 }}>
@@ -191,10 +260,11 @@ const CachePanel = () => (
 
 // ───────── Perf timelines ─────────
 const PerfTimelines = () => {
+  const reqPerf = (ZBX_SUMMARY && ZBX_SUMMARY.reqPerf) || 0;
   const items = [
-    { label: "NVPS (new values/sec)", data: ZBX_NVPS_TIMELINE,  color: "var(--zbx)",  last: ZBX_NVPS_TIMELINE[ZBX_NVPS_TIMELINE.length - 1].toLocaleString() + "/s", warn: ZBX_SUMMARY.reqPerf },
-    { label: "Queue depth",           data: ZBX_QUEUE_TIMELINE, color: "var(--warn)", last: ZBX_QUEUE_TIMELINE[ZBX_QUEUE_TIMELINE.length - 1] + " items", warn: 200 },
-    { label: "Value cache · % used",  data: ZBX_CACHE_TIMELINE, color: "var(--info)", last: ZBX_CACHE_TIMELINE[ZBX_CACHE_TIMELINE.length - 1] + "%", warn: 80 },
+    { label: "NVPS (new values/sec)", data: ZBX_NVPS_TIMELINE,  color: "var(--zbx)",  last: tail(ZBX_NVPS_TIMELINE).toLocaleString() + "/s", warn: reqPerf },
+    { label: "Queue depth",           data: ZBX_QUEUE_TIMELINE, color: "var(--warn)", last: tail(ZBX_QUEUE_TIMELINE) + " items", warn: 200 },
+    { label: "Value cache · % used",  data: ZBX_CACHE_TIMELINE, color: "var(--info)", last: tail(ZBX_CACHE_TIMELINE) + "%", warn: 80 },
   ];
   return (
     <div className="card">
@@ -302,9 +372,9 @@ const ProxiesTable = () => {
                 }}>{p.mode.toUpperCase()}</span>
                 <div style={{ fontSize: 9.5, color: "var(--muted)", marginTop: 3, fontFamily: "var(--mono)" }}>{p.encrypted}</div>
               </div>
-              <div className="mono" style={{ fontSize: 11.5, color: p.version === ZBX_SUMMARY.version ? "var(--fg-2)" : "var(--warn)" }}>
+              <div className="mono" style={{ fontSize: 11.5, color: p.version === (ZBX_SUMMARY && ZBX_SUMMARY.version) ? "var(--fg-2)" : "var(--warn)" }}>
                 v{p.version}
-                {p.version !== ZBX_SUMMARY.version && <div style={{ fontSize: 9.5, color: "var(--warn)" }}>drift</div>}
+                {p.version !== (ZBX_SUMMARY && ZBX_SUMMARY.version) && <div style={{ fontSize: 9.5, color: "var(--warn)" }}>drift</div>}
               </div>
               <div className="mono" style={{ textAlign: "right", fontSize: 12 }}>{p.hosts}</div>
               <div className="mono" style={{ textAlign: "right", fontSize: 12, color: "var(--fg-2)" }}>{p.items.toLocaleString()}</div>
@@ -378,17 +448,35 @@ const TWEAK_DEFAULTS = {
 
 const ZbxStatusApp = () => {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
-  React.useEffect(() => {
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
     document.documentElement.classList.toggle("hide-src-badges", !t.showSourceBadges);
   }, [t.showSourceBadges]);
+
+  // Re-render whenever zbx-status-bridge.jsx swaps in a fresh
+  // tcs.zbx.status.data payload.
+  useEffect(() => {
+    const onData = () => setTick(n => n + 1);
+    window.addEventListener("tcs:zbx-status-data", onData);
+    return () => window.removeEventListener("tcs:zbx-status-data", onData);
+  }, []);
+
+  const refresh = () => {
+    if (typeof window.tcsZbxStatusRefresh === "function") window.tcsZbxStatusRefresh();
+  };
 
   return (
     <div className="app" data-density={t.density} data-screen-label="Zabbix Server Status">
       <GlobalSidebar active="zbx-status" />
       <div className="main">
-        <GlobalTopbar crumb={["Tuscaloosa City Schools", "Monitoring", "Zabbix · Server & Proxy Status"]} />
+        <GlobalTopbar
+          crumb={["Tuscaloosa City Schools", "Monitoring", "Zabbix · Server & Proxy Status"]}
+          onRefresh={refresh}
+        />
         <StatusHeader />
         <div className="body">
+          <LiveBanner />
           <PerfKPIs />
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
@@ -421,10 +509,8 @@ const ZbxStatusApp = () => {
           ]} onChange={v => setTweak("density", v)} />
           <TweakToggle label="Show data-source badges" value={t.showSourceBadges} onChange={v => setTweak("showSourceBadges", v)} />
         </TweakSection>
-        <TweakSection title="Cluster ops">
-          <TweakButton onClick={() => alert("Would trigger a manual HA failover from zbx-srv-01 to zbx-srv-02.")}>Failover to zbx-srv-02</TweakButton>
-          <TweakButton onClick={() => alert("Would reload configuration cache on the active node.")}>Reload config cache</TweakButton>
-          <TweakButton onClick={() => alert("Would force a re-poll of zbx-proxy-tcs-08 (unreachable).")}>Re-probe unreachable proxy</TweakButton>
+        <TweakSection title="Refresh">
+          <TweakButton onClick={refresh}>Refresh now</TweakButton>
         </TweakSection>
       </TweaksPanel>
     </div>

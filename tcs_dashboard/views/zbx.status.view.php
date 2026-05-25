@@ -26,6 +26,30 @@ $v = static function (string $rel) use ($asset_base, $asset_dir): string {
 <link rel="stylesheet" href="<?= $v('styles.css') ?>">
 <link rel="stylesheet" href="<?= $v('packetfence.css') ?>">
 
+<script>
+    // SSR snapshot from ActionZbxStatus; zbx-status-bridge.jsx unpacks this into
+    // the window.ZBX_* globals zbx-status-app.jsx reads, then refreshes via
+    // tcs.zbx.status.data.
+    window.ZBX_BOOT = <?= json_encode($data['boot'] ?? new stdClass(), JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) ?>;
+    window.TCS_ZBX_STATUS_DATA_URL = "zabbix.php?action=tcs.zbx.status.data";
+
+    // Disable Zabbix's whole-page refresh on this view.
+    (function disableZabbixRefresh() {
+        const kill = () => {
+            try {
+                if (window.PageRefresh && typeof window.PageRefresh.stop === "function") {
+                    window.PageRefresh.stop();
+                }
+            } catch (e) { /* no-op */ }
+            document.querySelectorAll('meta[http-equiv="refresh" i]').forEach(m => m.remove());
+        };
+        kill();
+        document.addEventListener("DOMContentLoaded", kill);
+        setTimeout(kill, 0);
+        setTimeout(kill, 250);
+    })();
+</script>
+
 <style>
     html.hide-src-badges .src-badge { display: none !important; }
     .app[data-density="dense"]    .card-b   { padding: 10px; }
@@ -118,5 +142,5 @@ $v = static function (string $rel) use ($asset_base, $asset_dir): string {
 <script type="text/babel" src="<?= $v('tweaks-panel.jsx') ?>"></script>
 <script type="text/babel" src="<?= $v('primitives.jsx') ?>"></script>
 <script type="text/babel" src="<?= $v('global-nav.jsx') ?>"></script>
-<script type="text/babel" src="<?= $v('zbx-status-data.jsx') ?>"></script>
+<script type="text/babel" src="<?= $v('zbx-status-bridge.jsx') ?>"></script>
 <script type="text/babel" src="<?= $v('zbx-status-app.jsx') ?>"></script>

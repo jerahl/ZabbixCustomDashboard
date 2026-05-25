@@ -177,6 +177,11 @@
             "class": "ActionZbxStatus",
             "view": "zbx.status.view",
             "layout": "layout.htmlpage"
+        },
+        "tcs.zbx.status.data": {
+            "class": "ActionZbxStatusData",
+            "layout": "layout.json",
+            "view": null
         }
     }
 }
