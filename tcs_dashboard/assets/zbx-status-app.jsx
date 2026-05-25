@@ -173,13 +173,15 @@ const HANodeCard = ({ n }) => {
 };
 
 // ───────── Internal processes ─────────
-const ProcessGroup = ({ title, items }) => (
+const ProcessGroup = ({ title, items }) => {
+  const forkSum = items.reduce((a, b) => a + (b.forks || 0), 0);
+  return (
   <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
     <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 14px", background: "rgba(255,255,255,0.015)", borderBottom: "1px solid var(--line)", fontSize: 10.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600 }}>
       <span>{title}</span>
       <div style={{ flex: 1 }} />
       <span className="mono" style={{ fontSize: 10, color: "var(--muted)", textTransform: "none", letterSpacing: 0 }}>
-        {items.length} processes · {items.reduce((a, b) => a + b.forks, 0)} forks
+        {items.length} processes{forkSum > 0 ? ` · ${forkSum} forks` : ""}
       </span>
     </div>
     {items.map(p => {
@@ -201,13 +203,16 @@ const ProcessGroup = ({ title, items }) => (
             <span className={"mono"} style={{ color: cls === "ok" ? "var(--fg-2)" : cls === "warn" ? "var(--warn)" : "var(--err)", fontWeight: 600 }}>
               {p.busy}%
             </span>
-            <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>{p.forks} fork{p.forks > 1 ? "s" : ""}</div>
+            <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2 }}>
+              {p.forks > 0 ? `${p.forks} fork${p.forks > 1 ? "s" : ""}` : "— forks"}
+            </div>
           </div>
         </div>
       );
     })}
   </div>
-);
+  );
+};
 
 const ProcessPanel = () => {
   const groups = ["Pollers", "Data flow", "Triggers", "Discovery", "Housekeeping"];

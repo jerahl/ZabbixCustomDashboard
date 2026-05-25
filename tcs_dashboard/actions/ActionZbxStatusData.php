@@ -245,33 +245,40 @@ class ActionZbxStatusData extends ActionDataBase {
     }
 
     /**
-     * Pull the latest value of every `zabbix[*]` item on the given host ids.
+     * Pull the latest value of every `zabbix[*]` and `proc.num[*]` item on the
+     * given host ids. proc.num covers the per-process fork counts pulled in by
+     * the "TCS Zabbix server forks by agent active" companion template.
      * @return array<string, array<string, array{value:mixed, lastclock:int, itemid:string, valuetype:int}>>
      *         keyed by hostid → key_ → { value, lastclock, itemid, valuetype }
      */
     private static function collectInternalItems(array $host_ids): array {
         if (!$host_ids) return [];
-        $items = API::Item()->get([
-            'output'   => ['itemid', 'hostid', 'key_', 'lastvalue', 'lastclock', 'value_type', 'state'],
-            'hostids'  => array_values(array_unique($host_ids)),
-            'search'   => ['key_' => 'zabbix['],
-            'startSearch' => true,
-            'monitored'   => true,
-        ]) ?: [];
 
-        $out = [];
-        foreach ($items as $it) {
-            $hid = (string) $it['hostid'];
-            $key = (string) $it['key_'];
-            $out[$hid][$key] = [
-                'value'     => $it['lastvalue'] ?? null,
-                'lastclock' => (int) ($it['lastclock'] ?? 0),
-                'itemid'    => (string) $it['itemid'],
-                'valuetype' => (int) ($it['value_type'] ?? 0),
-                'state'     => (int) ($it['state'] ?? 0),
-            ];
+        // One call per prefix — the API's search is OR'd across fields, not
+        // a list, so we batch by prefix and merge.
+        $byHost = [];
+        foreach (['zabbix[', 'proc.num['] as $prefix) {
+            $items = API::Item()->get([
+                'output'      => ['itemid', 'hostid', 'key_', 'lastvalue', 'lastclock', 'value_type', 'state'],
+                'hostids'     => array_values(array_unique($host_ids)),
+                'search'      => ['key_' => $prefix],
+                'startSearch' => true,
+                'monitored'   => true,
+            ]) ?: [];
+
+            foreach ($items as $it) {
+                $hid = (string) $it['hostid'];
+                $key = (string) $it['key_'];
+                $byHost[$hid][$key] = [
+                    'value'     => $it['lastvalue'] ?? null,
+                    'lastclock' => (int) ($it['lastclock'] ?? 0),
+                    'itemid'    => (string) $it['itemid'],
+                    'valuetype' => (int) ($it['value_type'] ?? 0),
+                    'state'     => (int) ($it['state'] ?? 0),
+                ];
+            }
         }
-        return $out;
+        return $byHost;
     }
 
     // ── Summary KPI strip ─────────────────────────────────────────────────
@@ -469,6 +476,19 @@ class ActionZbxStatusData extends ActionDataBase {
         if (!$primary) return [[], []];
         $items = $items_by_host[(string) $primary['hostid']] ?? [];
 
+        // Map "<process name>" → fork count, sourced from proc.num items added
+        // by the TCS "Zabbix server forks by agent active" template. Keys look
+        // like:  proc.num[,,,"zabbix_server: history syncer #"]
+        // We tolerate small spelling drift (extra whitespace, missing quotes).
+        $forksByName = [];
+        foreach ($items as $key => $row) {
+            if (!str_starts_with($key, 'proc.num[')) continue;
+            if (!preg_match('/zabbix_server:\s*([a-z\- ]+?)\s*(?:#|"|\])/i', $key, $m)) continue;
+            $name = strtolower(trim($m[1]));
+            $val  = (int) round((float) ($row['value'] ?? 0));
+            if ($val > 0) $forksByName[$name] = $val;
+        }
+
         // Processes — every zabbix[process,*,avg,busy] item.
         $processes = [];
         foreach ($items as $key => $row) {
@@ -476,10 +496,11 @@ class ActionZbxStatusData extends ActionDataBase {
             $name  = $m[1];
             $busy  = (int) round((float) ($row['value'] ?? 0));
             $group = self::PROCESS_GROUP[$name] ?? 'Pollers';
+            $forks = $forksByName[strtolower($name)] ?? 0;
             $processes[] = [
                 'group' => $group,
                 'n'     => $name,
-                'forks' => 1,
+                'forks' => $forks,
                 'busy'  => max(0, min(100, $busy)),
                 'alert' => $busy > 80,
             ];

@@ -115,6 +115,33 @@ include the hostid you want. Same applies to `cameraDetail` / `serverDetail`
 (both go to a generic detail view today; pass `&id=…` to land on a specific
 camera or recording server once those views are wired to real data).
 
+## Zabbix Server Status — required templates
+
+The TCS Zabbix Server Status page (`zabbix.php?action=tcs.zbx.status.view`)
+reads from these stock Zabbix templates plus one TCS companion:
+
+| Template                                        | Source                                                  | Where it goes                              |
+| ----------------------------------------------- | ------------------------------------------------------- | ------------------------------------------ |
+| `Zabbix server health`                          | stock — included with Zabbix                            | host running `zabbix-server`               |
+| `Zabbix proxy health`                           | stock — included with Zabbix                            | every `zabbix-proxy` host                  |
+| `Zabbix agent active`                           | stock — included with Zabbix                            | server + proxy hosts                       |
+| `TCS Zabbix server forks by agent active`       | this repo: [`templates/tcs_zabbix_server_forks_by_agent.yaml`](templates/tcs_zabbix_server_forks_by_agent.yaml) | host running `zabbix-server` |
+
+The TCS template adds one `proc.num[,,,"zabbix_server: <type> #"]` item per
+Zabbix server process type (poller, history syncer, preprocessing worker,
+housekeeper, …). It depends on `Zabbix agent active` being present on the
+server host. The dashboard pairs the running fork count with the `%busy`
+value from the server-health template so each process row shows both.
+
+To install:
+
+1. **Configuration → Templates → Import** the YAML.
+2. Apply both `Zabbix agent active` and `TCS Zabbix server forks by agent
+   active` to the host that monitors `zabbix-server`.
+3. Wait one polling interval (5 min). The dashboard's "Internal Processes"
+   panel will then show fork counts next to each `%busy` bar; rows show
+   "— forks" until the agent items populate.
+
 ## Map your real item keys
 
 The PHP controller has placeholder item keys in `ActionDashboard::collectItems()`:

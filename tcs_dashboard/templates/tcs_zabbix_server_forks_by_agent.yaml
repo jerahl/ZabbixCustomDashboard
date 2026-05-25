@@ -1,0 +1,601 @@
+zabbix_export:
+  version: '7.4'
+  template_groups:
+    - uuid: 9b0776b3d5c3a2b53a02200e06845609
+      name: Templates/Applications
+  templates:
+    - uuid: 3bfcf5482feb3bfeb58475ffed253038
+      template: 'TCS Zabbix server forks by agent active'
+      name: 'TCS Zabbix server forks by agent active'
+      description: |
+        Companion to the stock "Zabbix server health" template that pulls the
+        running fork count for every Zabbix server process type via the active
+        Zabbix agent. Pair with "Zabbix agent active" on the host running
+        zabbix-server, then the TCS Server Status dashboard will show real fork
+        counts next to each process's %busy bar.
+
+        Items use proc.num[,,, <cmdline regex>] matching the standard
+        "zabbix_server: <type> #" cmdline pattern. Requires Zabbix agent
+        (active) on the server host with hostname matching the server's host
+        entry in Zabbix.
+      groups:
+        - name: Templates/Applications
+      items:
+        - uuid: 1418f564b4173febb612a5f2e5d062a1
+          name: 'Zabbix server forks · agent poller'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: agent poller #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "agent poller" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'agent poller'
+        - uuid: ce69aaee905d88d382f062f7eabeb003
+          name: 'Zabbix server forks · alert manager'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: alert manager #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "alert manager" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'alert manager'
+        - uuid: fbfb05357160087f415b5a5aae0b837c
+          name: 'Zabbix server forks · alert syncer'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: alert syncer #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "alert syncer" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'alert syncer'
+        - uuid: cff343251350cac85fcca94d45d95a99
+          name: 'Zabbix server forks · alerter'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: alerter #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "alerter" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'alerter'
+        - uuid: 34f408c2c459a997a19ebafa2aaabe11
+          name: 'Zabbix server forks · availability manager'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: availability manager #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "availability manager" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'availability manager'
+        - uuid: 8aea5f03551220a6bf2bc12ba78def3c
+          name: 'Zabbix server forks · browser poller'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: browser poller #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "browser poller" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'browser poller'
+        - uuid: d0c9b02a032f0754dcfe5e60117e0eba
+          name: 'Zabbix server forks · configuration syncer'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: configuration syncer #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "configuration syncer" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'configuration syncer'
+        - uuid: 220d7bcec06c36aa20aa53dba695316f
+          name: 'Zabbix server forks · configuration syncer worker'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: configuration syncer worker #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "configuration syncer worker" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'configuration syncer worker'
+        - uuid: 3b4166b9073cd7cd757600783497d2e7
+          name: 'Zabbix server forks · connector manager'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: connector manager #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "connector manager" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'connector manager'
+        - uuid: 9af80f55578ed281c5ea55a6d7a1e7fc
+          name: 'Zabbix server forks · connector worker'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: connector worker #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "connector worker" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'connector worker'
+        - uuid: 31fd430b7c030cf29d4adfd43b35e0b9
+          name: 'Zabbix server forks · data sender'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: data sender #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "data sender" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'data sender'
+        - uuid: 2b7f78ff4363f1cb8073657aef465526
+          name: 'Zabbix server forks · discovery manager'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: discovery manager #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "discovery manager" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'discovery manager'
+        - uuid: 78879a34ec919286c74647be4722d021
+          name: 'Zabbix server forks · discovery worker'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: discovery worker #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "discovery worker" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'discovery worker'
+        - uuid: 10cf90969d2a7bbd98524d7d88234164
+          name: 'Zabbix server forks · escalator'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: escalator #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "escalator" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'escalator'
+        - uuid: 728c2713d250e1739167e3fa5c8310b7
+          name: 'Zabbix server forks · history poller'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: history poller #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "history poller" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'history poller'
+        - uuid: bda5f88756765a9d993e1fc133bce13a
+          name: 'Zabbix server forks · history syncer'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: history syncer #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "history syncer" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'history syncer'
+        - uuid: fe20c3274e8bd188dbe9c6b5ddc120e8
+          name: 'Zabbix server forks · housekeeper'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: housekeeper #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "housekeeper" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'housekeeper'
+        - uuid: 5d0b885ca49356c6192921f013d601b8
+          name: 'Zabbix server forks · http agent poller'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: http agent poller #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "http agent poller" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'http agent poller'
+        - uuid: cf5a0db084c566fef4f3ed469b0b2281
+          name: 'Zabbix server forks · http poller'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: http poller #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "http poller" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'http poller'
+        - uuid: eefa812d83843e71362f22e3252cab47
+          name: 'Zabbix server forks · icmp pinger'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: icmp pinger #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "icmp pinger" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'icmp pinger'
+        - uuid: cec5397d2f7dd6ad4255f1c61c5ac56d
+          name: 'Zabbix server forks · internal poller'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: internal poller #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "internal poller" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'internal poller'
+        - uuid: c69bda5086770b482d4b381625603413
+          name: 'Zabbix server forks · ipmi manager'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: ipmi manager #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "ipmi manager" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'ipmi manager'
+        - uuid: 15ec16840b96f322828b030f0f5ad1fa
+          name: 'Zabbix server forks · ipmi poller'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: ipmi poller #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "ipmi poller" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'ipmi poller'
+        - uuid: 7587986c8bbd4ad505e8e3171e54cce9
+          name: 'Zabbix server forks · java poller'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: java poller #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "java poller" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'java poller'
+        - uuid: 5f92beef1aff3427b2946dd920ba28b7
+          name: 'Zabbix server forks · lld manager'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: lld manager #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "lld manager" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'lld manager'
+        - uuid: 2b3f84cdc4efd5caa99c11094f8d4e20
+          name: 'Zabbix server forks · lld worker'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: lld worker #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "lld worker" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'lld worker'
+        - uuid: c4437c3a73896ebba159f99f4caf6cb3
+          name: 'Zabbix server forks · odbc poller'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: odbc poller #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "odbc poller" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'odbc poller'
+        - uuid: 86d2bd689552c312470c4c9deca7f730
+          name: 'Zabbix server forks · poller'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: poller #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "poller" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'poller'
+        - uuid: ae7e19a41c36769d796cbf04488780d0
+          name: 'Zabbix server forks · preprocessing manager'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: preprocessing manager #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "preprocessing manager" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'preprocessing manager'
+        - uuid: f765c784872ec96c0cfc1a86ddd57d2d
+          name: 'Zabbix server forks · preprocessing worker'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: preprocessing worker #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "preprocessing worker" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'preprocessing worker'
+        - uuid: aaeecd4e66e7d55b405e5a41f92baf03
+          name: 'Zabbix server forks · proxy group manager'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: proxy group manager #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "proxy group manager" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'proxy group manager'
+        - uuid: d16ec7321256bee484a66eeecca4c735
+          name: 'Zabbix server forks · proxy poller'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: proxy poller #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "proxy poller" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'proxy poller'
+        - uuid: 138aafd2135a7494f7df3a1be2b157a5
+          name: 'Zabbix server forks · report manager'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: report manager #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "report manager" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'report manager'
+        - uuid: c8956ecdc09f5ebc16c05a5698383155
+          name: 'Zabbix server forks · report writer'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: report writer #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "report writer" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'report writer'
+        - uuid: a6f1b957f3476f038364dad8d8d41cd8
+          name: 'Zabbix server forks · self-monitoring'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: self-monitoring #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "self-monitoring" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'self-monitoring'
+        - uuid: 287dd15bf6ffc56d3c901773298d6a65
+          name: 'Zabbix server forks · service manager'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: service manager #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "service manager" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'service manager'
+        - uuid: 707dbe74c74405e56d9fdae96ff43864
+          name: 'Zabbix server forks · snmp poller'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: snmp poller #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "snmp poller" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'snmp poller'
+        - uuid: 96e9b559664f991d7a9f956c2db33601
+          name: 'Zabbix server forks · snmp trapper'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: snmp trapper #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "snmp trapper" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'snmp trapper'
+        - uuid: 2f9353f0e54c170332fdc81d9223a172
+          name: 'Zabbix server forks · task manager'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: task manager #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "task manager" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'task manager'
+        - uuid: 9719a33079562dc8eaa4fa9292aaf3b7
+          name: 'Zabbix server forks · timer'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: timer #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "timer" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'timer'
+        - uuid: 3b28931100763211738f77a5ee464c88
+          name: 'Zabbix server forks · trapper'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: trapper #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "trapper" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'trapper'
+        - uuid: 5a8cbd6237ac96b843eb9357d3eb0dde
+          name: 'Zabbix server forks · trigger housekeeper'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: trigger housekeeper #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "trigger housekeeper" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'trigger housekeeper'
+        - uuid: 40055bf64922403a1946c3df66f318e0
+          name: 'Zabbix server forks · unreachable poller'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: unreachable poller #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "unreachable poller" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'unreachable poller'
+        - uuid: 1e3a128e6e797becf81066cdc5363da8
+          name: 'Zabbix server forks · vmware collector'
+          type: ZABBIX_ACTIVE
+          key: 'proc.num[,,,"zabbix_server: vmware collector #"]'
+          delay: 5m
+          history: 7d
+          trends: 30d
+          description: 'Running fork count for the Zabbix server "vmware collector" process type.'
+          tags:
+            - tag: component
+              value: zabbix-server-forks
+            - tag: process
+              value: 'vmware collector'
+      tags:
+        - tag: class
+          value: application
+        - tag: target
+          value: zabbix-server
+
