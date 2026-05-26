@@ -36,6 +36,7 @@ class Module extends CModule {
         $submenu->add((new CMenuItem(_('TCS Switches')))->setAction('tcs.switches.view'));
         $submenu->add((new CMenuItem(_('TCS FortiGate')))->setAction('tcs.fortigate.view'));
         $submenu->add((new CMenuItem(_('TCS Servers')))->setAction('tcs.servers.view'));
+        $submenu->add((new CMenuItem(_('TCS Zabbix Status')))->setAction('tcs.zbx.status.view'));
         $submenu->add((new CMenuItem(_('TCS VoIP · 3CX')))->setAction('tcs.voip.view'));
         $submenu->add((new CMenuItem(_('TCS Cortex XDR')))->setAction('tcs.xdr.view'));
         $submenu->add((new CMenuItem(_('TCS Connected Devices')))->setAction('tcs.pf.clients.view'));

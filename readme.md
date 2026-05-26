@@ -12,6 +12,7 @@ The module lives in [tcs_dashboard/](tcs_dashboard) and is dropped into a Zabbix
 | AP Detail (Wireless)  | `zabbix.php?action=tcs.dashboard.view&hostid=N`  | Wired to live Zabbix data    |
 | Switch Port Status    | `zabbix.php?action=tcs.switches.view`            | Live fleet + snapshot data   |
 | Servers               | `zabbix.php?action=tcs.servers.view`             | Mock data (agent wiring)     |
+| Zabbix Server Status  | `zabbix.php?action=tcs.zbx.status.view`          | Live (server + proxy health) |
 | Problems              | `zabbix.php?action=tcs.problems.view`            | Live trigger data            |
 | Events                | `zabbix.php?action=tcs.events.view`              | Live event data              |
 | Surveillance NOC      | `zabbix.php?action=tcs.surveillance.view`        | Mock data (Milestone wiring) |

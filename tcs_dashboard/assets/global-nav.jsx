@@ -6,6 +6,7 @@
 //   "switches"      — Switches Dashboard
 //   "firewall"      — FortiGate Firewall Dashboard
 //   "zbx-servers"   — Servers Dashboard
+//   "zbx-status"    — Zabbix Server Status (server + proxy health)
 //   "voip"          — VoIP · 3CX Dashboard
 //   "xdr"           — Cortex XDR Dashboard
 //   "problems"      — Problems list
@@ -29,6 +30,7 @@ window.TCS_NAV = window.TCS_NAV || {
   xiqStatus:     "zabbix.php?action=tcs.xiq.view",
   switches:      "zabbix.php?action=tcs.switches.view",
   servers:       "zabbix.php?action=tcs.servers.view",
+  zbxStatus:     "zabbix.php?action=tcs.zbx.status.view",
   problems:      "zabbix.php?action=tcs.problems.view",
   events:        "zabbix.php?action=tcs.events.view",
   surveillance:  "zabbix.php?action=tcs.surveillance.view",
@@ -108,6 +110,7 @@ const GlobalSidebar = ({ active }) => {
         {item("switches",    NAV.switches,      "ethernet",  "Switches",      "312")}
         {item("firewall",    NAV.fortigate,     "firewall",  "Firewall",      "2")}
         {item("zbx-servers", NAV.servers,       "ap",        "Servers",       "17")}
+        {item("zbx-status",  NAV.zbxStatus,     "refresh",   "ZBX · Status")}
         {item("voip",        NAV.voip,          "phone",     "VoIP · 3CX",    "204")}
         {item("xdr",         NAV.xdr,           "crosshair", "Cortex XDR",    "23", "warn")}
         {item("problems",    NAV.problems,      "alert",     "Problems")}
