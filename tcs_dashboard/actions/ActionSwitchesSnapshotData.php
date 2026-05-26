@@ -97,7 +97,7 @@ class ActionSwitchesSnapshotData extends ActionDataBase {
         // ssheasy connect descriptor for the live CLI console. null when
         // {$SSHEASY.URL} isn't set or the host has no management IP.
         try {
-            $payload['ssh'] = $this->collectSshConnect($hostid, $payload['host']);
+            $payload['ssh'] = $this->collectSshConnect($hostid);
         } catch (\Throwable $e) {
             error_log('[tcs_dashboard] snapshot.data ssh: '.$e->getMessage());
             $payload['ssh'] = null;
@@ -314,18 +314,18 @@ class ActionSwitchesSnapshotData extends ActionDataBase {
      *                     password yields a manual-auth session instead.
      *   {$SSH.PORT}       SSH port (default 22)
      *
-     * The switch management IP comes from the host's main interface (the
-     * collectHost payload), not a macro.
+     * The SSH target IP is the address Zabbix actually reaches the switch on:
+     * its SNMP-type interface (the polling interface). Falls back to the main
+     * interface, then the first interface, if no SNMP interface exists.
      *
-     * @param array<string, mixed>|null $host
      * @return array{url:string, host:string, port:string, user:string}|null
      */
-    private function collectSshConnect(string $hostid, ?array $host): ?array {
+    private function collectSshConnect(string $hostid): ?array {
         $bag  = $this->macroChain($hostid, ['{$SSHEASY.URL}', '{$SSH.USER}', '{$SSH.PASSWORD}', '{$SSH.PORT}']);
         $base = rtrim((string) ($bag['{$SSHEASY.URL}'] ?? ''), '/');
         if ($base === '') return null;
 
-        $ip = (string) ($host['ip'] ?? '');
+        $ip = $this->resolveSwitchIp($hostid);
         if ($ip === '') return null;
 
         $port = (string) ($bag['{$SSH.PORT}'] ?? '');
@@ -344,6 +344,38 @@ class ActionSwitchesSnapshotData extends ActionDataBase {
             'port' => $port,
             'user' => $user
         ];
+    }
+
+    /**
+     * The address Zabbix uses to reach the switch. Prefers the SNMP-type
+     * interface (type 2 — the polling interface for these EXOS hosts), then
+     * any interface flagged main, then the first interface. Returns '' when
+     * the host has no usable interface.
+     */
+    private function resolveSwitchIp(string $hostid): string {
+        $hosts = API::Host()->get([
+            'output'           => ['hostid'],
+            'selectInterfaces' => ['ip', 'main', 'type'],
+            'hostids'          => [$hostid]
+        ]);
+        if (!$hosts) return '';
+        $interfaces = $hosts[0]['interfaces'] ?? [];
+
+        // INTERFACE_TYPE_SNMP = 2.
+        foreach ($interfaces as $iface) {
+            if ((int) ($iface['type'] ?? 0) === 2 && ($iface['ip'] ?? '') !== '') {
+                return (string) $iface['ip'];
+            }
+        }
+        foreach ($interfaces as $iface) {
+            if ((int) ($iface['main'] ?? 0) === 1 && ($iface['ip'] ?? '') !== '') {
+                return (string) $iface['ip'];
+            }
+        }
+        foreach ($interfaces as $iface) {
+            if (($iface['ip'] ?? '') !== '') return (string) $iface['ip'];
+        }
+        return '';
     }
 
     /**
