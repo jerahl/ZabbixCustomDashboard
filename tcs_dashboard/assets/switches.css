@@ -1235,9 +1235,21 @@
 .ctx-pill.tpl { background: rgba(95,168,211,0.10); color: var(--info); border: 1px solid rgba(95,168,211,0.3); }
 .ctx-pill.ovr { background: rgba(217,41,41,0.10); color: var(--zbx); border: 1px solid rgba(217,41,41,0.3); }
 
-.cli-pane { display: flex; flex-direction: column; min-height: 460px; }
+/* The pane crops the embedded ssheasy page down to just its terminal.
+   ssheasy has no embed mode and is cross-origin, so we can't hide its
+   chrome from here — but on auto-connect its JS hides the connection
+   panel + alerts, leaving only a thin copyright footer below the
+   terminal (the header collapses to ~0). We overscan the iframe height
+   and clip the bottom so that footer falls outside the visible area;
+   the terminal (which flex-grows to fill ssheasy's viewport) is all
+   that remains. 48px comfortably covers the single-line footer. */
+.cli-pane {
+  position: relative; overflow: hidden;
+  display: flex; flex-direction: column; min-height: 460px;
+}
 .cli-frame {
-  flex: 1; width: 100%; min-height: 460px;
+  position: absolute; top: 0; left: 0;
+  width: 100%; height: calc(100% + 48px);
   border: 0; background: #0a0d14;
 }
 .cli-empty, .macro-empty {
