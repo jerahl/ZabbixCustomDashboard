@@ -136,7 +136,14 @@
             // iDRAC-driven RAID / hardware indicator: ok | warn | err | unknown.
             raid:         s.raid || "unknown",
             hwStatus:     s.hwStatus || null,
+            // Milestone-reported service state (from the RS extras
+            // template's milestone.rs.state[<id>]). Null if not linked.
+            svcState:     s.svcState || null,
             chans:        num(s.chans),
+            hwDevices:    num(s.hwDevices),
+            storageTotalGB: num(s.storageTotalGB),
+            storageUsedGB:  num(s.storageUsedGB),
+            retentionMin:   num(s.retentionMin),
             recording:    num(s.recording),
             archiveLagH:  num(s.archiveLagH),
             agent:        str(s.agent, "—"),
