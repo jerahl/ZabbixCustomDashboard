@@ -49,6 +49,11 @@
         window.SWITCH_KPIS     = { cpu: null, mem: null, temp: null, poeWatts: null, poeBudget: null };
         window.ARC_MDF_HISTORY = { cpu: [], mem: [], temp: [], poeWatts: [], uplinkRx: [], uplinkTx: [] };
         window.ARC_MDF_LINKS   = [];
+        window.STACK_MEMBERS   = [];
+        window.EDP_NEIGHBORS   = [];
+        window.VLANS           = [];
+        window.POE_BUDGET      = null;
+        window.PORT_AUTH       = {};
         window.SWITCH_PROBLEMS = [];
         window.SWITCH_LOADING  = { ...window.SWITCH_LOADING, snapshot: true };
         window.dispatchEvent(new CustomEvent("tcs:switch-data", { detail: { section: "navigate" } }));
@@ -62,6 +67,23 @@
     window.SWITCH_PROBLEMS  = [];
     window.ARC_MDF_LINKS    = [];
     window.ARC_MDF_HISTORY  = { cpu: [], mem: [], temp: [], poeWatts: [], uplinkRx: [], uplinkTx: [] };
+    // Per-stack-member CPU/mem/temp from the snapshot. Empty until the
+    // per-member-health template patch is applied — see
+    // tcs_dashboard/notes/zabbix-template-patches/per-member-health.md.
+    window.STACK_MEMBERS    = [];
+    // EDP-discovered neighbors. Empty until the vlan-poe-topology
+    // template patch (extreme.edp.* items) is applied.
+    window.EDP_NEIGHBORS    = [];
+    // VLAN list with per-slot tagged/untagged port sets. Empty until
+    // the vlan-poe-topology template patch (extreme.vlan.* items) is
+    // applied.
+    window.VLANS            = [];
+    // PoE budget snapshot. null until the snapshot arrives; empty
+    // members/ports arrays once it does if the patch isn't applied.
+    window.POE_BUDGET       = null;
+    // Per-port auth sessions, keyed by "m.p". Empty until the port-auth
+    // patch is applied.
+    window.PORT_AUTH        = {};
     window.SWITCH_SITES     = [];
     window.SWITCH_INFO      = {};
     window.PF_ADMIN_BASE    = "";
@@ -104,6 +126,49 @@
         const t = Date.parse(String(lastSeen).replace(" ", "T"));
         if (!isFinite(t)) return 0;
         return Math.max(0, Math.round((Date.now() - t) / 60000));
+    };
+
+    // Static policy-profile lookup — RADIUS Filter-ID maps to a policy
+    // profile index, which on Extreme stacks corresponds to a named
+    // entry in the policy profile config. Static because the profile
+    // names rarely change and aren't pollable via SNMP.
+    window.POLICY_PROFILES = {
+        1:  "Failsafe",
+        2:  "Teachers",
+        3:  "Administrator",
+        4:  "isolation",
+        5:  "ITAdmins",
+        6:  "Voice",
+        7:  "Door Access",
+        8:  "CNP",
+        9:  "Guest Access",
+        10: "Permit Traffic",
+        11: "Computers",
+        12: "Projectors",
+        13: "Deny Access",
+        14: "WirelessAP",
+        15: "Unregistered",
+        16: "Printers",
+        17: "Registration",
+        18: "gaming",
+        19: "SecCameras",
+        20: "HVAC",
+        21: "Students"
+    };
+
+    // Find the untagged VLAN for a given member+port from the live
+    // VLAN snapshot. Returns {vid, name} or null when no VLAN claims
+    // the port as untagged (typical for trunk/uplink ports or ports
+    // not in the snapshot yet).
+    const _portUntaggedVlan = (member, portNum) => {
+        const vlans = Array.isArray(window.VLANS) ? window.VLANS : [];
+        for (const v of vlans) {
+            const slotPorts = (v.untaggedPorts || {})[member];
+            if (Array.isArray(slotPorts) && slotPorts.includes(portNum)) {
+                return { vid: v.vid, name: v.name };
+            }
+        }
+        return null;
     };
 
     window.makePortDetail = function (memberIdx, port) {
@@ -154,6 +219,22 @@
         const discIn  = tr ? (tr.discIn  || 0) : 0;
         const discOut = tr ? (tr.discOut || 0) : 0;
 
+        // Port's static untagged VLAN (from extremeVlanOpaqueTable).
+        const portVlan = _portUntaggedVlan(memberIdx, port.n);
+
+        // Auth sessions on this port from etsysMultiAuthSessionStationTable.
+        // Pre-sorted server-side so applied sessions come first.
+        const authSessions = (window.PORT_AUTH || {})[`${memberIdx}.${port.n}`] || [];
+        // Decorate each session with the human policy-profile name so the
+        // detail pane can render it directly. policyName is "" when the
+        // index isn't in POLICY_PROFILES.
+        const policyName = (idx) => (window.POLICY_PROFILES || {})[idx] || "";
+        const decoratedSessions = authSessions.map(s => ({
+            ...s,
+            policyName: s.policy != null ? policyName(s.policy) : ""
+        }));
+        const primaryAuth = decoratedSessions.find(s => s.applied) || decoratedSessions[0] || null;
+
         return {
             label:      `${memberIdx}:${port.n}`,
             state:      port.state,
@@ -179,7 +260,14 @@
                 : (macs.length > 1 ? macs.length - 1 : 0),
             macs,
             ifIndex:    (Number(memberIdx) || 1) * 1000 + (Number(port.n) || 0),
-            ageMin:     device ? pfAgeMin(device.lastSeen) : 0
+            ageMin:     device ? pfAgeMin(device.lastSeen) : 0,
+            // Static port VLAN: vid + name (e.g., "FACULTY"); null when the
+            // port isn't untagged on any VLAN (trunk port etc.).
+            portVlan,
+            // Auth sessions: primaryAuth is the active "applied" session;
+            // authSessions is the full list (typically 0..2 entries).
+            authSessions: decoratedSessions,
+            primaryAuth
         };
     };
 
@@ -306,17 +394,36 @@
     }
 
     function applySnapshot(snap) {
-        const members  = Array.isArray(snap.members)  ? snap.members  : [];
-        const ports    = Array.isArray(snap.ports)    ? snap.ports    : [];
-        const poe      = Array.isArray(snap.poe)      ? snap.poe      : [];
-        const fdb      = Array.isArray(snap.fdb)      ? snap.fdb      : [];
-        const uplinks  = Array.isArray(snap.uplinks)  ? snap.uplinks  : [];
-        const problems = Array.isArray(snap.problems) ? snap.problems : [];
+        const members  = Array.isArray(snap.members)      ? snap.members      : [];
+        const ports    = Array.isArray(snap.ports)        ? snap.ports        : [];
+        const poe      = Array.isArray(snap.poe)          ? snap.poe          : [];
+        const fdb      = Array.isArray(snap.fdb)          ? snap.fdb          : [];
+        const uplinks  = Array.isArray(snap.uplinks)      ? snap.uplinks      : [];
+        const problems = Array.isArray(snap.problems)     ? snap.problems     : [];
+        const edp      = Array.isArray(snap.edpNeighbors) ? snap.edpNeighbors : [];
+        const vlans    = Array.isArray(snap.vlans)        ? snap.vlans        : [];
+        const poeBudget = (snap.poeBudget && typeof snap.poeBudget === "object") ? snap.poeBudget : null;
+        const portAuth  = (snap.portAuth  && typeof snap.portAuth  === "object") ? snap.portAuth  : {};
         const kpis     = (snap.kpis    && typeof snap.kpis    === "object") ? snap.kpis    : {};
         const history  = (snap.history && typeof snap.history === "object") ? snap.history : {};
         const traffic  = (snap.traffic && typeof snap.traffic === "object") ? snap.traffic : {};
         const speeds   = (snap.speeds  && typeof snap.speeds  === "object") ? snap.speeds  : {};
         const info     = (snap.info    && typeof snap.info    === "object") ? snap.info    : {};
+
+        // EDP neighbors — populated when the vlan-poe-topology template
+        // patch (extreme.edp.* items) is rolled out. Empty array until
+        // then; the Topology tab shows a loading / no-data state.
+        window.EDP_NEIGHBORS = edp;
+        // VLANs + per-slot tagged/untagged port lists from
+        // extreme.vlan.* items (vlan-poe-topology patch).
+        window.VLANS = vlans;
+        // PoE budget — stack totals, per-slot draw/budget, and per-port
+        // wattages (sorted desc) ready to join with PF data for the
+        // top-consumers table.
+        window.POE_BUDGET = poeBudget;
+        // Per-port authenticated sessions from etsysMultiAuthSessionStationTable
+        // (port-auth template patch). Keyed by "<member>.<port>".
+        window.PORT_AUTH = portAuth;
 
         // Stash speeds for buildStack to consume.
         window._tcsSpeedByKey = speeds;
@@ -333,6 +440,24 @@
 
         const stack = buildStack(members, ports, poe);
         if (stack) window.ARC_MDF_STACK = stack;
+
+        // Per-stack-member CPU/mem/temp + inventory. Members come from the
+        // snapshot with null fields until the per-member-health template
+        // patch is applied; the Stack Health tab falls back to demo data
+        // when nothing useful has arrived yet.
+        window.STACK_MEMBERS = members.map(m => ({
+            idx:     m.index,
+            role:    m.role,
+            cpu:     typeof m.cpu1m === "number" ? m.cpu1m : null,
+            cpu5:    typeof m.cpu5m === "number" ? m.cpu5m : null,
+            mem:     typeof m.mem   === "number" ? m.mem   : null,
+            temp:    typeof m.temp  === "number" ? m.temp  : null,
+            serial:  (typeof m.serial  === "string" && m.serial)  ? m.serial  : null,
+            version: (typeof m.version === "string" && m.version) ? m.version : null,
+            uptime:  typeof m.uptime === "number" ? m.uptime : null,
+            fans:    Array.isArray(m.fans) ? m.fans : [],
+            psus:    Array.isArray(m.psus) ? m.psus : []
+        }));
 
         const kpiVal = (k) => (kpis[k] && typeof kpis[k].lastvalue === "number") ? kpis[k].lastvalue : null;
         window.SWITCH_KPIS = {

@@ -134,6 +134,9 @@ const SwitchesApp = () => {
             </div>
             <div className="host-meta">
               <span className="pill"><span className="dot" style={{ background: "var(--ok)" }} /> All members up</span>
+              {host.ip && (
+                <span className="pill"><span className="lbl">IP</span> <span className="v">{host.ip}</span></span>
+              )}
               <span className="pill"><span className="lbl">Stack</span> <span className="v">{stackMemberCount} member{stackMemberCount === 1 ? "" : "s"}</span></span>
               <span className="pill"><span className="lbl">Ports</span> <span className="v">{host.up} up · {host.down} down · {host.ports} total</span></span>
               <span className="pill"><span className="lbl">PoE</span> <span className="v">{host.poe} drawing</span></span>
@@ -176,7 +179,6 @@ const SwitchesApp = () => {
           )}
           {activeTab === "topo" && (
             <React.Fragment>
-              <DemoBanner name="Topology" />
               <div className="switch-layout-2col">
                 <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
                 <TabTopology host={host} />
@@ -185,7 +187,6 @@ const SwitchesApp = () => {
           )}
           {activeTab === "health" && (
             <React.Fragment>
-              <DemoBanner name="Stack Health" />
               <div className="switch-layout-2col">
                 <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
                 <TabStackHealth />
@@ -194,16 +195,14 @@ const SwitchesApp = () => {
           )}
           {activeTab === "vlan" && (
             <React.Fragment>
-              <DemoBanner name="VLAN / EAPS" />
               <div className="switch-layout-2col">
                 <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
-                <TabVlanEaps />
+                <TabVlan />
               </div>
             </React.Fragment>
           )}
           {activeTab === "poe" && (
             <React.Fragment>
-              <DemoBanner name="PoE Budget" />
               <div className="switch-layout-2col">
                 <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
                 <TabPoe />
