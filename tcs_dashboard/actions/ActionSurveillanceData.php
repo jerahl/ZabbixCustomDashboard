@@ -161,7 +161,6 @@ class ActionSurveillanceData extends ActionDataBase {
             'output'           => ['hostid', 'host', 'name', 'status', 'maintenance_status'],
             'selectInterfaces' => ['ip', 'main', 'available'],
             'selectTags'       => 'extend',
-            'selectHostGroups' => ['groupid', 'name'],
             'templateids'      => array_column($tpls, 'templateid'),
             'monitored_hosts'  => true,
             'preservekeys'     => true
@@ -374,7 +373,7 @@ class ActionSurveillanceData extends ActionDataBase {
             if (!empty($bundle['grp'])) { $any_groups = true; break; }
         }
         if ($any_groups) {
-            return $this->buildSitesByGroup($site_hosts, $site_items, $cam_hosts, $problems_by_host);
+            return $this->buildSitesByGroup($site_hosts, $site_items, $problems_by_host);
         }
 
         // Fallback: one row per Zabbix site host (the original behaviour).
@@ -432,34 +431,7 @@ class ActionSurveillanceData extends ActionDataBase {
      * the same group GUID (unusual — would mean two separate XProtect
      * sites pointing at the same group) the rows are summed.
      */
-    private function buildSitesByGroup(array $site_hosts, array $site_items, array $cam_hosts, array $problems_by_host): array {
-        // cam_id (Milestone camera GUID) → list of Zabbix host-group names for
-        // the matching per-camera host. Used as a fallback label source when
-        // milestone.grp.name / .path arrive blank from the agent — operators
-        // typically bucket cameras under "Surveillance/Bryant HS"-style host
-        // groups, so the most common one across a Milestone group's cameras
-        // is almost always the site name.
-        $cam_groups_by_id = [];
-        foreach ($cam_hosts as $ch) {
-            $cam_id = '';
-            foreach ($ch['tags'] ?? [] as $t) {
-                if (($t['tag'] ?? '') === 'cam_id' && ($t['value'] ?? '') !== '') {
-                    $cam_id = $t['value']; break;
-                }
-            }
-            if ($cam_id === '') continue;
-            $names = [];
-            foreach ($ch['hostgroups'] ?? [] as $g) {
-                $n = trim((string) ($g['name'] ?? ''));
-                // Skip the auto-attached discovery / template wrapper groups
-                // — they're the same on every camera and would always win.
-                if ($n === '' || stripos($n, 'Templates') === 0) continue;
-                if (stripos($n, 'Discovered hosts') !== false) continue;
-                $names[] = $n;
-            }
-            if ($names) $cam_groups_by_id[$cam_id] = $names;
-        }
-
+    private function buildSitesByGroup(array $site_hosts, array $site_items, array $problems_by_host): array {
         // Camera-status lookup keyed by camera GUID (folds enabled / status
         // across every host so a group with cameras spread over multiple
         // hosts still gets the right rollup).
@@ -500,45 +472,19 @@ class ActionSurveillanceData extends ActionDataBase {
             foreach ($bundle['grp'] ?? [] as $grp_id => $grp) {
                 $key = (string) $grp_id;
                 if (!isset($sites[$key])) {
-                    // Label hierarchy:
-                    //   milestone.grp.name[<id>] / displayName  direct items
-                    //   raw-blob path tail (/Root/Bryant HS → Bryant HS)
-                    //   most-common Zabbix host group across this Milestone
-                    //     group's cameras (operators bucket cameras into
-                    //     "Surveillance/Bryant HS"-style groups)
-                    //   group GUID                                 (last resort)
-                    // ?? would let an empty-string "name" win over "path"
-                    // so we explicitly skip blanks.
-                    $name = '';
-                    foreach (['name', 'displayName', 'path', 'displayPath'] as $field) {
-                        $v = trim((string) ($grp[$field] ?? ''));
-                        if ($v !== '') { $name = $v; break; }
-                    }
-                    if ($name !== '' && str_contains($name, '/')) {
-                        $tail = trim((string) strrchr($name, '/'), '/');
-                        if ($tail !== '') $name = $tail;
-                    }
+                    // Label source: milestone.grp.name[<id>] is the canonical
+                    // Zabbix item — when present it always wins. Path tail
+                    // from the raw blob ("/Root/Bryant HS" → "Bryant HS") is
+                    // a secondary fallback in case the name item ever fails
+                    // to populate; GUID is the absolute last resort.
+                    $name = trim((string) ($grp['name'] ?? ''));
                     if ($name === '') {
-                        // Tally Zabbix host groups across the cameras in this
-                        // Milestone group; the most common one wins.
-                        $cam_ids_for_name = is_array($grp['cameraIds'] ?? null) ? $grp['cameraIds'] : [];
-                        $hg_tally = [];
-                        foreach ($cam_ids_for_name as $cid) {
-                            foreach ($cam_groups_by_id[(string) $cid] ?? [] as $g) {
-                                $hg_tally[$g] = ($hg_tally[$g] ?? 0) + 1;
-                            }
-                        }
-                        if ($hg_tally) {
-                            arsort($hg_tally);
-                            $hg_name = (string) array_key_first($hg_tally);
-                            // Trim a leading "Surveillance/" or similar
-                            // organising prefix so the row reads "Bryant HS"
-                            // rather than "Surveillance/Bryant HS".
-                            if (str_contains($hg_name, '/')) {
-                                $tail = trim((string) strrchr($hg_name, '/'), '/');
-                                if ($tail !== '') $hg_name = $tail;
-                            }
-                            $name = $hg_name;
+                        $p = trim((string) ($grp['path'] ?? ''));
+                        if ($p !== '' && str_contains($p, '/')) {
+                            $tail = trim((string) strrchr($p, '/'), '/');
+                            if ($tail !== '') $name = $tail;
+                        } elseif ($p !== '') {
+                            $name = $p;
                         }
                     }
                     if ($name === '') $name = (string) $grp_id;
