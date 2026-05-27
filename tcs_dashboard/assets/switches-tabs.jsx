@@ -22,48 +22,6 @@ function _spark(seed, base, jitter, len = 24) {
   });
 }
 
-window.TAB_MACROS = [
-  { k: "{$AGENT.NODATA.TIMEOUT}",       v: "30m",                ctx: "Template Net Extreme EXOS", sys: false },
-  { k: "{$CPU.UTIL.MAX}",               v: "85",                 ctx: "Template Net Extreme EXOS", sys: false },
-  { k: "{$MEM.UTIL.MAX}",               v: "90",                 ctx: "Template Net Extreme EXOS", sys: false },
-  { k: "{$TEMP.MAX.CRIT}",              v: "78",                 ctx: "Template Net Extreme EXOS", sys: false },
-  { k: "{$TEMP.MAX.WARN}",              v: "72",                 ctx: "ARC-MDF (override)",        sys: false },
-  { k: "{$IF.ERRORS.WARN}",             v: "2",                  ctx: "Template Net Extreme EXOS", sys: false },
-  { k: "{$IF.UTIL.MAX}",                v: "85",                 ctx: "Template Net Extreme EXOS", sys: false },
-  { k: "{$POE.BUDGET.WARN}",            v: "80",                 ctx: "Template Net Extreme EXOS", sys: false },
-  { k: "{$SNMP.COMMUNITY}",             v: "********",           ctx: "Template Net Generic SNMPv2", sys: true },
-  { k: "{$SNMP.TIMEOUT}",               v: "5s",                 ctx: "Template Net Generic SNMPv2", sys: true },
-  { k: "{$LLDP.NEIGHBOR.CHECK}",        v: "1",                  ctx: "Template Net Extreme EXOS", sys: false },
-];
-
-window.TAB_CLI = `* (Slot-1) ARC-MDF.1 # show stacking
-Stack Topology is a Ring
-Active Topology is a Ring
-Node MAC Address    Slot  Stack State  Role     Flags
-------------------  ----  -----------  -------  -------
-*84:f1:b5:c2:00:a4   1     Active       Backup   --K--
- 84:f1:b5:c2:01:08   2     Active       Master   --K--
- 84:f1:b5:c2:02:1c   3     Active       Standby  --K--
- 84:f1:b5:c2:04:2e   4     Active       Backup   --K--
-* - Indicates this node
-Flags:  (C) Candidate for this node's backup, (E) Master fail-over enabled,
-        (K) Stacking license is enabled
-
-* (Slot-1) ARC-MDF.2 # show power budget
-PSU-1 (slot 1):  240 W   ok
-PSU-2 (slot 1):  238 W   ok
-PSU-1 (slot 2):  244 W   ok
-PSU-2 (slot 2):  240 W   ok
-PSU-1 (slot 3):  236 W   ok
-PSU-2 (slot 3):    0 W   NOT PRESENT          << triggered alert
-PSU-1 (slot 4):  232 W   ok
-PSU-2 (slot 4):  230 W   ok
-                 -------
-Total budget:    720 W
-Total drawn:     428 W   (59.4 %)
-
-* (Slot-1) ARC-MDF.3 # _`;
-
 window.TAB_TRIGGERS = [
   { sev: "disaster", expr: "last(/ARC-MDF/system.uptime)<10m and change()<0",     name: "{HOST.NAME}: device just restarted",   status: "enabled", deps: 3, fires24h: 0, history: _spark(11, 0, 0) },
   { sev: "high",     expr: "min(/ARC-MDF/icmpping[],5m)=0",                       name: "{HOST.NAME}: ICMP unreachable for 5m", status: "enabled", deps: 7, fires24h: 0, history: _spark(13, 0, 1) },
@@ -741,69 +699,39 @@ const TabPoe = () => {
 };
 
 // ───────────────────────────────────────────────────────────────────
-// 5. MACROS · CLI
+// 5. CLI (admin-only — server withholds window.SWITCH_SSH from non-admins)
 // ───────────────────────────────────────────────────────────────────
-const TabMacros = ({ host }) => {
-  const M = window.TAB_MACROS;
+const TabCli = ({ host }) => {
+  const ssh = window.SWITCH_SSH || null;
   return (
     <div className="tab-pane">
-      <div className="macro-layout">
-        <div className="card">
-          <div className="card-h">
-            <h3>User macros</h3>
-            <SourceBadge src="zbx" />
-            <div className="h-spacer" />
-            <span className="h-meta">{M.length} resolved · inherited from template + host override</span>
-            <span className="h-link">+ Add macro</span>
-          </div>
-          <table className="macro-tbl">
-            <thead>
-              <tr>
-                <th>Macro</th>
-                <th style={{width: 100}}>Value</th>
-                <th>Context (effective)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {M.map((m, i) => (
-                <tr key={i} className={m.sys ? "sys" : ""}>
-                  <td className="mono mac-k">{m.k}</td>
-                  <td className="mono mac-v">{m.v}</td>
-                  <td>
-                    <span className={"ctx-pill " + (m.ctx.includes("override") ? "ovr" : "tpl")}>
-                      {m.ctx.includes("override") ? "host" : "template"}
-                    </span>
-                    {m.ctx}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <div className="card">
+        <div className="card-h">
+          <h3>CLI · ssh {host.id}</h3>
+          <SourceBadge src="ext" />
+          <div className="h-spacer" />
+          {ssh ? (
+            <>
+              <span className="h-meta">{ssh.user ? ssh.user + "@" : ""}{ssh.host}:{ssh.port} · ssheasy</span>
+              <span className="h-link" onClick={() => window.open(ssh.url, "_blank", "noopener")}>Open in tab</span>
+            </>
+          ) : (
+            <span className="h-meta">SSH not configured</span>
+          )}
         </div>
-
-        <div className="card">
-          <div className="card-h">
-            <h3>CLI capture · ssh {host.id}</h3>
-            <SourceBadge src="ext" />
-            <div className="h-spacer" />
-            <span className="h-meta">read-only session · expires 4m 12s</span>
-            <span className="h-link">Reconnect</span>
-          </div>
-          <div className="cli-pane">
-            <div className="cli-tabs">
-              <span className="ct active">show stacking</span>
-              <span className="ct">show ports info</span>
-              <span className="ct">show power budget</span>
-              <span className="ct">show fdb</span>
-              <span className="ct">show log</span>
+        <div className="cli-pane">
+          {ssh ? (
+            <iframe
+              className="cli-frame"
+              src={ssh.url}
+              title={"ssh " + ssh.host}
+              allow="clipboard-read; clipboard-write"
+            />
+          ) : (
+            <div className="cli-empty">
+              Set <code>{"{$SSHEASY.URL}"}</code> (and a host management IP) to enable the live SSH console.
             </div>
-            <pre className="cli-term">{window.TAB_CLI}<span className="cur" /></pre>
-            <div className="cli-input">
-              <span className="prompt">* (Slot-1) ARC-MDF.4 #</span>
-              <input placeholder="run command…" />
-              <span className="hint">read-only · Ctrl-C to abort</span>
-            </div>
-          </div>
+          )}
         </div>
       </div>
     </div>
@@ -974,7 +902,7 @@ window.SWITCH_TABS = [
   { id: "health",   label: "Stack Health",  badge: null },
   { id: "vlan",     label: "VLAN",          badge: null },
   { id: "poe",      label: "PoE Budget",    badge: null },
-  { id: "macros",   label: "Macros · CLI",  badge: null },
+  { id: "cli",      label: "CLI",           badge: null, admin: true },
   { id: "triggers", label: "Triggers",      badge: { v: 3, kind: "warn" } },
   { id: "backups",  label: "Config Backups",badge: null },
 ];
@@ -983,6 +911,6 @@ window.TabTopology    = TabTopology;
 window.TabStackHealth = TabStackHealth;
 window.TabVlan        = TabVlan;
 window.TabPoe         = TabPoe;
-window.TabMacros      = TabMacros;
+window.TabCli         = TabCli;
 window.TabTriggers    = TabTriggers;
 window.TabBackups     = TabBackups;

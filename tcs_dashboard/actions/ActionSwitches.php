@@ -58,6 +58,11 @@ class ActionSwitches extends ActionBase {
             'uplinks'  => [],
             'problems' => [],
             'fleet'    => [],
+            // Admin-only features (the live CLI tab exposes SSH credentials)
+            // key off this. The server is the real gate — the snapshot
+            // endpoint withholds the ssh descriptor from non-admins; this
+            // flag just lets the UI hide the tab to match.
+            'isAdmin'  => $this->getUserType() >= USER_TYPE_ZABBIX_ADMIN,
             'async'    => true
         ];
 

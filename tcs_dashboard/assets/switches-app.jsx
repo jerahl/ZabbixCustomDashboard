@@ -19,6 +19,14 @@ const SwitchesApp = () => {
   const initialId = liveHost ? (liveHost.host || liveHost.visible_name || t.selectedSwitch) : t.selectedSwitch;
   const [activeId, setActiveId] = useStateSWA(initialId);
   const [activeTab, setActiveTab] = useStateSWA(t.activeTab || "ports");
+  // Admin-only tabs (the live CLI exposes SSH credentials). The server is the
+  // real gate — the snapshot endpoint withholds the ssh descriptor from
+  // non-admins — but we also hide the tab so it never shows for them.
+  const isAdmin = !!(window.SWITCH_BOOT && window.SWITCH_BOOT.isAdmin);
+  const visibleTabs = (window.SWITCH_TABS || []).filter(tab => !tab.admin || isAdmin);
+  // Coerce the active tab to a visible one (handles a non-admin landing on a
+  // sticky CLI selection, or a stale saved id).
+  const effectiveTab = visibleTabs.some(tab => tab.id === activeTab) ? activeTab : "ports";
   // Selected port: starts null and gets seeded once the snapshot arrives,
   // since on first paint window.ARC_MDF_STACK is just the empty-member stub.
   const [selectedPort, setSelectedPort] = useStateSWA(null);
@@ -151,10 +159,10 @@ const SwitchesApp = () => {
         </div>
 
         <div className="tabs">
-          {window.SWITCH_TABS.map(tab => (
+          {visibleTabs.map(tab => (
             <div
               key={tab.id}
-              className={"tab" + (activeTab === tab.id ? " active" : "")}
+              className={"tab" + (effectiveTab === tab.id ? " active" : "")}
               onClick={() => { setActiveTab(tab.id); setTweak("activeTab", tab.id); }}
             >
               {tab.label}
@@ -163,8 +171,8 @@ const SwitchesApp = () => {
           ))}
         </div>
 
-        <div className="body" data-screen-label={`Switches Dashboard · ${activeTab}`}>
-          {activeTab === "ports" && (
+        <div className="body" data-screen-label={`Switches Dashboard · ${effectiveTab}`}>
+          {effectiveTab === "ports" && (
             <React.Fragment>
               <StackKPIs host={host} />
               <div className="switch-layout">
@@ -177,7 +185,7 @@ const SwitchesApp = () => {
               </div>
             </React.Fragment>
           )}
-          {activeTab === "topo" && (
+          {effectiveTab === "topo" && (
             <React.Fragment>
               <div className="switch-layout-2col">
                 <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
@@ -185,7 +193,7 @@ const SwitchesApp = () => {
               </div>
             </React.Fragment>
           )}
-          {activeTab === "health" && (
+          {effectiveTab === "health" && (
             <React.Fragment>
               <div className="switch-layout-2col">
                 <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
@@ -193,7 +201,7 @@ const SwitchesApp = () => {
               </div>
             </React.Fragment>
           )}
-          {activeTab === "vlan" && (
+          {effectiveTab === "vlan" && (
             <React.Fragment>
               <div className="switch-layout-2col">
                 <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
@@ -201,7 +209,7 @@ const SwitchesApp = () => {
               </div>
             </React.Fragment>
           )}
-          {activeTab === "poe" && (
+          {effectiveTab === "poe" && (
             <React.Fragment>
               <div className="switch-layout-2col">
                 <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
@@ -209,16 +217,15 @@ const SwitchesApp = () => {
               </div>
             </React.Fragment>
           )}
-          {activeTab === "macros" && (
+          {effectiveTab === "cli" && isAdmin && (
             <React.Fragment>
-              <DemoBanner name="Macros · CLI" />
               <div className="switch-layout-2col">
                 <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
-                <TabMacros host={host} />
+                <TabCli host={host} />
               </div>
             </React.Fragment>
           )}
-          {activeTab === "triggers" && (
+          {effectiveTab === "triggers" && (
             <React.Fragment>
               <DemoBanner name="Triggers" />
               <div className="switch-layout-2col">
@@ -227,7 +234,7 @@ const SwitchesApp = () => {
               </div>
             </React.Fragment>
           )}
-          {activeTab === "backups" && (
+          {effectiveTab === "backups" && (
             <React.Fragment>
               <DemoBanner name="Config Backups" />
               <div className="switch-layout-2col">

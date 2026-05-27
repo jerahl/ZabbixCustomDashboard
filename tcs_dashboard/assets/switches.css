@@ -1197,100 +1197,25 @@
 .poe-tbl .util-bar { width: 100px; }
 
 /* ═══════════════════════════════════════════════════════════════
-   5. MACROS · CLI
+   5. CLI
    ═══════════════════════════════════════════════════════════════ */
-.macro-layout {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-  align-items: start;
-}
-@media (max-width: 1280px) { .macro-layout { grid-template-columns: 1fr; } }
-
-.macro-tbl { width: 100%; border-collapse: collapse; font-size: 11.5px; }
-.macro-tbl th {
-  text-align: left; padding: 8px 12px;
-  font-size: 9.5px; letter-spacing: 0.6px; text-transform: uppercase;
-  color: var(--muted); font-weight: 500;
-  border-bottom: 1px solid var(--line);
-}
-.macro-tbl td {
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--line);
-  color: var(--fg-2);
-}
-.macro-tbl tr:last-child td { border-bottom: 0; }
-.macro-tbl tr:hover td { background: var(--bg-2); }
-.macro-tbl tr.sys td { opacity: 0.7; }
-.macro-tbl .mono { font-family: var(--mono); }
-.macro-tbl .mac-k { color: var(--pf); }
-.macro-tbl .mac-v { color: var(--fg); font-weight: 500; }
-.ctx-pill {
-  display: inline-block;
-  font-family: var(--mono); font-size: 9px;
-  padding: 1px 5px; border-radius: 3px;
-  letter-spacing: 0.4px; margin-right: 8px;
-  vertical-align: middle;
-}
-.ctx-pill.tpl { background: rgba(95,168,211,0.10); color: var(--info); border: 1px solid rgba(95,168,211,0.3); }
-.ctx-pill.ovr { background: rgba(217,41,41,0.10); color: var(--zbx); border: 1px solid rgba(217,41,41,0.3); }
-
+/* The iframe targets ssheasy's /terminal?embed=1 page, which renders the
+   xterm terminal only (no navbar / form / footer), so it fills the pane
+   directly — no cropping needed. */
 .cli-pane { display: flex; flex-direction: column; min-height: 460px; }
-.cli-tabs {
-  display: flex; gap: 1px;
-  background: var(--bg-2);
-  border-bottom: 1px solid var(--line);
-  padding: 0 8px;
-  overflow-x: auto;
+.cli-frame {
+  flex: 1; width: 100%; min-height: 460px;
+  border: 0; background: #0a0d14;
 }
-.cli-tabs .ct {
-  padding: 7px 12px;
-  font-family: var(--mono); font-size: 10.5px;
-  color: var(--muted); cursor: pointer;
-  border-top: 2px solid transparent;
-  white-space: nowrap;
+.cli-empty {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  padding: 40px 24px; text-align: center;
+  color: var(--muted); font-size: 12px; line-height: 1.6;
 }
-.cli-tabs .ct:hover { color: var(--fg-2); }
-.cli-tabs .ct.active {
-  color: var(--ok); background: #0a0d14;
-  border-top-color: var(--ok);
+.cli-empty code {
+  font-family: var(--mono); color: var(--pf);
+  background: var(--bg-2); padding: 1px 5px; border-radius: 3px;
 }
-
-.cli-term {
-  margin: 0; flex: 1;
-  background: #0a0d14;
-  padding: 14px 16px;
-  font-family: var(--mono); font-size: 11px;
-  color: #c8d4e8;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  overflow-x: auto;
-}
-.cli-term .cur {
-  display: inline-block;
-  width: 7px; height: 12px;
-  background: var(--ok);
-  vertical-align: middle;
-  margin-left: 2px;
-  animation: cur-blink 1s steps(2) infinite;
-}
-@keyframes cur-blink { 50% { opacity: 0; } }
-
-.cli-input {
-  display: flex; align-items: center; gap: 10px;
-  background: #0a0d14;
-  padding: 8px 16px;
-  border-top: 1px solid var(--line);
-  font-family: var(--mono); font-size: 11px;
-}
-.cli-input .prompt { color: var(--ok); }
-.cli-input input {
-  flex: 1; background: transparent; border: 0; outline: 0;
-  font: inherit; color: var(--fg);
-}
-.cli-input input::placeholder { color: var(--muted-2); }
-.cli-input .hint { color: var(--muted); font-size: 10px; }
-
 /* ═══════════════════════════════════════════════════════════════
    6. TRIGGERS
    ═══════════════════════════════════════════════════════════════ */

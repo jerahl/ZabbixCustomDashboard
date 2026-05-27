@@ -55,6 +55,7 @@
         window.POE_BUDGET      = null;
         window.PORT_AUTH       = {};
         window.SWITCH_PROBLEMS = [];
+        window.SWITCH_SSH      = null;
         window.SWITCH_LOADING  = { ...window.SWITCH_LOADING, snapshot: true };
         window.dispatchEvent(new CustomEvent("tcs:switch-data", { detail: { section: "navigate" } }));
         fetchSnapshot(id);
@@ -87,6 +88,10 @@
     window.SWITCH_SITES     = [];
     window.SWITCH_INFO      = {};
     window.PF_ADMIN_BASE    = "";
+    // CLI tab. SWITCH_SSH stays null (admin-only; the snapshot withholds it
+    // from non-admins, and the CLI pane shows its "not configured" empty
+    // state) until the snapshot lands.
+    window.SWITCH_SSH       = null;
     // Single empty stack member keeps the port grid renderable until the
     // snapshot arrives (the grid expects at least one member to map over).
     window.ARC_MDF_STACK    = [{ idx: 1, ports: [], sfp: [], upCount: 0, downCount: 0, poeCount: 0 }];
@@ -480,6 +485,9 @@
 
         window.ARC_MDF_LINKS   = uplinks;
         window.SWITCH_PROBLEMS = problems;
+
+        // CLI tab: ssheasy connect descriptor (admin-only; null otherwise).
+        window.SWITCH_SSH  = (snap.ssh && typeof snap.ssh === "object") ? snap.ssh : null;
 
         // Repopulate the FDB bag — makePortDetail (defined once at IIFE time)
         // reads from this on demand so the next click on a port picks up the

@@ -84,6 +84,19 @@ class ActionSwitchesSnapshotData extends ActionDataBase {
         // macro rather than deriving from {$PF.URL}.
         $payload['pfBase'] = $this->resolvePfAdminUrl($hostid);
 
+        // ssheasy connect descriptor for the live CLI console. The descriptor
+        // embeds SSH credentials, so it is ADMIN-ONLY — never emit it to
+        // regular users. null when the user isn't an admin, {$SSHEASY.URL}
+        // isn't set, or the host has no management IP.
+        $payload['ssh'] = null;
+        if ($this->getUserType() >= USER_TYPE_ZABBIX_ADMIN) {
+            try {
+                $payload['ssh'] = $this->collectSshConnect($hostid);
+            } catch (\Throwable $e) {
+                error_log('[tcs_dashboard] snapshot.data ssh: '.$e->getMessage());
+            }
+        }
+
         $this->setResponse(new CControllerResponseData([
             'main_block' => json_encode($payload, JSON_UNESCAPED_SLASHES)
         ]));
@@ -202,6 +215,87 @@ class ActionSwitchesSnapshotData extends ActionDataBase {
     private function resolvePfAdminUrl(string $hostid): string {
         $bag = $this->macroChain($hostid, ['{$PF.ADMIN_URL}']);
         return rtrim((string) ($bag['{$PF.ADMIN_URL}'] ?? ''), '/');
+    }
+
+    /**
+     * Build the ssheasy auto-connect descriptor for the live CLI console.
+     * Targets ssheasy's dedicated /terminal page (terminal-only: just
+     * xterm.js + the WASM SSH client, no navbar / connection form / file
+     * browser), passing embed=1 so the page renders chrome-free for iframing.
+     * Host/port/user/password are prefilled from macros so the terminal opens
+     * straight into the switch.
+     *
+     * Macros (resolved host → template → global):
+     *   {$SSHEASY.URL}    base URL of the ssheasy server (required)
+     *   {$SSH.USER}       SSH username
+     *   {$SSH.PASSWORD}   SSH password — must be a TEXT macro; Secret/Vault
+     *                     macros are never returned by the API, so a secret
+     *                     password yields an in-terminal password prompt.
+     *   {$SSH.PORT}       SSH port (default 22)
+     *
+     * The SSH target IP is the address Zabbix actually reaches the switch on:
+     * its SNMP-type interface (the polling interface). Falls back to the main
+     * interface, then the first interface, if no SNMP interface exists.
+     *
+     * @return array{url:string, host:string, port:string, user:string}|null
+     */
+    private function collectSshConnect(string $hostid): ?array {
+        $bag  = $this->macroChain($hostid, ['{$SSHEASY.URL}', '{$SSH.USER}', '{$SSH.PASSWORD}', '{$SSH.PORT}']);
+        $base = rtrim((string) ($bag['{$SSHEASY.URL}'] ?? ''), '/');
+        if ($base === '') return null;
+
+        $ip = $this->resolveSwitchIp($hostid);
+        if ($ip === '') return null;
+
+        $port = (string) ($bag['{$SSH.PORT}'] ?? '');
+        if ($port === '') $port = '22';
+        $user = (string) ($bag['{$SSH.USER}'] ?? '');
+        $pass = (string) ($bag['{$SSH.PASSWORD}'] ?? '');
+
+        // embed=1 strips ssheasy's chrome; the /terminal page auto-connects
+        // by default (connect defaults to "true").
+        $q = ['host' => $ip, 'port' => $port, 'embed' => '1'];
+        if ($user !== '') $q['user']     = $user;
+        if ($pass !== '') $q['password'] = $pass;
+
+        return [
+            'url'  => $base.'/terminal?'.http_build_query($q),
+            'host' => $ip,
+            'port' => $port,
+            'user' => $user
+        ];
+    }
+
+    /**
+     * The address Zabbix uses to reach the switch. Prefers the SNMP-type
+     * interface (type 2 — the polling interface for these EXOS hosts), then
+     * any interface flagged main, then the first interface. Returns '' when
+     * the host has no usable interface.
+     */
+    private function resolveSwitchIp(string $hostid): string {
+        $hosts = API::Host()->get([
+            'output'           => ['hostid'],
+            'selectInterfaces' => ['ip', 'main', 'type'],
+            'hostids'          => [$hostid]
+        ]);
+        if (!$hosts) return '';
+        $interfaces = $hosts[0]['interfaces'] ?? [];
+
+        // INTERFACE_TYPE_SNMP = 2.
+        foreach ($interfaces as $iface) {
+            if ((int) ($iface['type'] ?? 0) === 2 && ($iface['ip'] ?? '') !== '') {
+                return (string) $iface['ip'];
+            }
+        }
+        foreach ($interfaces as $iface) {
+            if ((int) ($iface['main'] ?? 0) === 1 && ($iface['ip'] ?? '') !== '') {
+                return (string) $iface['ip'];
+            }
+        }
+        foreach ($interfaces as $iface) {
+            if (($iface['ip'] ?? '') !== '') return (string) $iface['ip'];
+        }
+        return '';
     }
 
     /**
