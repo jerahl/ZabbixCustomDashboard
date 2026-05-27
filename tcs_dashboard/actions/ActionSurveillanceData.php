@@ -654,14 +654,12 @@ class ActionSurveillanceData extends ActionDataBase {
                 $key = (string) $grp_id;
                 if (!isset($sites[$key])) {
                     // Label source: milestone.grp.name[<id>] is the canonical
-                    // Zabbix item — when present it always wins. The groups
-                    // snapshot back-fill (collectSiteItems) may instead carry
-                    // the label under "displayName" (mirroring the RS
-                    // snapshot), so check that next. Path tail from the raw
-                    // blob ("/Root/Bryant HS" → "Bryant HS") is the next
-                    // fallback; GUID is the absolute last resort.
+                    // Zabbix item — when present it always wins. Path tail
+                    // from the raw blob ("/Root/Bryant HS" → "Bryant HS") is
+                    // a secondary fallback in case the name item ever fails
+                    // to populate; the site host name then the GUID are the
+                    // last resorts.
                     $name = trim((string) ($grp['name'] ?? ''));
-                    if ($name === '') $name = trim((string) ($grp['displayName'] ?? ''));
                     if ($name === '') {
                         $p = trim((string) ($grp['path'] ?? ''));
                         if ($p !== '' && str_contains($p, '/')) {
