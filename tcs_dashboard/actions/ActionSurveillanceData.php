@@ -91,8 +91,7 @@ class ActionSurveillanceData extends ActionDataBase {
         $milestone = $this->buildMilestoneSummary($site_hosts, $site_items, $cam_hosts, $problems);
         $sites     = $this->buildSites($site_hosts, $site_items, $cam_hosts, $problems);
         $servers   = $this->buildServers($site_hosts, $site_items, $dvr_agents);
-        $cam_rs    = $this->findCameraRecordingServers();
-        $cameras   = $this->buildCameras($site_hosts, $site_items, $cam_hosts, $cam_rs);
+        $cameras   = $this->buildCameras($site_hosts, $site_items, $cam_hosts);
         $alarms    = $this->buildAlarms($problems);
         $history   = $this->buildFleetHistory($all_host_ids, $cameras);
 
@@ -138,9 +137,8 @@ class ActionSurveillanceData extends ActionDataBase {
         $site_items = $site_hosts ? $this->collectSiteItems(array_keys($site_hosts)) : [];
         $cam_hosts  = $this->findCameraHosts();
 
-        $cam_rs = $this->findCameraRecordingServers();
         $camera = null;
-        foreach ($this->buildCameras($site_hosts, $site_items, $cam_hosts, $cam_rs) as $c) {
+        foreach ($this->buildCameras($site_hosts, $site_items, $cam_hosts) as $c) {
             if ((string) ($c['hostid'] ?? '') === $hostid) { $camera = $c; break; }
         }
 
@@ -1094,63 +1092,23 @@ class ActionSurveillanceData extends ActionDataBase {
     /* --------------------------------------------------------------------- */
 
     /**
-     * Normalise a Milestone camera GUID for cross-source joins. The cameras
-     * LLD and the RS snapshot can disagree on brace wrapping / case, so fold
-     * both to a bare lowercase GUID before comparing.
-     */
-    private function normCamKey(string $id): string {
-        return strtolower(trim($id, "{} \t\n\r"));
-    }
-
-    /**
-     * Camera → Recording Server map, read from the milestone_rs_read.sh
-     * snapshot's __cameras section (emitted by milestone_rs_state.py).
-     * Returns [ normCamKey => ['server' => <RS hostname|name>, 'rsName' =>
-     * <display name>, 'retention' => <minutes|null>] ].
-     *
-     * 'server' prefers the RS hostName so it matches the id buildServers()
-     * uses for the per-server page ($rs_hostname ?: $rs_id), keeping the
-     * camera-detail "Recording server" link clickable. Empty when the RS
-     * extras snapshot isn't deployed or predates the __cameras addition.
-     */
-    private function findCameraRecordingServers(): array {
-        $snaps = $this->safeGet(fn() => API::Item()->get([
-            'output'      => ['itemid', 'hostid', 'lastvalue'],
-            'search'      => ['key_' => 'milestone_rs_read.sh'],
-            'startSearch' => true,
-            'monitored'   => true,
-            'webitems'    => false
-        ]));
-        if (!$snaps) return [];
-
-        $map = [];
-        foreach ($snaps as $snap) {
-            $raw = (string) ($snap['lastvalue'] ?? '');
-            if ($raw === '') continue;
-            $blob = json_decode($raw, true);
-            if (!is_array($blob) || !is_array($blob['__cameras'] ?? null)) continue;
-
-            foreach ($blob['__cameras'] as $cam_id => $info) {
-                if (!is_array($info)) continue;
-                $server = trim((string) ($info['rsHostName'] ?? ''));
-                if ($server === '') $server = trim((string) ($info['rsName'] ?? ''));
-                $map[$this->normCamKey((string) $cam_id)] = [
-                    'server'    => $server !== '' ? $server : null,
-                    'rsName'    => ($info['rsName'] ?? '') ?: null,
-                    'retention' => isset($info['retentionMinutes'])
-                        ? (int) $info['retentionMinutes'] : null,
-                ];
-            }
-        }
-        return $map;
-    }
-
-    /**
      * Camera list — one row per LLD-discovered camera. State derives from
      * milestone.cam.status[id] (0 OK / 1 ESS fault / 2 ping down / 3 both /
      * -1 disabled).
      */
-    private function buildCameras(array $site_hosts, array $site_items, array $cam_hosts, array $cam_rs = []): array {
+    private function buildCameras(array $site_hosts, array $site_items, array $cam_hosts): array {
+        // RS GUID → display hostname, from the per-RS milestone.rs.* items.
+        // Used to turn each camera's milestone.cam.rsid[<id>] into a clickable
+        // recording-server label (matches the id buildServers() assigns to the
+        // per-server page: $rs_hostname ?: $rs_id).
+        $rs_hostname_by_id = [];
+        foreach ($site_items as $bundle) {
+            foreach ($bundle['rs'] ?? [] as $rs_id => $rs) {
+                $hostname = trim((string) ($rs['hostname'] ?? ''));
+                if ($hostname !== '') $rs_hostname_by_id[(string) $rs_id] = $hostname;
+            }
+        }
+
         // Per-Camera Zabbix host lookup by cam_id tag.
         $cam_host_by_id = [];
         foreach ($cam_hosts as $ch) {
@@ -1175,7 +1133,8 @@ class ActionSurveillanceData extends ActionDataBase {
                     default             => $this->camStatusClass($status)
                 };
                 $cam_host = $cam_host_by_id[$cam_id] ?? null;
-                $rs_info  = $cam_rs[$this->normCamKey($cam_id)] ?? null;
+                $rsid     = trim((string) ($cam['rsid'] ?? ''));
+                $server   = $rsid !== '' ? ($rs_hostname_by_id[$rsid] ?? $rsid) : null;
                 $ip = $cam['address'] ?? '';
                 if (!$ip && $cam_host) {
                     foreach ($cam_host['interfaces'] ?? [] as $i) {
@@ -1197,7 +1156,7 @@ class ActionSurveillanceData extends ActionDataBase {
                     'ip'        => $ip ?: null,
                     'mac'       => $cam['mac'] ?? null,
                     'poe'       => null,
-                    'server'    => $rs_info['server'] ?? null,
+                    'server'    => $server,
                     'motion12h' => null,
                     'hostid'    => $cam_host['hostid'] ?? null
                 ];
