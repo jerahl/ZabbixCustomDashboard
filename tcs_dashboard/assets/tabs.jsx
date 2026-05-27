@@ -426,9 +426,6 @@ const ClientsTab = ({ filter, setFilter }) => {
         {all.length === 0 ? (
           <div style={{ padding: 30, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
             No active clients reported for this AP.<br />
-            <span style={{ fontSize: 11 }}>
-              Set global macro <code>{"{$XIQ_API_TOKEN}"}</code> and host macro <code>{"{$XIQ_DEVICE_ID}"}</code> to enable the XIQ-side feed, or configure the PacketFence macros on this host.
-            </span>
           </div>
         ) : (
           <table className="tbl">
