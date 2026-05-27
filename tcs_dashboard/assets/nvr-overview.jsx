@@ -1,5 +1,9 @@
 // Surveillance NOC Overview dashboard widgets
 
+// Path appended to http://{camera-ip} for the static grid thumbnails.
+// Set this to whatever still-image endpoint the cameras serve.
+const CAM_SNAPSHOT_PATH = "/jpg/image.jpg";
+
 // Defensive defaults — if surveillance-bridge.jsx hasn't published yet
 // (cache race, fetch error, …) every read here falls back to 0 / "" so
 // no .toFixed / .toLocaleString throws on undefined.
@@ -295,9 +299,23 @@ const ServerMini = ({ s }) => {
 const CamThumb = ({ c }) => {
   const now = new Date();
   const ts = now.toISOString().replace("T", " ").substr(0, 19);
+  const hasIp = c.ip && c.ip !== "—" && c.ip !== "";
+  // Static snapshot for the grid (the live stream is reserved for the camera
+  // detail page). Templated per camera off its IP; swap CAM_SNAPSHOT_PATH if
+  // the cameras serve their still image on a different path.
+  const snapUrl = hasIp ? `http://${c.ip}${CAM_SNAPSHOT_PATH}` : null;
   return (
     <a className={`cam-tile ${c.state}`} href={c.hostid ? `zabbix.php?action=tcs.camera.view&hostid=${c.hostid}` : `zabbix.php?action=tcs.camera.view&id=${encodeURIComponent(c.id)}`} style={{textDecoration:"none"}}>
       <div className="frame"/>
+      {c.state !== "err" && snapUrl && (
+        <img
+          src={snapUrl}
+          alt={`Snapshot · ${c.loc || c.id}`}
+          loading="lazy"
+          onError={(e) => { e.currentTarget.style.display = "none"; }}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", pointerEvents: "none" }}
+        />
+      )}
       <div className="scan"/>
       <div className="id">{c.id}</div>
       <div className="ts">{ts}</div>

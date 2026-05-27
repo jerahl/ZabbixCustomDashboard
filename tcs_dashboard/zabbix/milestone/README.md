@@ -98,6 +98,9 @@ After deploy:
       reports the expected RS and storage counts.
 - [ ] `jq '.__array[0] | {id,displayName,state,cameraCount,hardwareCount,storageTotalBytes}'`
       shows non-empty values.
+- [ ] `jq '.__total_cameras, (.__cameras | to_entries[0])'` shows a
+      non-zero count and a camera GUID mapped to `{rsId, rsName,
+      rsHostName, retentionMinutes}`.
 - [ ] In Zabbix, the master item `milestone_rs_read.sh[3600]` has a
       `lastvalue` and is not in the staleness trigger state.
 - [ ] Both LLDs (`milestone.rs.extras.discovery`,
@@ -118,6 +121,9 @@ After deploy:
   comment out the `for hw in hw_arr` loop in
   [milestone_rs_state.py](milestone_rs_state.py) — `cameraCount` will
   stay 0 and the dashboard's RS-camera column will fall back to
-  whatever the base template publishes.
+  whatever the base template publishes. The same loop also builds the
+  `__cameras` map (camera GUID → recording server) that powers the
+  "Recording server" field on the Camera Detail page, so skipping it
+  drops that join too.
 - **API timeouts.** `--timeout 30` is per-request. Bump it via the
   cron entry if your API Gateway is slow to respond at peak.

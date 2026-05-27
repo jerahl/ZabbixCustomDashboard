@@ -37,6 +37,11 @@ const CameraDetail = () => {
   if (!cam) return <CameraDetailEmpty />;
 
   const camName = cam.name || cam.id;
+  const hasIp = cam.ip && cam.ip !== "—";
+  // Camera web UI live view — embeds the device's own fullscreen stream page.
+  const liveUrl = hasIp
+    ? `http://${cam.ip}/fullscreen.htm?line=1&stream=1&vport=2&autoresize=false&keepaspect=true&dewarp=false`
+    : null;
 
   const H = window.CAM_HISTORY || {};
   const liveEvents = window.CAM_EVENTS || [];
@@ -93,10 +98,18 @@ const CameraDetail = () => {
                 <div className="status-line"><StatusDot state={cam.state==="err"?"err":cam.state==="warn"?"warn":"ok"}/> <span style={{color:stateColor}}>{stateLabel}</span></div>
                 <div className="live-large" style={{ width: "100%", marginTop: 12 }}>
                   <div className="frame"/><div className="scan"/>
+                  {!isErr && liveUrl && (
+                    <iframe
+                      src={liveUrl}
+                      title={`Live view · ${camName}`}
+                      allow="autoplay; fullscreen"
+                      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: 0, background: "#000" }}
+                    />
+                  )}
                   {!isErr ? <>
                     <div style={{position:"absolute",top:8,left:10,fontFamily:"var(--mono)",fontSize:10,color:"#fff"}}>{cam.id}</div>
                     <div style={{position:"absolute",top:8,right:10,fontFamily:"var(--mono)",fontSize:10,color:"rgba(255,255,255,0.85)"}}>{ts}</div>
-                    <div style={{position:"absolute",bottom:8,left:10,fontFamily:"var(--mono)",fontSize:10,color:"rgba(255,255,255,0.85)"}}>{cam.res} · {cam.fps}fps · {cam.codec}</div>
+                    {(cam.res!=="—"||cam.fps||cam.codec!=="—") && <div style={{position:"absolute",bottom:8,left:10,fontFamily:"var(--mono)",fontSize:10,color:"rgba(255,255,255,0.85)"}}>{[cam.res!=="—"?cam.res:null,cam.fps?`${cam.fps}fps`:null,cam.codec!=="—"?cam.codec:null].filter(Boolean).join(" · ")}</div>}
                     <div style={{position:"absolute",bottom:8,right:10,display:"flex",alignItems:"center",gap:4,fontFamily:"var(--mono)",fontSize:10,color:"#fff"}}>
                       <span style={{width:7,height:7,borderRadius:50,background:"var(--err)",animation:"blink 1.4s infinite",boxShadow:"0 0 6px var(--err)"}}/> REC
                     </div>
@@ -193,7 +206,7 @@ const CameraDetail = () => {
                   <div className="k">FPS</div><div className="v">{cam.fps||"—"}</div><div className="b"><SourceBadge src="ext"/></div>
                   <div className="k">Bitrate</div><div className="v">{cam.bitrate?`${(cam.bitrate/1000).toFixed(1)} Mbps`:"—"}</div><div className="b"><SourceBadge src="ext"/></div>
                   <div className="k">Recording mode</div><div className="v">{cam.recording}</div><div className="b"><SourceBadge src="ext"/></div>
-                  <div className="k">Stream URL</div><div className="v" style={{fontSize:10}}>{cam.ip&&cam.ip!=="—"?`rtsp://${cam.ip}/onvif/profile1`:"—"}</div><div className="b"><SourceBadge src="ext"/></div>
+                  <div className="k">Stream URL</div><div className="v" style={{fontSize:10}}>{liveUrl?<a className="cam-id-link" href={liveUrl} target="_blank" rel="noreferrer">{liveUrl}</a>:"—"}</div><div className="b"><SourceBadge src="ext"/></div>
                 </div>
               </div>
               )}
@@ -228,11 +241,23 @@ const CameraDetail = () => {
               {/* Live preview note — Live */}
               {show("live") && (
               <div className="card" style={{ marginBottom: 14 }}>
-                <div className="card-h"><h3>Live View</h3><SourceBadge src="ext"/></div>
-                <div style={{ padding: 14, fontSize: 13, color: "var(--muted)" }}>
-                  Live video plays in the Milestone Smart Client. Use the preview tile and
-                  <strong> Smart Client</strong> button on the left to open the stream.
-                </div>
+                <div className="card-h"><h3>Live View</h3><SourceBadge src="ext"/><div className="h-spacer"/>{liveUrl && <a className="cam-id-link" href={liveUrl} target="_blank" rel="noreferrer">Open in new tab</a>}</div>
+                {!isErr && liveUrl ? (
+                  <div className="live-large" style={{ width: "100%" }}>
+                    <iframe
+                      src={liveUrl}
+                      title={`Live view · ${camName}`}
+                      allow="autoplay; fullscreen"
+                      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: 0, background: "#000" }}
+                    />
+                  </div>
+                ) : (
+                  <div style={{ padding: 14, fontSize: 13, color: "var(--muted)" }}>
+                    {isErr
+                      ? "Camera is offline — no live stream available."
+                      : "No IP address discovered for this camera, so the live stream can't be embedded. Use the Milestone Smart Client to view it."}
+                  </div>
+                )}
               </div>
               )}
 

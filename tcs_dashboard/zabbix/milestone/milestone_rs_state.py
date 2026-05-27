@@ -7,6 +7,10 @@ snapshot to /var/lib/zabbix/milestone_rs_state.json keyed by RS GUID
 (top-level) plus a flat __array list for Zabbix LLD — same shape as
 milestone_cameras_state.py / milestone_groups_state.py.
 
+A flat __cameras map (camera GUID → {rsId, rsName, rsHostName,
+retentionMinutes}) is also emitted so the dashboard can resolve each
+camera's recording server without re-walking the hardware tree.
+
 The top-level GUID keys are what makes JSONPath $["{#RS.ID}"] work in
 the per-RS dependent items; the milestone_groups_state.py snapshot in
 the field only emits __array, which is what was breaking the Sites tab
@@ -133,6 +137,7 @@ def collect_rs(rs, base, token, ctx, timeout):
     # "RS hosts N cameras" without re-walking the full cameras snapshot.
     hw_count  = 0
     cam_count = 0
+    cam_ids   = []
     try:
         hr = api_get(base, token,
                      f"/api/rest/v1/recordingServers/{rs_id}/hardware",
@@ -147,9 +152,14 @@ def collect_rs(rs, base, token, ctx, timeout):
                 ch = api_get(base, token,
                              f"/api/rest/v1/hardware/{hw_id}/cameras",
                              ctx, timeout)
-                cam_count += len(ch.get("array", []) or [])
+                cams = ch.get("array", []) or []
+                cam_count += len(cams)
+                for c in cams:
+                    cid = c.get("id")
+                    if cid:
+                        cam_ids.append(cid)
             except Exception as e:
-                logging.warning("camera count fetch failed for HW %s: %s",
+                logging.warning("camera fetch failed for HW %s: %s",
                                 hw_id, e)
     except Exception as e:
         logging.warning("hardware fetch failed for RS %s: %s", rs_id, e)
@@ -179,6 +189,10 @@ def collect_rs(rs, base, token, ctx, timeout):
         "storageUsedBytes":            used_total,
         "storageRetentionMinutesMin":  retention_min,
         "storages":                    storages,
+        # Camera GUIDs hosted by this RS. Consumed in collect() to build the
+        # flat __cameras map; popped from the per-RS record before the
+        # snapshot is written so the GUID-keyed RS entries stay lean.
+        "cameraIds":                   cam_ids,
     }
 
 
@@ -197,11 +211,23 @@ def collect(host, user, password, scheme, client_id, timeout, insecure):
     out_array     = []
     out_keyed     = {}
     storages_flat = []
+    cameras_flat  = {}
 
     for rs in rs_list:
         if not rs.get("id"):
             continue
         rec = collect_rs(rs, base, token, ctx, timeout)
+        # Pull the camera list off the record before storing it: the flat
+        # __cameras map is what the dashboard joins on (camera GUID → RS),
+        # and keeping the IDs out of the per-RS entries keeps them small.
+        cam_ids = rec.pop("cameraIds", []) or []
+        for cid in cam_ids:
+            cameras_flat[cid] = {
+                "rsId":             rec["id"],
+                "rsName":           rec["displayName"],
+                "rsHostName":       rec["hostName"],
+                "retentionMinutes": rec["storageRetentionMinutesMin"],
+            }
         out_array.append(rec)
         out_keyed[rec["id"]] = rec
         for s in rec["storages"]:
@@ -225,6 +251,8 @@ def collect(host, user, password, scheme, client_id, timeout, insecure):
     snapshot["__array"]       = out_array
     snapshot["__storages"]    = storages_flat
     snapshot["__total_storages"] = len(storages_flat)
+    snapshot["__cameras"]     = cameras_flat
+    snapshot["__total_cameras"] = len(cameras_flat)
     return snapshot
 
 
