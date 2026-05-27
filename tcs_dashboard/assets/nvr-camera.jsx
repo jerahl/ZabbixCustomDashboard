@@ -31,6 +31,17 @@ const CameraDetailEmpty = () => (
   </div>
 );
 
+// Live stream embed. The src is assigned as a DOM property rather than a
+// JSX attribute so the camera receives a raw "&" between query params — set
+// as markup it round-trips to "&amp;", which the firmware rejects with 400.
+const LiveFrame = ({ url, title, style }) => {
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    if (ref.current && ref.current.src !== url) ref.current.src = url;
+  }, [url]);
+  return <iframe ref={ref} title={title} allow="autoplay; fullscreen" style={style} />;
+};
+
 const CameraDetail = () => {
   const cam = resolveCamera();
   const [tab, setTab] = React.useState("overview");
@@ -99,10 +110,9 @@ const CameraDetail = () => {
                 <div className="live-large" style={{ width: "100%", marginTop: 12 }}>
                   <div className="frame"/><div className="scan"/>
                   {!isErr && liveUrl && (
-                    <iframe
-                      src={liveUrl}
+                    <LiveFrame
+                      url={liveUrl}
                       title={`Live view · ${camName}`}
-                      allow="autoplay; fullscreen"
                       style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: 0, background: "#000" }}
                     />
                   )}
@@ -244,10 +254,9 @@ const CameraDetail = () => {
                 <div className="card-h"><h3>Live View</h3><SourceBadge src="ext"/><div className="h-spacer"/>{liveUrl && <a className="cam-id-link" href={liveUrl} target="_blank" rel="noreferrer">Open in new tab</a>}</div>
                 {!isErr && liveUrl ? (
                   <div className="live-large" style={{ width: "100%" }}>
-                    <iframe
-                      src={liveUrl}
+                    <LiveFrame
+                      url={liveUrl}
                       title={`Live view · ${camName}`}
-                      allow="autoplay; fullscreen"
                       style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: 0, background: "#000" }}
                     />
                   </div>
