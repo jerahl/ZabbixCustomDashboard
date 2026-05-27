@@ -49,6 +49,7 @@ class ActionSwitchesSnapshotData extends ActionDataBase {
             'history'  => new \stdClass(),
             'uplinks'  => [],
             'problems' => [],
+            'triggers' => [],
             'ts'       => time()
         ];
 
@@ -69,6 +70,12 @@ class ActionSwitchesSnapshotData extends ActionDataBase {
             $payload['problems'] = $invoke('collectProblems', [$hostid, 25]);
         } catch (\Throwable $e) {
             error_log('[tcs_dashboard] snapshot.data problems: '.$e->getMessage());
+        }
+
+        try {
+            $payload['triggers'] = $this->collectTriggers($hostid);
+        } catch (\Throwable $e) {
+            error_log('[tcs_dashboard] snapshot.data triggers: '.$e->getMessage());
         }
 
         try {
@@ -100,6 +107,85 @@ class ActionSwitchesSnapshotData extends ActionDataBase {
         $this->setResponse(new CControllerResponseData([
             'main_block' => json_encode($payload, JSON_UNESCAPED_SLASHES)
         ]));
+    }
+
+    /**
+     * Per-host trigger inventory for the Triggers tab. Each row carries the
+     * expanded name + expression, severity label, live status (firing /
+     * enabled / disabled), dependency count, and a 24-bucket hourly fire
+     * history (with the 24h total) derived from trigger events.
+     *
+     * Shape matches what TabTriggers renders (assets/switches-tabs.jsx):
+     *   { sev, expr, name, status, deps, fires24h, history[24] }
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function collectTriggers(string $hostid, int $limit = 300): array {
+        $triggers = API::Trigger()->get([
+            'output'             => ['triggerid', 'description', 'expression', 'priority', 'status', 'value'],
+            'hostids'            => [$hostid],
+            'selectDependencies' => ['triggerid'],
+            'expandDescription'  => true,
+            'expandExpression'   => true,
+            'sortfield'          => ['priority'],
+            'sortorder'          => 'DESC',
+            'limit'              => $limit,
+        ]) ?: [];
+        if (!$triggers) return [];
+
+        // 24h fire history per trigger, bucketed hourly. One event.get over
+        // every trigger on the host; PROBLEM (value=1) events only.
+        $sinceClock = time() - 24 * 3600;
+        $bucketSecs = 3600;
+        $hist  = [];  // triggerid → [24 hourly counts]
+        $fires = [];  // triggerid → 24h total
+        $events = API::Event()->get([
+            'output'    => ['objectid', 'clock', 'value'],
+            'source'    => EVENT_SOURCE_TRIGGERS,
+            'object'    => EVENT_OBJECT_TRIGGER,
+            'objectids' => array_column($triggers, 'triggerid'),
+            'time_from' => $sinceClock,
+            'value'     => TRIGGER_VALUE_TRUE,
+            'limit'     => 10000,
+        ]) ?: [];
+        foreach ($events as $e) {
+            $tid = (string) $e['objectid'];
+            $b   = intdiv((int) $e['clock'] - $sinceClock, $bucketSecs);
+            if ($b < 0)  $b = 0;
+            if ($b > 23) $b = 23;
+            if (!isset($hist[$tid])) $hist[$tid] = array_fill(0, 24, 0);
+            $hist[$tid][$b]++;
+            $fires[$tid] = ($fires[$tid] ?? 0) + 1;
+        }
+
+        $sevLabel = [0 => 'info', 1 => 'info', 2 => 'warning', 3 => 'average', 4 => 'high', 5 => 'disaster'];
+
+        $out = [];
+        foreach ($triggers as $tr) {
+            $tid    = (string) $tr['triggerid'];
+            $value  = (int) ($tr['value']  ?? 0); // 1 = PROBLEM (currently firing)
+            $status = (int) ($tr['status'] ?? 0); // 1 = disabled
+            $out[] = [
+                'sev'      => $sevLabel[(int) ($tr['priority'] ?? 0)] ?? 'info',
+                'expr'     => (string) ($tr['expression']  ?? ''),
+                'name'     => (string) ($tr['description'] ?? ''),
+                'status'   => $value === 1 ? 'firing' : ($status === 1 ? 'disabled' : 'enabled'),
+                'deps'     => count($tr['dependencies'] ?? []),
+                'fires24h' => (int) ($fires[$tid] ?? 0),
+                'history'  => $hist[$tid] ?? array_fill(0, 24, 0),
+            ];
+        }
+
+        // Firing first, then by descending severity, so the operator's
+        // attention lands on active problems at the top of the table.
+        $sevRank = ['disaster' => 5, 'high' => 4, 'average' => 3, 'warning' => 2, 'info' => 1];
+        usort($out, function ($a, $b) use ($sevRank) {
+            $af = $a['status'] === 'firing' ? 1 : 0;
+            $bf = $b['status'] === 'firing' ? 1 : 0;
+            if ($af !== $bf) return $bf <=> $af;
+            return ($sevRank[$b['sev']] ?? 0) <=> ($sevRank[$a['sev']] ?? 0);
+        });
+        return $out;
     }
 
     /**

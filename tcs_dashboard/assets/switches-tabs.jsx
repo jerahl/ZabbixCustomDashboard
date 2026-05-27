@@ -22,19 +22,6 @@ function _spark(seed, base, jitter, len = 24) {
   });
 }
 
-window.TAB_TRIGGERS = [
-  { sev: "disaster", expr: "last(/ARC-MDF/system.uptime)<10m and change()<0",     name: "{HOST.NAME}: device just restarted",   status: "enabled", deps: 3, fires24h: 0, history: _spark(11, 0, 0) },
-  { sev: "high",     expr: "min(/ARC-MDF/icmpping[],5m)=0",                       name: "{HOST.NAME}: ICMP unreachable for 5m", status: "enabled", deps: 7, fires24h: 0, history: _spark(13, 0, 1) },
-  { sev: "high",     expr: "change(/ARC-MDF/net.if.in.errors[ifIndex.{#SNMPINDEX}])>{$IF.ERRORS.WARN}", name: "Interface {#IFNAME}: high inbound error rate", status: "enabled", deps: 0, fires24h: 2, history: _spark(17, 2, 5) },
-  { sev: "high",     expr: "last(/ARC-MDF/sensor.temp[m2])>{$TEMP.MAX.CRIT}",     name: "Stack member 2: temp above critical",  status: "enabled", deps: 1, fires24h: 0, history: _spark(19, 65, 8) },
-  { sev: "warning",  expr: "avg(/ARC-MDF/sensor.temp[m3],10m)>{$TEMP.MAX.WARN}",  name: "Stack member 3: temp above warning",   status: "firing", deps: 0, fires24h: 3, history: _spark(23, 70, 6) },
-  { sev: "warning",  expr: "max(/ARC-MDF/poe.budget.pct,10m)>{$POE.BUDGET.WARN}", name: "PoE budget utilization above 80%",     status: "enabled", deps: 0, fires24h: 1, history: _spark(29, 60, 14) },
-  { sev: "warning",  expr: "count(/ARC-MDF/net.if.link[ifIndex.{#SNMPINDEX}],1h,\"<>1\")>4", name: "Interface {#IFNAME}: flapping (4+ events/h)", status: "firing", deps: 0, fires24h: 1, history: _spark(31, 1, 3) },
-  { sev: "average",  expr: "last(/ARC-MDF/cpu.util[5m])>{$CPU.UTIL.MAX}",         name: "CPU utilization above 85%",            status: "enabled", deps: 0, fires24h: 0, history: _spark(37, 22, 6) },
-  { sev: "average",  expr: "last(/ARC-MDF/vm.memory.util)>{$MEM.UTIL.MAX}",       name: "Memory utilization above 90%",         status: "enabled", deps: 0, fires24h: 0, history: _spark(41, 36, 4) },
-  { sev: "info",     expr: "change(/ARC-MDF/extreme.cfg.hash)<>0",                name: "Running config changed",               status: "enabled", deps: 0, fires24h: 1, history: _spark(43, 0, 0) },
-];
-
 window.TAB_BACKUPS = [
   { ts: "2026-05-09 04:00:02", user: "auto (zbx-conf)", method: "SSH+SCP", size: "118.4 KB", lines: 4112, changed: 0,  hash: "9c4e…f30a", note: "Nightly scheduled backup" },
   { ts: "2026-05-08 14:18:55", user: "ksimmons@tcs",    method: "Web UI",  size: "118.4 KB", lines: 4112, changed: 2,  hash: "9c4e…f30a", note: "Added VLAN 100 untagged to 2:31" },
@@ -742,11 +729,13 @@ const TabCli = ({ host }) => {
 // 6. TRIGGERS
 // ───────────────────────────────────────────────────────────────────
 const TabTriggers = () => {
-  const T = window.TAB_TRIGGERS;
+  const T = Array.isArray(window.SWITCH_TRIGGERS) ? window.SWITCH_TRIGGERS : [];
   const counts = {
-    firing: T.filter(t => t.status === "firing").length,
-    enabled: T.filter(t => t.status === "enabled").length,
+    firing:   T.filter(t => t.status === "firing").length,
+    enabled:  T.filter(t => t.status === "enabled").length,
+    disabled: T.filter(t => t.status === "disabled").length,
   };
+  const loading = window.SWITCH_LOADING && window.SWITCH_LOADING.snapshot;
   return (
     <div className="tab-pane">
       <div className="card-h-bar">
@@ -757,9 +746,9 @@ const TabTriggers = () => {
           <span className="tf active">All <b>{T.length}</b></span>
           <span className="tf warn">Firing <b>{counts.firing}</b></span>
           <span className="tf">Enabled <b>{counts.enabled}</b></span>
-          <span className="tf">Disabled <b>0</b></span>
+          <span className="tf">Disabled <b>{counts.disabled}</b></span>
         </div>
-        <span className="h-meta">Template Net Extreme EXOS</span>
+        <span className="h-meta">Live · Zabbix trigger.get</span>
       </div>
 
       <div className="card">
@@ -768,13 +757,20 @@ const TabTriggers = () => {
             <tr>
               <th style={{width: 90}}>Severity</th>
               <th>Name &amp; expression</th>
-              <th style={{width: 120}}>1h history</th>
+              <th style={{width: 120}}>24h history</th>
               <th style={{width: 75}}>Fires 24h</th>
               <th style={{width: 60}}>Deps</th>
               <th style={{width: 80}}>Status</th>
             </tr>
           </thead>
           <tbody>
+            {T.length === 0 && (
+              <tr>
+                <td colSpan={6} style={{ textAlign: "center", color: "var(--muted)", padding: 28 }}>
+                  {loading ? "Loading triggers…" : "No triggers defined on this host."}
+                </td>
+              </tr>
+            )}
             {T.map((t, i) => (
               <tr key={i} className={t.status === "firing" ? "firing" : ""}>
                 <td><Sev level={t.sev} /></td>
@@ -903,7 +899,7 @@ window.SWITCH_TABS = [
   { id: "vlan",     label: "VLAN",          badge: null },
   { id: "poe",      label: "PoE Budget",    badge: null },
   { id: "cli",      label: "CLI",           badge: null, admin: true },
-  { id: "triggers", label: "Triggers",      badge: { v: 3, kind: "warn" } },
+  { id: "triggers", label: "Triggers",      badge: null },
   { id: "backups",  label: "Config Backups",badge: null },
 ];
 

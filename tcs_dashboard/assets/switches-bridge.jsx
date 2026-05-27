@@ -55,6 +55,7 @@
         window.POE_BUDGET      = null;
         window.PORT_AUTH       = {};
         window.SWITCH_PROBLEMS = [];
+        window.SWITCH_TRIGGERS = [];
         window.SWITCH_SSH      = null;
         window.SWITCH_LOADING  = { ...window.SWITCH_LOADING, snapshot: true };
         window.dispatchEvent(new CustomEvent("tcs:switch-data", { detail: { section: "navigate" } }));
@@ -87,6 +88,9 @@
     window.PORT_AUTH        = {};
     window.SWITCH_SITES     = [];
     window.SWITCH_INFO      = {};
+    // Per-host trigger inventory for the Triggers tab. Empty until the
+    // snapshot lands; populated from live Zabbix trigger + event data.
+    window.SWITCH_TRIGGERS  = [];
     window.PF_ADMIN_BASE    = "";
     // CLI tab. SWITCH_SSH stays null (admin-only; the snapshot withholds it
     // from non-admins, and the CLI pane shows its "not configured" empty
@@ -485,6 +489,7 @@
 
         window.ARC_MDF_LINKS   = uplinks;
         window.SWITCH_PROBLEMS = problems;
+        window.SWITCH_TRIGGERS = Array.isArray(snap.triggers) ? snap.triggers : [];
 
         // CLI tab: ssheasy connect descriptor (admin-only; null otherwise).
         window.SWITCH_SSH  = (snap.ssh && typeof snap.ssh === "object") ? snap.ssh : null;

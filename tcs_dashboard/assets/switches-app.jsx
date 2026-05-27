@@ -159,16 +159,25 @@ const SwitchesApp = () => {
         </div>
 
         <div className="tabs">
-          {visibleTabs.map(tab => (
-            <div
-              key={tab.id}
-              className={"tab" + (effectiveTab === tab.id ? " active" : "")}
-              onClick={() => { setActiveTab(tab.id); setTweak("activeTab", tab.id); }}
-            >
-              {tab.label}
-              {tab.badge && <span className={"badge " + tab.badge.kind}>{tab.badge.v}</span>}
-            </div>
-          ))}
+          {visibleTabs.map(tab => {
+            // The Triggers tab badge tracks the live firing count from the
+            // snapshot; everything else uses its static SWITCH_TABS badge.
+            let badge = tab.badge;
+            if (tab.id === "triggers") {
+              const firing = (window.SWITCH_TRIGGERS || []).filter(t => t.status === "firing").length;
+              badge = firing > 0 ? { v: firing, kind: "warn" } : null;
+            }
+            return (
+              <div
+                key={tab.id}
+                className={"tab" + (effectiveTab === tab.id ? " active" : "")}
+                onClick={() => { setActiveTab(tab.id); setTweak("activeTab", tab.id); }}
+              >
+                {tab.label}
+                {badge && <span className={"badge " + badge.kind}>{badge.v}</span>}
+              </div>
+            );
+          })}
         </div>
 
         <div className="body" data-screen-label={`Switches Dashboard · ${effectiveTab}`}>
@@ -227,7 +236,6 @@ const SwitchesApp = () => {
           )}
           {effectiveTab === "triggers" && (
             <React.Fragment>
-              <DemoBanner name="Triggers" />
               <div className="switch-layout-2col">
                 <HostNavigator activeId={activeId} onSelect={(id) => { setActiveId(id); setTweak("selectedSwitch", id); }} />
                 <TabTriggers />
