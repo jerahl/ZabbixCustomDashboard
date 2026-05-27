@@ -730,11 +730,13 @@ const TabCli = ({ host }) => {
 // ───────────────────────────────────────────────────────────────────
 const TabTriggers = () => {
   const T = Array.isArray(window.SWITCH_TRIGGERS) ? window.SWITCH_TRIGGERS : [];
+  const [filter, setFilter] = useStateTAB("all");
   const counts = {
     firing:   T.filter(t => t.status === "firing").length,
     enabled:  T.filter(t => t.status === "enabled").length,
     disabled: T.filter(t => t.status === "disabled").length,
   };
+  const rows = filter === "all" ? T : T.filter(t => t.status === filter);
   const loading = window.SWITCH_LOADING && window.SWITCH_LOADING.snapshot;
   return (
     <div className="tab-pane">
@@ -743,10 +745,22 @@ const TabTriggers = () => {
         <SourceBadge src="zbx" />
         <div className="h-spacer" />
         <div className="trig-filter">
-          <span className="tf active">All <b>{T.length}</b></span>
-          <span className="tf warn">Firing <b>{counts.firing}</b></span>
-          <span className="tf">Enabled <b>{counts.enabled}</b></span>
-          <span className="tf">Disabled <b>{counts.disabled}</b></span>
+          <span
+            className={"tf" + (filter === "all" ? " active" : "")}
+            onClick={() => setFilter("all")}
+          >All <b>{T.length}</b></span>
+          <span
+            className={"tf warn" + (filter === "firing" ? " active" : "")}
+            onClick={() => setFilter("firing")}
+          >Firing <b>{counts.firing}</b></span>
+          <span
+            className={"tf" + (filter === "enabled" ? " active" : "")}
+            onClick={() => setFilter("enabled")}
+          >Enabled <b>{counts.enabled}</b></span>
+          <span
+            className={"tf" + (filter === "disabled" ? " active" : "")}
+            onClick={() => setFilter("disabled")}
+          >Disabled <b>{counts.disabled}</b></span>
         </div>
         <span className="h-meta">Live · Zabbix trigger.get</span>
       </div>
@@ -764,14 +778,16 @@ const TabTriggers = () => {
             </tr>
           </thead>
           <tbody>
-            {T.length === 0 && (
+            {rows.length === 0 && (
               <tr>
                 <td colSpan={6} style={{ textAlign: "center", color: "var(--muted)", padding: 28 }}>
-                  {loading ? "Loading triggers…" : "No triggers defined on this host."}
+                  {loading            ? "Loading triggers…"
+                   : T.length === 0   ? "No triggers defined on this host."
+                   :                    `No ${filter} triggers.`}
                 </td>
               </tr>
             )}
-            {T.map((t, i) => (
+            {rows.map((t, i) => (
               <tr key={i} className={t.status === "firing" ? "firing" : ""}>
                 <td><Sev level={t.sev} /></td>
                 <td>
