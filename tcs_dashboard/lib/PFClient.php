@@ -203,6 +203,71 @@ class PFClient {
         return $out;
     }
 
+    /**
+     * Free-text node search for the global command palette. Matches the
+     * fragment against MAC, computername (hostname), and pid (owner /
+     * 802.1X username) with PF's `contains` operator, OR'd together.
+     *
+     * Returns the same row shape as {@see nodesByMac}, keyed by lowercased
+     * MAC, so callers can enrich with locationlog (switch / port) the same
+     * way.
+     *
+     * @return array<string, array<string, mixed>>  keyed by lowercased MAC
+     */
+    public function searchNodesText(string $q, int $limit = 25): array {
+        $q = trim($q);
+        if ($q === '') return [];
+
+        $clauses = [
+            ['op' => 'contains', 'field' => 'mac',          'value' => strtolower($q)],
+            ['op' => 'contains', 'field' => 'computername', 'value' => $q],
+            ['op' => 'contains', 'field' => 'pid',          'value' => $q],
+        ];
+
+        $body = [
+            'cursor' => 0,
+            'limit'  => max(1, $limit),
+            'sort'   => ['mac ASC'],
+            'fields' => [
+                'mac', 'pid', 'computername', 'status', 'category_id',
+                'device_class', 'device_type', 'device_manufacturer', 'device_version',
+                'dhcp_fingerprint', 'dhcp_vendor',
+                'last_seen', 'last_arp', 'last_dhcp',
+                'ip4log.ip'
+            ],
+            'query'  => ['op' => 'or', 'values' => $clauses]
+        ];
+
+        try {
+            $rows = $this->call('POST', '/api/v1/nodes/search', [], $body);
+        } catch (\RuntimeException $e) {
+            // PF answers 404 instead of 200+empty when nothing matches.
+            if (str_contains($e->getMessage(), 'HTTP 404')) return [];
+            throw $e;
+        }
+
+        $out = [];
+        foreach (($rows['items'] ?? []) as $r) {
+            $mac = strtolower((string) ($r['mac'] ?? ''));
+            if ($mac === '') continue;
+            $out[$mac] = [
+                'mac'      => $mac,
+                'host'     => (string) ($r['computername'] ?? ''),
+                'ip'       => (string) ($r['ip4log.ip'] ?? ''),
+                'reg'      => strtolower((string) ($r['status'] ?? '')) === 'reg' ? 'REG' : 'UNREG',
+                'role'     => (string) ($r['category_id'] ?? ''),
+                'vendor'   => (string) ($r['device_manufacturer'] ?? $r['device_class'] ?? ''),
+                'os'       => (string) ($r['device_type'] ?? ($r['device_class'] ?? '')),
+                'owner'    => (string) ($r['pid'] ?? ''),
+                'dhcpFp'   => (string) ($r['dhcp_fingerprint'] ?? $r['dhcp_vendor'] ?? ''),
+                'lastSeen' => (string) ($r['last_seen'] ?? ''),
+                'lastArp'  => (string) ($r['last_arp'] ?? ''),
+                'lastDhcp' => (string) ($r['last_dhcp'] ?? '')
+            ];
+        }
+        return $out;
+    }
+
     /* ------------------------------------------------------------------ */
     /* Write actions                                                      */
     /* ------------------------------------------------------------------ */

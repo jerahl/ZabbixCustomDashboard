@@ -4,7 +4,6 @@ const { useState, useEffect } = React;
 const App = () => {
   const [tab, setTab] = useState("overview");
   const [timeRange, setTimeRange] = useState("May 4, 2026 09:40 — May 5, 2026 09:40");
-  const [paletteOpen, setPaletteOpen] = useState(false);
   const [clientFilter, setClientFilter] = useState("all");
   const [t, setTweak] = useTweaks(window.TWEAK_DEFAULTS);
   // Default to whatever host the server boot-loaded — that's the one
@@ -62,14 +61,6 @@ const App = () => {
     document.documentElement.classList.toggle("hide-src-badges", !t.showSourceBadges);
   }, [t.accent, t.fontMono, t.showSourceBadges]);
 
-  useEffect(() => {
-    const onKey = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") { setPaletteOpen(true); e.preventDefault(); }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
   const TabView = (() => {
     switch (tab) {
       case "overview": return <OverviewTab density={t.density} />;
@@ -100,7 +91,7 @@ const App = () => {
     <div className="app" data-density={t.density} style={{ fontSize: `${13 * densityVar}px` }}>
       <Sidebar tab={tab} setTab={setTab} />
       <div className="main">
-        <Topbar onCmdK={() => setPaletteOpen(true)} activeAp={activeAp} />
+        <Topbar activeAp={activeAp} />
         <PageHeader timeRange={timeRange} setTimeRange={setTimeRange} host={host} />
         <Tabs tab={tab} setTab={setTab} />
 
@@ -126,7 +117,6 @@ const App = () => {
           )}
         </div>
       </div>
-      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
       <Tweaks t={t} setTweak={setTweak} />
     </div>
   );

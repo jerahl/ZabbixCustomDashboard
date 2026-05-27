@@ -1,7 +1,7 @@
 // Main app shell — sidebar now lives in global-nav.jsx (unified across all pages)
 const Sidebar = ({ tab, setTab }) => <GlobalSidebar active="wireless" />;
 
-const Topbar = ({ onCmdK, activeAp }) => {
+const Topbar = ({ activeAp }) => {
   const h = window.ZBX_HOST || {};
   const site  = (activeAp && activeAp.site)  || h.site  || "—";
   const floor = (activeAp && activeAp.floor) || h.floor || "—";
@@ -19,7 +19,7 @@ const Topbar = ({ onCmdK, activeAp }) => {
       <span className="seg">{id}</span>
     </div>
     <div className="spacer" />
-    <div className="search" onClick={onCmdK}>
+    <div className="search">
       <Icon name="search" />
       <input placeholder="Find host, MAC, user, IP…" readOnly />
       <kbd>⌘K</kbd>
@@ -560,50 +560,6 @@ const APNavigator = ({ activeId, onSelect, query, setQuery }) => {
   );
 };
 
-const CommandPalette = ({ onClose }) => {
-  const items = [
-    { cat: "Host", label: "BHS-56-Hallway", sub: "172.16.97.59" },
-    { cat: "Host", label: "BHS-57-Library", sub: "172.16.97.60" },
-    { cat: "Host", label: "CHS-12-Cafeteria", sub: "172.17.4.18" },
-    { cat: "Action", label: "Reboot AP", sub: "Zabbix · executescript" },
-    { cat: "Client", label: "MAC A4:83:E7:91:2C:14", sub: "j.harris@tcs · ChromeOS" },
-    { cat: "Client", label: "MAC F4:5C:89:0B:32:71", sub: "Quarantined · VLAN 666" },
-    { cat: "User", label: "k.davis@tcs", sub: "Faculty · 1 active session" },
-    { cat: "Site", label: "Bryant High School / 1st Floor", sub: "47 APs" },
-  ];
-  const [q, setQ] = React.useState("");
-  const [sel, setSel] = React.useState(0);
-  const filtered = items.filter(i => i.label.toLowerCase().includes(q.toLowerCase()) || i.sub.toLowerCase().includes(q.toLowerCase()));
-  React.useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === "Escape") onClose();
-      if (e.key === "ArrowDown") { setSel(s => Math.min(filtered.length - 1, s + 1)); e.preventDefault(); }
-      if (e.key === "ArrowUp")   { setSel(s => Math.max(0, s - 1)); e.preventDefault(); }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [filtered.length, onClose]);
-  return (
-    <div className="scrim" onClick={onClose}>
-      <div className="palette" onClick={e => e.stopPropagation()}>
-        <input className="palette-input" autoFocus placeholder="Search hosts, clients, users, MACs, IPs…" value={q} onChange={e => { setQ(e.target.value); setSel(0); }} />
-        <div className="palette-list">
-          {filtered.map((it, i) => (
-            <div key={i} className={`palette-item ${i === sel ? "active" : ""}`} onMouseEnter={() => setSel(i)}>
-              <Icon name={it.cat === "Host" ? "ap" : it.cat === "Client" ? "clients" : it.cat === "User" ? "user" : it.cat === "Site" ? "map" : "events"} size={14} />
-              <div>
-                <div>{it.label}</div>
-                <div className="pi-mac">{it.sub}</div>
-              </div>
-              <span className="pi-cat">{it.cat}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-};
-
 // ───────── Tweaks ─────────
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "density": "balanced",
@@ -908,7 +864,6 @@ window.PageHeader = PageHeader;
 window.Tabs = Tabs;
 window.DeviceSidecar = DeviceSidecar;
 window.APNavigator = APNavigator;
-window.CommandPalette = CommandPalette;
 window.Tweaks = Tweaks;
 window.DebugPanel = DebugPanel;
 window.TWEAK_DEFAULTS = TWEAK_DEFAULTS;

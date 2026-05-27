@@ -18,6 +18,11 @@
             "layout": "layout.json",
             "view": null
         },
+        "tcs.search.data": {
+            "class": "ActionSearchData",
+            "layout": "layout.json",
+            "view": null
+        },
         "tcs.dashboard.view": {
             "class": "ActionDashboard",
             "view": "dashboard.view",
