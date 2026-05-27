@@ -352,9 +352,14 @@ class ActionSurveillanceData extends ActionDataBase {
         // is sitting in the snapshot. Pull the snapshot directly so we can
         // back-fill name / path / cameraCount per group when the dep items
         // are blank.
+        // NOT scoped to $host_ids: the groups reader external check is
+        // commonly attached to a standalone "scripts" host rather than the
+        // Milestone XProtect site host, so restricting to site hosts would
+        // miss it and the Sites tab would fall through to bare group GUIDs.
+        // A camera GUID can't collide with this key, so a global search is
+        // safe and returns just the one reader item.
         $snapshots = $this->safeGet(fn() => API::Item()->get([
             'output'      => ['itemid', 'hostid', 'key_', 'lastvalue'],
-            'hostids'     => $host_ids,
             'search'      => ['key_' => 'milestone_groups_read.sh'],
             'startSearch' => true,
             'monitored'   => true,
@@ -364,14 +369,13 @@ class ActionSurveillanceData extends ActionDataBase {
         // Fallback: if the canonical reader item isn't found (operator
         // renamed the external check, or it's keyed differently than the
         // bundled milestone_groups_read.sh[3600]), don't silently lose the
-        // back-fill. Scan the other 'group'-keyed items on these hosts and
-        // keep any whose value actually parses as the groups snapshot
-        // (object with a groups-shaped __array). The value shape — not the
-        // key — is the source of truth here.
+        // back-fill. Scan the 'group'-keyed items (any host) and keep any
+        // whose value actually parses as the groups snapshot (object with a
+        // groups-shaped __array). The value shape — not the key — is the
+        // source of truth here.
         if (!$snapshots) {
             $candidates = $this->safeGet(fn() => API::Item()->get([
                 'output'    => ['itemid', 'hostid', 'key_', 'lastvalue'],
-                'hostids'   => $host_ids,
                 'search'    => ['key_' => 'group'],
                 'monitored' => true,
                 'webitems'  => false
@@ -693,38 +697,31 @@ class ActionSurveillanceData extends ActionDataBase {
         // "(multiple)". Groups with no cameraIds yet (LLD fresh or role
         // permissions still blocking) → '—'.
         $sites = [];
+        $counted = [];   // group GUIDs already tallied (avoid cross-host double-count)
         foreach ($site_items as $hid => $bundle) {
             foreach ($bundle['grp'] ?? [] as $grp_id => $grp) {
                 $key = (string) $grp_id;
+
+                // Resolve this occurrence's label. milestone.grp.name[<id>]
+                // is the canonical Zabbix item; the path tail from the raw
+                // blob ("/Root/Bryant HS" → "Bryant HS") is the fallback;
+                // the bare GUID is the last resort. Resolved per-occurrence
+                // so a named back-fill row can upgrade a GUID placeholder
+                // that an empty dependent-item row created first.
+                $name = trim((string) ($grp['name'] ?? ''));
+                if ($name === '') {
+                    $p = trim((string) ($grp['path'] ?? ''));
+                    if ($p !== '' && str_contains($p, '/')) {
+                        $tail = trim((string) strrchr($p, '/'), '/');
+                        if ($tail !== '') $name = $tail;
+                    } elseif ($p !== '') {
+                        $name = $p;
+                    }
+                }
+
                 if (!isset($sites[$key])) {
-                    // Label source: milestone.grp.name[<id>] is the canonical
-                    // Zabbix item — when present it always wins. Path tail
-                    // from the raw blob ("/Root/Bryant HS" → "Bryant HS") is
-                    // a secondary fallback in case the name item ever fails
-                    // to populate; the site host name then the GUID are the
-                    // last resorts.
-                    $name = trim((string) ($grp['name'] ?? ''));
-                    if ($name === '') {
-                        $p = trim((string) ($grp['path'] ?? ''));
-                        if ($p !== '' && str_contains($p, '/')) {
-                            $tail = trim((string) strrchr($p, '/'), '/');
-                            if ($tail !== '') $name = $tail;
-                        } elseif ($p !== '') {
-                            $name = $p;
-                        }
-                    }
-                    // Last resort before the raw GUID: the Milestone site
-                    // host's own name (siteName item, else the Zabbix host
-                    // name). Keeps the Sites list human-readable even when
-                    // the per-group label items / snapshot haven't populated.
-                    if ($name === '') {
-                        $h = $site_hosts[$hid] ?? [];
-                        $sn = trim((string) ($bundle['site']['siteName'] ?? ''));
-                        $name = $sn !== '' ? $sn : trim((string) ($h['name'] ?? $h['host'] ?? ''));
-                    }
-                    if ($name === '') $name = (string) $grp_id;
                     $sites[$key] = [
-                        'name'         => $name,
+                        'name'         => $name !== '' ? $name : (string) $grp_id,
                         'groupId'      => (string) $grp_id,
                         'hostid'       => $hid,
                         'cams'         => 0,
@@ -737,6 +734,9 @@ class ActionSurveillanceData extends ActionDataBase {
                         'problems'     => $problems_by_host[$hid] ?? 0,
                         'source'       => 'group'
                     ];
+                } elseif ($name !== '' && $sites[$key]['name'] === (string) $grp_id) {
+                    // A real name arrived after the GUID placeholder — upgrade.
+                    $sites[$key]['name'] = $name;
                 }
 
                 // Walk the cameraIds list from the group's raw JSON. If
@@ -746,6 +746,12 @@ class ActionSurveillanceData extends ActionDataBase {
                 // best-effort total. If neither is present, the row
                 // honestly shows 0 cameras instead of guessing.
                 $cam_ids = is_array($grp['cameraIds'] ?? null) ? $grp['cameraIds'] : [];
+                $cam_n   = (int) ($grp['cam.count'] ?? $grp['cameraCount'] ?? 0);
+                // Tally each group once. With the global snapshot search a
+                // group can appear under both its site host (dependent items)
+                // and the snapshot's host (back-fill); skip if already done.
+                if (isset($counted[$key])) continue;
+                if ($cam_ids || $cam_n > 0) $counted[$key] = true;
                 $rs_tally = [];  // rs_id => count
                 if ($cam_ids) {
                     foreach ($cam_ids as $cid) {
@@ -773,7 +779,6 @@ class ActionSurveillanceData extends ActionDataBase {
                     // optimistically reports the whole count as online;
                     // the camera-host bridge will correct it once LLD
                     // discovers individual cameras.
-                    $cam_n = (int) ($grp['cam.count'] ?? $grp['cameraCount'] ?? 0);
                     if ($cam_n > 0) {
                         $sites[$key]['cams']   = $cam_n;
                         $sites[$key]['online'] = $cam_n;

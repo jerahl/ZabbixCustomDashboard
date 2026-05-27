@@ -1,20 +1,17 @@
 #!/usr/bin/env bash
 # milestone_groups_read.sh
 # ------------------------
-# Reader that Zabbix's external check invokes for the camera-groups master
-# item. It cats the JSON file produced by milestone_groups_refresh.sh, but
-# FIRST strips the per-group cameraIds[] / hardwareIds[] arrays.
+# Tiny reader that Zabbix's external check invokes. Just cats the JSON
+# file produced by milestone_groups_refresh.sh. Completes in
+# milliseconds, well under Zabbix's 30-second timeout cap.
 #
-# Why strip them: at ~2,700 cameras the raw snapshot is ~400 KB, almost all
-# of it those two ID arrays. A Zabbix text item value gets truncated well
-# below that, which corrupts the JSON — the per-group dependent items
-# (milestone.grp.name[<id>] etc.) and the PHP back-fill then fail to parse
-# it and every Sites-tab row falls back to the bare group GUID. The group
-# metadata the dashboard needs (name, path, parentGroupId, cameraCount,
-# hardwareCount) is only ~4 KB once the ID arrays are gone, so it fits
-# comfortably and the names resolve. Per-group camera/hardware membership
-# is still available from the dedicated cameras snapshot, so nothing the
-# dashboard reads here depends on the dropped arrays.
+# The full snapshot (including each group's cameraIds[] / hardwareIds[])
+# is emitted as-is: the dashboard's Sites tab uses cameraIds to attribute
+# cameras — and their state — to each group, so we must NOT strip them.
+#
+# If the snapshot file is older than $MAX_AGE seconds (default 3600 = 1h,
+# tuned for a 15-minute refresh cadence with 4x slack), prints a JSON
+# error object so Zabbix shows the master item as "no recent data".
 #
 # Usage from Zabbix item key:
 #   milestone_groups_read.sh[]
@@ -52,30 +49,4 @@ if [[ "$AGE" -gt "$MAX_AGE" ]]; then
     exit 0
 fi
 
-# Emit the snapshot with the heavy ID arrays stripped. The top-level GUID
-# entries and the __array rows reference the same data in the file but are
-# separate objects once parsed, so strip both. Fall back to the raw file
-# only if python is unavailable (better stale-but-whole than nothing); the
-# truncation risk returns in that case, so python3 should be present.
-python3 - "$OUT_FILE" <<'PY' || cat "$OUT_FILE"
-import json, sys
-
-with open(sys.argv[1]) as f:
-    data = json.load(f)
-
-DROP = ("cameraIds", "hardwareIds")
-
-def slim(obj):
-    if isinstance(obj, dict):
-        for k in DROP:
-            obj.pop(k, None)
-
-for row in data.get("__array", []):
-    slim(row)
-for key, val in data.items():
-    if not key.startswith("__"):
-        slim(val)
-
-sys.stdout.write(json.dumps(data, separators=(",", ":")))
-sys.stdout.write("\n")
-PY
+cat "$OUT_FILE"
