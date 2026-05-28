@@ -22,7 +22,6 @@ const TWEAK_DEFAULTS_OV = /*EDITMODE-BEGIN*/{
   "density": "balanced",
   "accent": "#d92929",
   "showSourceBadges": true,
-  "wallSite": "",
   "activeTab": "overview"
 }/*EDITMODE-END*/;
 
@@ -33,10 +32,6 @@ const NVRApp = () => {
     document.documentElement.style.setProperty("--zbx", t.accent);
     document.documentElement.classList.toggle("hide-src-badges", !t.showSourceBadges);
   }, [t.accent, t.showSourceBadges]);
-  // Publish the wall-site tweak onto window so FleetWidgets (rendered
-  // without prop drilling) can read it.
-  useEffectOV(() => { window.TCS_WALL_SITE = t.wallSite || ""; }, [t.wallSite]);
-
   // surveillance-bridge.jsx fetches the fleet async after first paint and
   // updates the window globals in place. Bump a version on each
   // tcs:surveillance-data event so the tree re-reads them.
@@ -135,9 +130,6 @@ const NVRApp = () => {
         <TweakSection title="Visual">
           <TweakColor label="Primary accent" value={t.accent} options={["#d92929","#5b8cff","#34d399","#7c5cff","#f5b300"]} onChange={v => setTweak("accent", v)} />
           <TweakToggle label="Show data-source badges" value={t.showSourceBadges} onChange={v => setTweak("showSourceBadges", v)} />
-        </TweakSection>
-        <TweakSection title="Camera wall">
-          <TweakSelect label="Site to show" value={t.wallSite} options={SITES_RAW.map(s => ({value: s.name, label: s.name}))} onChange={v => setTweak("wallSite", v)} />
         </TweakSection>
       </TweaksPanel>
     </div>

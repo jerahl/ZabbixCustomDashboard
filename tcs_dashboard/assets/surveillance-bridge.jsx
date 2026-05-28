@@ -121,7 +121,10 @@
             // Shortest retention across this site's RSs, in minutes.
             // Published by buildSitesByGroup when the RS extras template
             // is linked; 0 when no per-RS retention is templated yet.
-            retentionMin: num(s.retentionMin)
+            retentionMin: num(s.retentionMin),
+            // Camera GUIDs in this site/group — drives the Cameras tab
+            // navigator's per-group bucketing.
+            cameraIds:    Array.isArray(s.cameraIds) ? s.cameraIds : []
         }));
 
         // ── SERVERS (recording servers) ───────────────────────────────

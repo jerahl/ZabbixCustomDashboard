@@ -746,6 +746,11 @@ class ActionSurveillanceData extends ActionDataBase {
                         'server'       => '—',
                         'storageGB'    => null,
                         'storageCapGB' => null,
+                        // Camera GUIDs in this group — populated below from
+                        // the snapshot's cameraIds list. Surfaces the group
+                        // membership the Cameras tab navigator needs to
+                        // group cameras by their site/group.
+                        'cameraIds'    => [],
                         'problems'     => $problems_by_host[$hid] ?? 0,
                         'source'       => 'group'
                     ];
@@ -769,6 +774,9 @@ class ActionSurveillanceData extends ActionDataBase {
                 if ($cam_ids || $cam_n > 0) $counted[$key] = true;
                 $rs_tally = [];  // rs_id => count
                 if ($cam_ids) {
+                    // Stash the GUID list so the Cameras tab navigator can
+                    // group cameras by their site/group without re-walking.
+                    $sites[$key]['cameraIds'] = array_values($cam_ids);
                     foreach ($cam_ids as $cid) {
                         $sites[$key]['cams']++;
                         $st = $cam_state[(string) $cid] ?? null;

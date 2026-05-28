@@ -194,30 +194,7 @@ const FleetWidgets = () => {
         </div>
       </div>
 
-      {/* Camera wall */}
-      {(() => {
-        // Read the tweak panel's selection from the parent (NVRApp publishes
-        // it onto window so widget code doesn't need the prop chain).
-        // Falls back to the first discovered site.
-        const wallSite = (window.TCS_WALL_SITE && SITES.some(s => s.name === window.TCS_WALL_SITE))
-          ? window.TCS_WALL_SITE
-          : (SITES[0] && SITES[0].name) || "—";
-        const camsAtSite = CAMERAS.filter(c => c.site === wallSite);
-        return (
-          <div className="card">
-            <div className="card-h">
-              <h3>Camera Wall · {wallSite}</h3>
-              <SourceBadge src="ext"/>
-              <div className="h-spacer"/>
-              <span className="h-meta">{camsAtSite.length.toLocaleString()} cameras at this site</span>
-              <span className="h-link">Open in Smart Client <Icon name="external" size={11}/></span>
-            </div>
-            <div className="cam-grid">
-              {camsAtSite.slice(0, 24).map(c => <CamThumb key={c.id} c={c}/>)}
-            </div>
-          </div>
-        );
-      })()}
+      {/* Camera wall moved to the Cameras tab (with the per-group navigator). */}
     </div>
   );
 };
