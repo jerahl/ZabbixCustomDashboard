@@ -166,6 +166,7 @@
         window.CAMERAS = (Array.isArray(boot.cameras) ? boot.cameras : []).map(c => ({
             id:        str(c.id, "—"),
             site:      str(c.site, "—"),
+            group:     str(c.group, c.site || "—"),
             loc:       str(c.loc || c.name, c.id || "—"),
             model:     str(c.model, "—"),
             res:       str(c.res, "—"),

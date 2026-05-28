@@ -1194,6 +1194,37 @@ class ActionSurveillanceData extends ActionDataBase {
             }
         }
 
+        // Camera GUID → group (site) name. Mirrors how buildSitesByGroup
+        // attributes cameras: walk each group's cameraIds and resolve the
+        // group's label the same way. Emitted on each camera as $row['group']
+        // so the Cameras-tab navigator can bucket by site/group without
+        // re-joining on the frontend.
+        $cam_group_by_id = [];
+        foreach ($site_items as $bundle) {
+            foreach ($bundle['grp'] ?? [] as $grp_id => $grp) {
+                $cam_ids = is_array($grp['cameraIds'] ?? null) ? $grp['cameraIds'] : [];
+                if (!$cam_ids) continue;
+                $gname = trim((string) ($grp['name'] ?? ''));
+                if ($gname === '') {
+                    $p = trim((string) ($grp['path'] ?? ''));
+                    if ($p !== '' && str_contains($p, '/')) {
+                        $tail = trim((string) strrchr($p, '/'), '/');
+                        if ($tail !== '') $gname = $tail;
+                    } elseif ($p !== '') {
+                        $gname = $p;
+                    }
+                }
+                if ($gname === '') $gname = (string) $grp_id;
+                foreach ($cam_ids as $cid) {
+                    // First group claiming a camera wins; Milestone groups
+                    // are effectively exclusive at the leaf level.
+                    if (!isset($cam_group_by_id[(string) $cid])) {
+                        $cam_group_by_id[(string) $cid] = $gname;
+                    }
+                }
+            }
+        }
+
         $out = [];
         foreach ($site_hosts as $hid => $h) {
             $bundle     = $site_items[$hid] ?? [];
@@ -1219,6 +1250,11 @@ class ActionSurveillanceData extends ActionDataBase {
                     'id'        => $cam_id,
                     'name'      => $cam_host['name'] ?? ($cam['hwname'] ?? $cam_id),
                     'site'      => $site_label,
+                    // Camera-group label from the camera-groups snapshot
+                    // (same source the Sites tab attributes by). Falls back
+                    // to the site host label so an ungrouped camera still
+                    // shows up under a sensible header in the navigator.
+                    'group'     => $cam_group_by_id[$cam_id] ?? $site_label,
                     'loc'       => $cam['hwname'] ?? '',
                     'model'     => $cam['hwmodel'] ?? '—',
                     'res'       => null,

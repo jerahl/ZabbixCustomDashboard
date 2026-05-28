@@ -142,13 +142,11 @@ const NvrTabCameras = () => {
   const all = _tabsArr(window.CAMERAS);
   const SITES_RAW = _tabsArr(window.SITES);
 
-  // Group membership comes from each site's cameraIds list (built by
-  // buildSitesByGroup from the camera-groups snapshot). Falls back to the
-  // camera's own .site label when a camera isn't claimed by any group yet
-  // (LLD fresh, snapshot stale) so it still appears under a sensible header.
-  const groupByCam = new Map();
-  SITES_RAW.forEach(s => (s.cameraIds || []).forEach(cid => groupByCam.set(cid, s.name)));
-  const camSite = (c) => groupByCam.get(c.id) || c.site || "Ungrouped";
+  // Group membership is attributed server-side (buildCameras walks each
+  // group's cameraIds and stamps cam.group). Same join the Sites tab uses
+  // for its per-site cam counts — so the navigator buckets here line up
+  // with what's shown there.
+  const camSite = (c) => c.group || c.site || "Ungrouped";
 
   // Site → [cameras] in SITES_RAW order, then any "Ungrouped" / extras after.
   const camsBySite = new Map();
