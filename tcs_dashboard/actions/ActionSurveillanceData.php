@@ -1428,6 +1428,7 @@ class ActionSurveillanceData extends ActionDataBase {
                 } else {
                     $diag['siteFallbackHits']++;
                 }
+                $ip = $cam['address'] ?? '';
                 if (!$ip && $cam_host) {
                     foreach ($cam_host['interfaces'] ?? [] as $i) {
                         if ((int) ($i['main'] ?? 0) === 1) { $ip = $i['ip']; break; }
