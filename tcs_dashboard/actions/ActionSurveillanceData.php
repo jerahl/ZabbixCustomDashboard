@@ -157,12 +157,70 @@ class ActionSurveillanceData extends ActionDataBase {
             if ((string) ($c['hostid'] ?? '') === $hostid) { $camera = $c; break; }
         }
 
+        // PacketFence enrichment (uplink switch+port, node role/IP/lastSeen,
+        // admin URL for the View-in-PF link). Mirrors the AP detail page's
+        // PF panel so the buttons + uplink info share one code path.
+        $pf = $this->collectCameraPfDetail($hostid, (string) ($camera['mac'] ?? ''));
+
         return [
-            'camera'  => $camera,
-            'history' => $this->buildCameraHistory($hostid),
-            'events'  => $this->buildCameraEvents($hostid),
-            'ts'      => time()
+            'camera'    => $camera,
+            'history'   => $this->buildCameraHistory($hostid),
+            'events'    => $this->buildCameraEvents($hostid),
+            'pfUplink'  => $pf['uplink'],
+            'pfDevice'  => $pf['device'],
+            'pfAdmin'   => $pf['adminUrl'],
+            'ts'        => time()
         ];
+    }
+
+    /**
+     * PacketFence enrichment for one camera: upstream switch + port (via PF
+     * locationlog by MAC), node info (role/IP/host/lastSeen), and the PF
+     * admin UI base for the "View in PacketFence" link. Reuses the AP
+     * detail page's helpers (ActionDashboard) so the AP and camera panels
+     * stay consistent.
+     *
+     * Empty fields when PF macros aren't set, the MAC is blank, or PF has
+     * no matching locationlog / node — the frontend renders honest "—".
+     */
+    private function collectCameraPfDetail(string $hostid, string $mac): array {
+        $dash = new ActionDashboard();
+        $out = [
+            'uplink'   => null,
+            'device'   => null,
+            'adminUrl' => $dash->resolvePfAdminUrl($hostid),
+        ];
+        if ($mac === '' || $mac === '—' || $hostid === '') return $out;
+
+        // Uplink: PF locationlog → switch + port + switch hostid.
+        $uplink = $dash->collectPfApUplink($hostid, $mac);
+        if (is_array($uplink)) $out['uplink'] = $uplink;
+
+        // Node info: PFClient->node($mac) for role / status / IP / lastSeen.
+        $macros = $dash->resolvePfMacros($hostid);
+        if ($macros !== null) {
+            try {
+                $pf   = \Modules\TcsDashboard\Lib\PFClient::fromMacros($macros);
+                $node = $pf->node(strtolower($mac));
+                if (is_array($node) && $node) {
+                    $out['device'] = [
+                        'mac'       => (string) ($node['mac']         ?? $mac),
+                        'ip'        => (string) ($node['last_ip']     ?? ($node['ip'] ?? '')),
+                        'host'      => (string) ($node['computername'] ?? ($node['device_class'] ?? '')),
+                        'role'      => (string) ($node['category']    ?? ''),
+                        'reg'       => strtolower((string) ($node['status'] ?? '')) === 'reg' ? 'REG' : 'UNREG',
+                        'lastSeen'  => (string) ($node['last_seen']   ?? ''),
+                        'lastDhcp'  => (string) ($node['last_dhcp']   ?? ''),
+                        'vendor'    => (string) ($node['device_manufacturer'] ?? ''),
+                        'os'        => (string) ($node['device_type'] ?? ''),
+                        'owner'     => (string) ($node['pid']         ?? ''),
+                    ];
+                }
+            } catch (\Throwable $e) {
+                error_log('[tcs_dashboard] camera PF node lookup ('.$mac.'): '.$e->getMessage());
+            }
+        }
+        return $out;
     }
 
     /** Empty 48-bucket sparkline set for the camera detail telemetry strip. */

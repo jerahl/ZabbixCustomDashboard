@@ -40,9 +40,14 @@ $ver = static fn(string $f): string =>
 <div id="root"></div>
 
 <script>
-    window.CAMERA_BOOT         = <?= json_encode($data['boot']   ?? null, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
-    window.CAMERA_HOSTID       = <?= json_encode($data['hostid'] ?? '',   JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
-    window.TCS_CAMERA_DATA_URL = "zabbix.php?action=tcs.camera.data";
+    window.CAMERA_BOOT             = <?= json_encode($data['boot']   ?? null, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+    window.CAMERA_HOSTID           = <?= json_encode($data['hostid'] ?? '',   JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+    window.TCS_CAMERA_DATA_URL     = "zabbix.php?action=tcs.camera.data";
+    // PacketFence per-device write actions + PoE-cycle endpoint, used by the
+    // camera detail page's "View in PF / Reevaluate / Reboot / Cycle PoE"
+    // action row (resolved server-side from the camera host's PF macros).
+    window.TCS_PF_DEVICE_URL       = "zabbix.php?action=tcs.pf.device";
+    window.TCS_SWITCH_CYCLEPOE_URL = "zabbix.php?action=tcs.switch.cyclepoe";
 </script>
 
 <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>

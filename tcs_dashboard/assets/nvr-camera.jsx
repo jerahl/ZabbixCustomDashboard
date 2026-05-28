@@ -233,6 +233,9 @@ const CameraDetail = () => {
               </div>
               )}
 
+              {/* PacketFence & Uplink — Overview, Configuration */}
+              {show("overview", "config") && <CameraPfPanel cam={cam} />}
+
               {/* Live preview note — Live */}
               {show("live") && (
               <div className="card" style={{ marginBottom: 14 }}>
@@ -284,5 +287,122 @@ const CamEvent = ({ ts, src, sev, msg }) => (
     <div className="msg">{msg}</div>
   </div>
 );
+
+// PacketFence + Uplink card. Mirrors the switches port-detail PF pane and
+// the AP detail action row — same backend endpoints (tcs.pf.device,
+// tcs.switch.cyclepoe), same buttons (View in PF / Reevaluate / Reboot /
+// Cycle PoE), so the AP and camera screens behave identically.
+const CameraPfPanel = ({ cam }) => {
+  const uplink = window.CAMERA_UPLINK || null;
+  const dev    = window.CAMERA_PF     || null;
+  const mac    = (dev && dev.mac) || cam.mac || "";
+  const adminBase = (window.PF_ADMIN_BASE || "").replace(/\/+$/, "");
+  const viewHref = adminBase && mac && mac !== "—"
+    ? `${adminBase}/admin/#/node/${encodeURIComponent(String(mac).toLowerCase())}`
+    : null;
+
+  // Parse the PF locationlog port into (member, port) for Cycle PoE. EXOS
+  // stacks expose ports as "<member>:<port>"; ifDesc forms like "1/5" or
+  // "1:5" or plain "5" all work — fall through to member=1 if unclear.
+  const parsePort = (raw) => {
+    const s = String(raw || "").trim();
+    if (!s) return null;
+    const m = s.match(/^(\d+)[\/:](\d+)$/);
+    if (m) return { member: parseInt(m[1], 10), port: parseInt(m[2], 10) };
+    const n = parseInt(s, 10);
+    if (Number.isFinite(n) && n > 0) return { member: 1, port: n };
+    return null;
+  };
+
+  const [busy, setBusy] = React.useState(null);   // 'reevaluate'|'reboot'|'poe'|null
+  const [msg, setMsg]   = React.useState({ kind: "", text: "" });
+  const flash = (m) => { setMsg(m); setTimeout(() => setMsg({ kind: "", text: "" }), 6000); };
+
+  const runPf = async (op, op_busy, label) => {
+    if (!mac || mac === "—") { flash({ kind: "err", text: "no MAC" }); return; }
+    if (typeof window.tcsPfDeviceAction !== "function") { flash({ kind: "err", text: "endpoint missing" }); return; }
+    setBusy(op_busy); setMsg({ kind: "", text: `${label}…` });
+    const r = await window.tcsPfDeviceAction(mac, op);
+    setBusy(null);
+    flash(r && r.ok ? { kind: "", text: r.message || "ok" } : { kind: "err", text: (r && (r.error || r.message)) || "failed" });
+  };
+
+  const runCyclePoe = async () => {
+    if (typeof window.tcsCyclePoeOnSwitch !== "function") { flash({ kind: "err", text: "endpoint missing" }); return; }
+    if (!uplink || !uplink.switchHostid) { flash({ kind: "err", text: "upstream switch unknown" }); return; }
+    const mp = parsePort(uplink.port || uplink.ifDesc);
+    if (!mp) { flash({ kind: "err", text: "bad PF port string" }); return; }
+    setBusy("poe"); setMsg({ kind: "", text: "cycling PoE…" });
+    const r = await window.tcsCyclePoeOnSwitch(uplink.switchHostid, mp.member, mp.port);
+    setBusy(null);
+    flash(r && r.ok ? { kind: "", text: r.message || "ok" } : { kind: "err", text: (r && (r.error || r.message)) || "failed" });
+  };
+
+  const swHref = uplink && uplink.switchHostid
+    ? `zabbix.php?action=tcs.switches.view&switchid=${encodeURIComponent(uplink.switchHostid)}`
+    : null;
+
+  return (
+    <div className="card" style={{ marginBottom: 14 }}>
+      <div className="card-h">
+        <h3>PacketFence & Uplink</h3>
+        <SourceBadge src="pf" />
+        <div className="h-spacer" />
+        {dev && (
+          <span className={"reg-badge " + (dev.reg === "REG" ? "reg" : "unreg")} style={{ fontSize: 10 }}>{dev.reg}</span>
+        )}
+      </div>
+      <div className="kv tight">
+        <div className="k">Switch</div>
+        <div className="v">{uplink && uplink.switch
+          ? (swHref ? <a className="cam-id-link" href={swHref}>{uplink.switch}</a> : uplink.switch)
+          : <span className="muted">—</span>}{uplink && uplink.switchIp ? <span className="muted" style={{ fontSize: 10, marginLeft: 6 }}>{uplink.switchIp}</span> : null}</div>
+        <div className="b"><SourceBadge src="pf" /></div>
+        <div className="k">Port</div>
+        <div className="v">{uplink && (uplink.port || uplink.ifDesc) ? `${uplink.port || ""}${uplink.ifDesc ? ` · ${uplink.ifDesc}` : ""}` : <span className="muted">—</span>}</div>
+        <div className="b"><SourceBadge src="pf" /></div>
+        <div className="k">MAC</div>
+        <div className="v" style={{ fontFamily: "var(--mono)", fontSize: 11 }}>{mac || <span className="muted">—</span>}</div>
+        <div className="b"><SourceBadge src="zbx" /></div>
+        <div className="k">Role</div>
+        <div className="v">{dev && dev.role ? <span className={"role-tag " + (dev.role || "unknown")}>{dev.role}</span> : <span className="muted">—</span>}</div>
+        <div className="b"><SourceBadge src="pf" /></div>
+        <div className="k">PF IP</div>
+        <div className="v">{dev && dev.ip ? dev.ip : <span className="muted">—</span>}</div>
+        <div className="b"><SourceBadge src="pf" /></div>
+        <div className="k">Last seen</div>
+        <div className="v" style={{ fontSize: 11 }}>{dev && dev.lastSeen ? dev.lastSeen : <span className="muted">—</span>}</div>
+        <div className="b"><SourceBadge src="pf" /></div>
+      </div>
+      <div className="pf-actions" style={{ padding: "10px 14px", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        {viewHref ? (
+          <a className="pf-btn" href={viewHref} target="_blank" rel="noopener noreferrer">
+            <Icon name="external" size={11} /> View in PacketFence
+          </a>
+        ) : (
+          <span className="pf-btn" style={{ opacity: 0.4, cursor: "not-allowed" }} title="PF admin URL or MAC not available">
+            View in PacketFence
+          </span>
+        )}
+        <button type="button" className="pf-btn" disabled={!!busy || !mac || mac === "—"}
+          onClick={() => runPf("reevaluate_access", "reevaluate", "reevaluating")}
+          title="Re-run PF role / access evaluation for this camera">
+          <Icon name="refresh" size={11} /> {busy === "reevaluate" ? "REEVALUATING…" : "Reevaluate"}
+        </button>
+        <button type="button" className="pf-btn warn" disabled={!!busy || !mac || mac === "—"}
+          onClick={() => runPf("restart_switchport", "reboot", "restarting switchport")}
+          title="Bounce the switch port via PF (effectively reboots the camera over PoE link)">
+          <Icon name="refresh" size={11} /> {busy === "reboot" ? "REBOOTING…" : "Reboot"}
+        </button>
+        <button type="button" className="pf-btn warn" disabled={!!busy || !uplink || !uplink.switchHostid}
+          onClick={runCyclePoe}
+          title="Toggle PoE off/on on the upstream switch port (rConfig snippet on the switch host)">
+          <Icon name="refresh" size={11} /> {busy === "poe" ? "CYCLING…" : "Cycle PoE"}
+        </button>
+        {msg.text && <span className={"pf-msg" + (msg.kind === "err" ? " err" : "")} style={{ fontSize: 11 }}>{msg.text}</span>}
+      </div>
+    </div>
+  );
+};
 
 ReactDOM.createRoot(document.getElementById("root")).render(<CameraDetail />);
