@@ -118,6 +118,11 @@
             "layout": "layout.json",
             "view": null
         },
+        "tcs.camera.snapshot": {
+            "class": "ActionCameraSnapshot",
+            "layout": "layout.json",
+            "view": null
+        },
         "tcs.server.view": {
             "class": "ActionServer",
             "view": "server.view",

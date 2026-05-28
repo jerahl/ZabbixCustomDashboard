@@ -16,7 +16,7 @@
     const num   = (v, dflt = 0) => (isNum(v) ? v : (isNum(Number(v)) ? Number(v) : dflt));
     const str   = (v, dflt = "—") => (v === null || v === undefined || v === "" ? dflt : String(v));
 
-    const HISTORY_KEYS = ["fps", "bitrate", "packetLoss", "motion", "cpu", "temp", "latency"];
+    const HISTORY_KEYS = ["fps", "bitrate", "packetLoss", "motion", "cpu", "mem", "temp", "latency"];
 
     const zerosArray = (n) => {
         const a = new Array(n);
@@ -41,6 +41,7 @@
         if (!c || typeof c !== "object") return null;
         return {
             id:        str(c.id, "—"),
+            name:      str(c.name, c.id || "—"),
             site:      str(c.site, "—"),
             loc:       str(c.loc || c.name, c.id || "—"),
             model:     str(c.model, "—"),
@@ -62,9 +63,12 @@
     };
 
     // Initialise globals up front so the JSX never sees undefined.
-    window.CAMERAS     = [];
-    window.CAM_HISTORY = emptyHistory();
-    window.CAM_EVENTS  = [];
+    window.CAMERAS       = [];
+    window.CAM_HISTORY   = emptyHistory();
+    window.CAM_EVENTS    = [];
+    window.CAMERA_UPLINK = null;   // { switch, switchHostid, port, ifDesc, switchIp }
+    window.CAMERA_PF     = null;   // { mac, ip, host, role, reg, lastSeen, vendor, … }
+    window.PF_ADMIN_BASE = "";
 
     const applyBoot = (boot) => {
         if (!boot || typeof boot !== "object") return;
@@ -88,6 +92,13 @@
                 msg: str(e.msg, "")
             }))
             : [];
+
+        // PacketFence enrichment: uplink switch+port, node info, admin URL.
+        window.CAMERA_UPLINK = boot.pfUplink && typeof boot.pfUplink === "object"
+            ? boot.pfUplink : null;
+        window.CAMERA_PF = boot.pfDevice && typeof boot.pfDevice === "object"
+            ? boot.pfDevice : null;
+        if (boot.pfAdmin) window.PF_ADMIN_BASE = String(boot.pfAdmin);
     };
 
     applyBoot(window.CAMERA_BOOT);
@@ -116,4 +127,64 @@
 
     window.tcsCameraRefresh = tick;
     setInterval(tick, REFRESH_MS);
+
+    // PacketFence per-node write actions (Reevaluate access, Restart
+    // switchport). Same envelope and backend (tcs.pf.device) the switches /
+    // AP page use; we just bind it on the camera page too so the action row
+    // can call it without the data-bridge polling loop coming along.
+    window.tcsPfDeviceAction = async function (mac, op) {
+        const actionUrl = window.TCS_PF_DEVICE_URL;
+        const hid       = window.CAMERA_HOSTID || "";
+        if (!actionUrl || !hid) return { ok: false, error: "endpoint not configured" };
+        if (!mac || !op)        return { ok: false, error: "mac and op required" };
+        const pfMac = String(mac).toLowerCase();
+        try {
+            const form = new URLSearchParams({ hostid: String(hid), mac: pfMac, op: String(op) });
+            const resp = await fetch(actionUrl, {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {
+                    "Accept": "application/json",
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
+                },
+                body: form.toString()
+            });
+            const body = await resp.json().catch(() => ({}));
+            if (!resp.ok) return { ok: false, error: body.error || `HTTP ${resp.status}` };
+            return body;
+        } catch (e) {
+            return { ok: false, error: String(e && e.message ? e.message : e) };
+        }
+    };
+
+    // Cycle PoE on the camera's upstream switch port via tcs.switch.cyclepoe.
+    // The action uses the switch host's {$RCONFIG.*} macros to drive the
+    // PoE off/on snippet, so we pass the resolved switch hostid + port here.
+    window.tcsCyclePoeOnSwitch = async function (switchHostid, member, port) {
+        const actionUrl = window.TCS_SWITCH_CYCLEPOE_URL;
+        if (!actionUrl)       return { ok: false, error: "endpoint not configured" };
+        if (!switchHostid)    return { ok: false, error: "upstream switch unknown" };
+        if (!member || !port) return { ok: false, error: "bad port" };
+        try {
+            const form = new URLSearchParams({
+                hostid: String(switchHostid),
+                member: String(Number(member) || 1),
+                port:   String(Number(port)   || 0)
+            });
+            const resp = await fetch(actionUrl, {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {
+                    "Accept": "application/json",
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"
+                },
+                body: form.toString()
+            });
+            const body = await resp.json().catch(() => ({}));
+            if (!resp.ok) return { ok: false, error: body.error || `HTTP ${resp.status}` };
+            return body;
+        } catch (e) {
+            return { ok: false, error: String(e && e.message ? e.message : e) };
+        }
+    };
 })();

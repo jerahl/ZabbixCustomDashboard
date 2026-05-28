@@ -1540,7 +1540,7 @@ class ActionDashboard extends ActionBase {
      *
      * @return array{switch:string,switchIp:string,port:string,ifDesc:string}|null
      */
-    private function collectPfApUplink(string $hostid, string $apMac): ?array {
+    public function collectPfApUplink(string $hostid, string $apMac): ?array {
         $this->pfApUplinkDebug = [
             'inputMac'     => $apMac,
             'normalizedMac'=> '',
@@ -1821,7 +1821,7 @@ class ActionDashboard extends ActionBase {
     /**
      * @return array{url:string,user:string,pass:string,verify_ssl:bool}|null
      */
-    private function resolvePfMacros(string $hostid): ?array {
+    public function resolvePfMacros(string $hostid): ?array {
         $names = ['{$PF.URL}', '{$PF.USER}', '{$PF.PASSWORD}', '{$PF.VERIFY.SSL}'];
         // Precedence: globals (lowest) → linked templates → host (highest).
         // The Extreme AP per-AP host typically doesn't carry PF macros — they
@@ -1880,7 +1880,7 @@ class ActionDashboard extends ActionBase {
      * lives on a different port than the API (api on :9999, admin on
      * :1443), so this is a separate macro from {$PF.URL}.
      */
-    private function resolvePfAdminUrl(string $hostid): string {
+    public function resolvePfAdminUrl(string $hostid): string {
         $names = ['{$PF.ADMIN_URL}'];
         $bag = [];
 

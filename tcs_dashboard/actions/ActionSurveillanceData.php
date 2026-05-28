@@ -31,6 +31,12 @@ class ActionSurveillanceData extends ActionDataBase {
     /** Template name on each per-camera Zabbix host. */
     private const CAMERA_TEMPLATE = 'Milestone Camera by Direct Polling';
 
+    /** Set by buildCameras() so collect() can surface per-camera grouping
+     *  diagnostics on the response. Temporary debug — surfaces which
+     *  attribution path is firing for each camera and what fields the
+     *  per-camera items currently carry. */
+    private array $camGroupDiag = [];
+
     /** Optional site host-group prefix (matches ActionGlobalData). */
     private const SITE_GROUP_PREFIX = 'Site/';
 
@@ -61,6 +67,16 @@ class ActionSurveillanceData extends ActionDataBase {
      * Build the full surveillance boot payload.
      */
     public function collect(string $active_hostid = ''): array {
+        // Short-lived APCu cache: the fleet collection is heavy (license, RS
+        // LLD, per-camera items, problems) and the page polls every 30s, often
+        // across several NOC screens. A 15s TTL keeps data fresh-enough while
+        // collapsing concurrent/repeat loads onto one collection.
+        $cacheKey = 'tcs_dashboard:surveillance_collect:' . md5($active_hostid);
+        if (function_exists('apcu_fetch')) {
+            $hit = apcu_fetch($cacheKey, $ok);
+            if ($ok && is_array($hit)) return $hit;
+        }
+
         $site_hosts = $this->findSiteHosts();
         if (!$site_hosts) {
             return $this->emptyPayload();
@@ -95,7 +111,7 @@ class ActionSurveillanceData extends ActionDataBase {
         $alarms    = $this->buildAlarms($problems);
         $history   = $this->buildFleetHistory($all_host_ids, $cameras);
 
-        return [
+        $payload = [
             'milestone'     => $milestone,
             'sites'         => $sites,
             'servers'       => $servers,
@@ -111,8 +127,16 @@ class ActionSurveillanceData extends ActionDataBase {
             // cameras / footage range). Not yet templated — empty list
             // so the Evidence Lock tab shows a clean empty state.
             'evidenceLocks' => [],
+            // Temporary diagnostic for the Cameras-navigator grouping issue.
+            // Surfaces which attribution path fired for how many cameras.
+            '__camGroupDiag' => $this->camGroupDiag,
             'ts'            => time()
         ];
+
+        if (function_exists('apcu_store')) {
+            apcu_store($cacheKey, $payload, 15);
+        }
+        return $payload;
     }
 
     /**
@@ -142,12 +166,70 @@ class ActionSurveillanceData extends ActionDataBase {
             if ((string) ($c['hostid'] ?? '') === $hostid) { $camera = $c; break; }
         }
 
+        // PacketFence enrichment (uplink switch+port, node role/IP/lastSeen,
+        // admin URL for the View-in-PF link). Mirrors the AP detail page's
+        // PF panel so the buttons + uplink info share one code path.
+        $pf = $this->collectCameraPfDetail($hostid, (string) ($camera['mac'] ?? ''));
+
         return [
-            'camera'  => $camera,
-            'history' => $this->buildCameraHistory($hostid),
-            'events'  => $this->buildCameraEvents($hostid),
-            'ts'      => time()
+            'camera'    => $camera,
+            'history'   => $this->buildCameraHistory($hostid),
+            'events'    => $this->buildCameraEvents($hostid),
+            'pfUplink'  => $pf['uplink'],
+            'pfDevice'  => $pf['device'],
+            'pfAdmin'   => $pf['adminUrl'],
+            'ts'        => time()
         ];
+    }
+
+    /**
+     * PacketFence enrichment for one camera: upstream switch + port (via PF
+     * locationlog by MAC), node info (role/IP/host/lastSeen), and the PF
+     * admin UI base for the "View in PacketFence" link. Reuses the AP
+     * detail page's helpers (ActionDashboard) so the AP and camera panels
+     * stay consistent.
+     *
+     * Empty fields when PF macros aren't set, the MAC is blank, or PF has
+     * no matching locationlog / node — the frontend renders honest "—".
+     */
+    private function collectCameraPfDetail(string $hostid, string $mac): array {
+        $dash = new ActionDashboard();
+        $out = [
+            'uplink'   => null,
+            'device'   => null,
+            'adminUrl' => $dash->resolvePfAdminUrl($hostid),
+        ];
+        if ($mac === '' || $mac === '—' || $hostid === '') return $out;
+
+        // Uplink: PF locationlog → switch + port + switch hostid.
+        $uplink = $dash->collectPfApUplink($hostid, $mac);
+        if (is_array($uplink)) $out['uplink'] = $uplink;
+
+        // Node info: PFClient->node($mac) for role / status / IP / lastSeen.
+        $macros = $dash->resolvePfMacros($hostid);
+        if ($macros !== null) {
+            try {
+                $pf   = \Modules\TcsDashboard\Lib\PFClient::fromMacros($macros);
+                $node = $pf->node(strtolower($mac));
+                if (is_array($node) && $node) {
+                    $out['device'] = [
+                        'mac'       => (string) ($node['mac']         ?? $mac),
+                        'ip'        => (string) ($node['last_ip']     ?? ($node['ip'] ?? '')),
+                        'host'      => (string) ($node['computername'] ?? ($node['device_class'] ?? '')),
+                        'role'      => (string) ($node['category']    ?? ''),
+                        'reg'       => strtolower((string) ($node['status'] ?? '')) === 'reg' ? 'REG' : 'UNREG',
+                        'lastSeen'  => (string) ($node['last_seen']   ?? ''),
+                        'lastDhcp'  => (string) ($node['last_dhcp']   ?? ''),
+                        'vendor'    => (string) ($node['device_manufacturer'] ?? ''),
+                        'os'        => (string) ($node['device_type'] ?? ''),
+                        'owner'     => (string) ($node['pid']         ?? ''),
+                    ];
+                }
+            } catch (\Throwable $e) {
+                error_log('[tcs_dashboard] camera PF node lookup ('.$mac.'): '.$e->getMessage());
+            }
+        }
+        return $out;
     }
 
     /** Empty 48-bucket sparkline set for the camera detail telemetry strip. */
@@ -158,6 +240,7 @@ class ActionSurveillanceData extends ActionDataBase {
             'packetLoss' => [],
             'motion'     => [],
             'cpu'        => [],
+            'mem'        => [],
             'temp'       => [],
             'latency'    => []
         ];
@@ -301,6 +384,28 @@ class ActionSurveillanceData extends ActionDataBase {
     }
 
     /**
+     * Does this decoded value look like the camera-groups snapshot? Used to
+     * recognise the groups master item by content rather than key, so a
+     * renamed reader can't silently disable the Sites-tab name back-fill.
+     *
+     * Identify by groups-specific markers (not just "has __array", which the
+     * cameras / RS snapshots also have): the groups collector stamps
+     * __endpoint with the discovered endpoint name, and every group row
+     * carries a parentGroupId field that the camera / RS rows never do.
+     */
+    private function isGroupsSnapshot($blob): bool {
+        if (!is_array($blob) || !is_array($blob['__array'] ?? null)) return false;
+
+        $ep = strtolower((string) ($blob['__endpoint'] ?? ''));
+        if (in_array($ep, ['cameragroups', 'devicegroups', 'groups'], true)) return true;
+
+        foreach ($blob['__array'] as $g) {
+            return is_array($g) && array_key_exists('parentGroupId', $g);
+        }
+        return false;
+    }
+
+    /**
      * Pull every Milestone item on the given site hosts in one call. Returns
      *   [hostid => [
      *       site:    [logical => lastvalue, ...],
@@ -329,14 +434,41 @@ class ActionSurveillanceData extends ActionDataBase {
         // is sitting in the snapshot. Pull the snapshot directly so we can
         // back-fill name / path / cameraCount per group when the dep items
         // are blank.
+        // NOT scoped to $host_ids: the groups reader external check is
+        // commonly attached to a standalone "scripts" host rather than the
+        // Milestone XProtect site host, so restricting to site hosts would
+        // miss it and the Sites tab would fall through to bare group GUIDs.
+        // A camera GUID can't collide with this key, so a global search is
+        // safe and returns just the one reader item.
         $snapshots = $this->safeGet(fn() => API::Item()->get([
             'output'      => ['itemid', 'hostid', 'key_', 'lastvalue'],
-            'hostids'     => $host_ids,
             'search'      => ['key_' => 'milestone_groups_read.sh'],
             'startSearch' => true,
             'monitored'   => true,
             'webitems'    => false
-        ]));
+        ])) ?: [];
+
+        // Fallback: if the canonical reader item isn't found (operator
+        // renamed the external check, or it's keyed differently than the
+        // bundled milestone_groups_read.sh[3600]), don't silently lose the
+        // back-fill. Scan the 'group'-keyed items (any host) and keep any
+        // whose value actually parses as the groups snapshot (object with a
+        // groups-shaped __array). The value shape — not the key — is the
+        // source of truth here.
+        if (!$snapshots) {
+            $candidates = $this->safeGet(fn() => API::Item()->get([
+                'output'    => ['itemid', 'hostid', 'key_', 'lastvalue'],
+                'search'    => ['key_' => 'group'],
+                'monitored' => true,
+                'webitems'  => false
+            ])) ?: [];
+            foreach ($candidates as $it) {
+                $blob = json_decode((string) ($it['lastvalue'] ?? ''), true);
+                if ($this->isGroupsSnapshot($blob)) {
+                    $snapshots[] = $it;
+                }
+            }
+        }
 
         $out = [];
         $key_to_site_logical = array_flip(self::SITE_KEYS);
@@ -647,28 +779,31 @@ class ActionSurveillanceData extends ActionDataBase {
         // "(multiple)". Groups with no cameraIds yet (LLD fresh or role
         // permissions still blocking) → '—'.
         $sites = [];
+        $counted = [];   // group GUIDs already tallied (avoid cross-host double-count)
         foreach ($site_items as $hid => $bundle) {
             foreach ($bundle['grp'] ?? [] as $grp_id => $grp) {
                 $key = (string) $grp_id;
-                if (!isset($sites[$key])) {
-                    // Label source: milestone.grp.name[<id>] is the canonical
-                    // Zabbix item — when present it always wins. Path tail
-                    // from the raw blob ("/Root/Bryant HS" → "Bryant HS") is
-                    // a secondary fallback in case the name item ever fails
-                    // to populate; GUID is the absolute last resort.
-                    $name = trim((string) ($grp['name'] ?? ''));
-                    if ($name === '') {
-                        $p = trim((string) ($grp['path'] ?? ''));
-                        if ($p !== '' && str_contains($p, '/')) {
-                            $tail = trim((string) strrchr($p, '/'), '/');
-                            if ($tail !== '') $name = $tail;
-                        } elseif ($p !== '') {
-                            $name = $p;
-                        }
+
+                // Resolve this occurrence's label. milestone.grp.name[<id>]
+                // is the canonical Zabbix item; the path tail from the raw
+                // blob ("/Root/Bryant HS" → "Bryant HS") is the fallback;
+                // the bare GUID is the last resort. Resolved per-occurrence
+                // so a named back-fill row can upgrade a GUID placeholder
+                // that an empty dependent-item row created first.
+                $name = trim((string) ($grp['name'] ?? ''));
+                if ($name === '') {
+                    $p = trim((string) ($grp['path'] ?? ''));
+                    if ($p !== '' && str_contains($p, '/')) {
+                        $tail = trim((string) strrchr($p, '/'), '/');
+                        if ($tail !== '') $name = $tail;
+                    } elseif ($p !== '') {
+                        $name = $p;
                     }
-                    if ($name === '') $name = (string) $grp_id;
+                }
+
+                if (!isset($sites[$key])) {
                     $sites[$key] = [
-                        'name'         => $name,
+                        'name'         => $name !== '' ? $name : (string) $grp_id,
                         'groupId'      => (string) $grp_id,
                         'hostid'       => $hid,
                         'cams'         => 0,
@@ -678,9 +813,17 @@ class ActionSurveillanceData extends ActionDataBase {
                         'server'       => '—',
                         'storageGB'    => null,
                         'storageCapGB' => null,
+                        // Camera GUIDs in this group — populated below from
+                        // the snapshot's cameraIds list. Surfaces the group
+                        // membership the Cameras tab navigator needs to
+                        // group cameras by their site/group.
+                        'cameraIds'    => [],
                         'problems'     => $problems_by_host[$hid] ?? 0,
                         'source'       => 'group'
                     ];
+                } elseif ($name !== '' && $sites[$key]['name'] === (string) $grp_id) {
+                    // A real name arrived after the GUID placeholder — upgrade.
+                    $sites[$key]['name'] = $name;
                 }
 
                 // Walk the cameraIds list from the group's raw JSON. If
@@ -690,8 +833,17 @@ class ActionSurveillanceData extends ActionDataBase {
                 // best-effort total. If neither is present, the row
                 // honestly shows 0 cameras instead of guessing.
                 $cam_ids = is_array($grp['cameraIds'] ?? null) ? $grp['cameraIds'] : [];
+                $cam_n   = (int) ($grp['cam.count'] ?? $grp['cameraCount'] ?? 0);
+                // Tally each group once. With the global snapshot search a
+                // group can appear under both its site host (dependent items)
+                // and the snapshot's host (back-fill); skip if already done.
+                if (isset($counted[$key])) continue;
+                if ($cam_ids || $cam_n > 0) $counted[$key] = true;
                 $rs_tally = [];  // rs_id => count
                 if ($cam_ids) {
+                    // Stash the GUID list so the Cameras tab navigator can
+                    // group cameras by their site/group without re-walking.
+                    $sites[$key]['cameraIds'] = array_values($cam_ids);
                     foreach ($cam_ids as $cid) {
                         $sites[$key]['cams']++;
                         $st = $cam_state[(string) $cid] ?? null;
@@ -717,7 +869,6 @@ class ActionSurveillanceData extends ActionDataBase {
                     // optimistically reports the whole count as online;
                     // the camera-host bridge will correct it once LLD
                     // discovers individual cameras.
-                    $cam_n = (int) ($grp['cam.count'] ?? $grp['cameraCount'] ?? 0);
                     if ($cam_n > 0) {
                         $sites[$key]['cams']   = $cam_n;
                         $sites[$key]['online'] = $cam_n;
@@ -1082,11 +1233,83 @@ class ActionSurveillanceData extends ActionDataBase {
     /* --------------------------------------------------------------------- */
 
     /**
+     * Normalise a Milestone camera GUID for cross-source joins. Different
+     * Milestone REST endpoints can return GUIDs braced vs. bare and with
+     * different casing, which silently breaks per-camera lookups; fold both
+     * sides through here before storing/looking up in any cam_id-keyed map.
+     */
+    private function normCamKey(string $id): string {
+        return strtolower(trim($id, "{} \t\n\r"));
+    }
+
+    /**
+     * Camera GUID → group name, read from the cameras snapshot's per-camera
+     * groupName field (stamped by milestone_cameras_state.py's
+     * /cameraGroups walk). Independent of the groups snapshot, so this is
+     * what carries the navigator's bucketing when the groups reader is
+     * stripped / stale and the per-group cameraIds path delivers nothing.
+     *
+     * Empty when the cameras snapshot is unreachable, predates the
+     * groupName addition, or has no groupName values populated.
+     */
+    private function findCameraGroupNamesFromSnapshot(): array {
+        $snaps = $this->safeGet(fn() => API::Item()->get([
+            'output'      => ['itemid', 'hostid', 'lastvalue'],
+            'search'      => ['key_' => 'milestone_cameras_read.sh'],
+            'startSearch' => true,
+            'monitored'   => true,
+            'webitems'    => false
+        ])) ?: [];
+
+        $map = [];
+        foreach ($snaps as $snap) {
+            $raw = (string) ($snap['lastvalue'] ?? '');
+            if ($raw === '') continue;
+            $blob = json_decode($raw, true);
+            if (!is_array($blob)) continue;
+
+            // The cameras snapshot keeps both __array (for LLD) and per-GUID
+            // top-level entries (for the milestone.cam.raw[<id>] JSONPath).
+            // Either is fine — __array is the canonical iteration.
+            $rows = is_array($blob['__array'] ?? null) ? $blob['__array'] : [];
+            if (!$rows) {
+                // Fall back to top-level GUID-keyed entries.
+                foreach ($blob as $k => $v) {
+                    if (is_string($k) && !str_starts_with($k, '__') && is_array($v)) {
+                        $rows[] = $v;
+                    }
+                }
+            }
+            foreach ($rows as $cam) {
+                if (!is_array($cam)) continue;
+                $cid   = (string) ($cam['id'] ?? '');
+                $gname = trim((string) ($cam['groupName'] ?? ''));
+                if ($cid !== '' && $gname !== '' && !isset($map[$cid])) {
+                    $map[$cid] = $gname;
+                }
+            }
+        }
+        return $map;
+    }
+
+    /**
      * Camera list — one row per LLD-discovered camera. State derives from
      * milestone.cam.status[id] (0 OK / 1 ESS fault / 2 ping down / 3 both /
      * -1 disabled).
      */
     private function buildCameras(array $site_hosts, array $site_items, array $cam_hosts): array {
+        // RS GUID → display hostname, from the per-RS milestone.rs.* items.
+        // Used to turn each camera's milestone.cam.rsid[<id>] into a clickable
+        // recording-server label (matches the id buildServers() assigns to the
+        // per-server page: $rs_hostname ?: $rs_id).
+        $rs_hostname_by_id = [];
+        foreach ($site_items as $bundle) {
+            foreach ($bundle['rs'] ?? [] as $rs_id => $rs) {
+                $hostname = trim((string) ($rs['hostname'] ?? ''));
+                if ($hostname !== '') $rs_hostname_by_id[(string) $rs_id] = $hostname;
+            }
+        }
+
         // Per-Camera Zabbix host lookup by cam_id tag.
         $cam_host_by_id = [];
         foreach ($cam_hosts as $ch) {
@@ -1097,6 +1320,84 @@ class ActionSurveillanceData extends ActionDataBase {
                 }
             }
         }
+
+        // Camera GUID → group (site) name. Mirrors how buildSitesByGroup
+        // attributes cameras: walk each group's cameraIds and resolve the
+        // group's label the same way. Emitted on each camera as $row['group']
+        // so the Cameras-tab navigator can bucket by site/group without
+        // re-joining on the frontend.
+        $cam_group_by_id = [];
+        foreach ($site_items as $bundle) {
+            foreach ($bundle['grp'] ?? [] as $grp_id => $grp) {
+                $cam_ids = is_array($grp['cameraIds'] ?? null) ? $grp['cameraIds'] : [];
+                if (!$cam_ids) continue;
+                $gname = trim((string) ($grp['name'] ?? ''));
+                if ($gname === '') {
+                    $p = trim((string) ($grp['path'] ?? ''));
+                    if ($p !== '' && str_contains($p, '/')) {
+                        $tail = trim((string) strrchr($p, '/'), '/');
+                        if ($tail !== '') $gname = $tail;
+                    } elseif ($p !== '') {
+                        $gname = $p;
+                    }
+                }
+                if ($gname === '') $gname = (string) $grp_id;
+                foreach ($cam_ids as $cid) {
+                    // Normalise the key so case/brace differences between
+                    // Milestone REST endpoints (LLD-discovered cam_id vs
+                    // the cameraIds array in the groups snapshot) can't
+                    // silently break the per-camera join.
+                    $nk = $this->normCamKey((string) $cid);
+                    // First group claiming a camera wins; Milestone groups
+                    // are effectively exclusive at the leaf level.
+                    if (!isset($cam_group_by_id[$nk])) {
+                        $cam_group_by_id[$nk] = $gname;
+                    }
+                }
+            }
+        }
+
+        // Secondary path: per-camera groupName stamped by milestone_cameras_
+        // state.py via its own /cameraGroups walk. The cameras snapshot is
+        // independent of the groups reader, so this is what makes the
+        // navigator bucket correctly when the groups reader is stripped /
+        // stale (the primary path above quietly yields nothing in that case).
+        $cam_groups_from_snap = $this->findCameraGroupNamesFromSnapshot();
+        foreach ($cam_groups_from_snap as $cid => $gname) {
+            $nk = $this->normCamKey((string) $cid);
+            if (!isset($cam_group_by_id[$nk])) {
+                $cam_group_by_id[$nk] = $gname;
+            }
+        }
+
+        // ── Diagnostic accumulators (surfaced on the response as
+        // __camGroupDiag) — temporary, to triage why the Cameras navigator
+        // still buckets everything under "CO-MILESTONE".
+        $diag = [
+            'directGroupHits'    => 0,    // cameras with milestone.cam.group[<id>] populated
+            'snapFallbackHits'   => 0,    // cameras attributed via snapshot map
+            'siteFallbackHits'   => 0,    // cameras that fell through to site_label
+            'camGroupItemsSeen'  => 0,    // any-host count of non-empty $cam['group']
+            'snapMapSize'        => count($cam_group_by_id),
+            'camFieldsSeen'      => [],   // union of all $cam[*] keys across hosts
+            'sampleCam'          => null, // first cam encountered, with its parsed fields
+        ];
+        $fieldSet = [];
+        foreach ($site_items as $bundle) {
+            foreach ($bundle['cam'] ?? [] as $cid => $c) {
+                foreach (array_keys($c) as $k) $fieldSet[$k] = true;
+                if (trim((string) ($c['group'] ?? '')) !== '') $diag['camGroupItemsSeen']++;
+                if ($diag['sampleCam'] === null) {
+                    $diag['sampleCam'] = [
+                        'cid'    => (string) $cid,
+                        'fields' => array_keys($c),
+                        'group'  => $c['group'] ?? null,
+                        'hwname' => $c['hwname'] ?? null,
+                    ];
+                }
+            }
+        }
+        $diag['camFieldsSeen'] = array_keys($fieldSet);
 
         $out = [];
         foreach ($site_hosts as $hid => $h) {
@@ -1111,6 +1412,22 @@ class ActionSurveillanceData extends ActionDataBase {
                     default             => $this->camStatusClass($status)
                 };
                 $cam_host = $cam_host_by_id[$cam_id] ?? null;
+                $rsid     = trim((string) ($cam['rsid'] ?? ''));
+                $server   = $rsid !== '' ? ($rs_hostname_by_id[$rsid] ?? $rsid) : null;
+                // Group attribution prefers the per-camera dependent item
+                // (milestone.cam.group[<id>] extracting $.groupName) — tiny
+                // text value that survives the MySQL TEXT cap that truncates
+                // the 2 MB raw snapshot in history. Snapshot-fallback and
+                // site_label cover installs that haven't templated the new
+                // leaf yet.
+                $direct_group = trim((string) ($cam['group'] ?? ''));
+                if ($direct_group !== '') {
+                    $diag['directGroupHits']++;
+                } elseif (isset($cam_group_by_id[$this->normCamKey($cam_id)])) {
+                    $diag['snapFallbackHits']++;
+                } else {
+                    $diag['siteFallbackHits']++;
+                }
                 $ip = $cam['address'] ?? '';
                 if (!$ip && $cam_host) {
                     foreach ($cam_host['interfaces'] ?? [] as $i) {
@@ -1121,6 +1438,15 @@ class ActionSurveillanceData extends ActionDataBase {
                     'id'        => $cam_id,
                     'name'      => $cam_host['name'] ?? ($cam['hwname'] ?? $cam_id),
                     'site'      => $site_label,
+                    // Camera-group label. Priority:
+                    //   1. milestone.cam.group[<id>]  — per-camera dependent
+                    //      item (tiny string, survives history-TEXT truncation).
+                    //   2. snapshot-derived map (groupName from the cameras
+                    //      snapshot OR cameraIds from the groups snapshot).
+                    //   3. site host label as a last-resort header.
+                    'group'     => $direct_group !== ''
+                                    ? $direct_group
+                                    : ($cam_group_by_id[$this->normCamKey($cam_id)] ?? $site_label),
                     'loc'       => $cam['hwname'] ?? '',
                     'model'     => $cam['hwmodel'] ?? '—',
                     'res'       => null,
@@ -1132,12 +1458,14 @@ class ActionSurveillanceData extends ActionDataBase {
                     'ip'        => $ip ?: null,
                     'mac'       => $cam['mac'] ?? null,
                     'poe'       => null,
-                    'server'    => null,
+                    'server'    => $server,
                     'motion12h' => null,
                     'hostid'    => $cam_host['hostid'] ?? null
                 ];
             }
         }
+        $diag['totalCamsOut'] = count($out);
+        $this->camGroupDiag = $diag;
         return $out;
     }
 

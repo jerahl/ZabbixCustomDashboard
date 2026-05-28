@@ -121,7 +121,10 @@
             // Shortest retention across this site's RSs, in minutes.
             // Published by buildSitesByGroup when the RS extras template
             // is linked; 0 when no per-RS retention is templated yet.
-            retentionMin: num(s.retentionMin)
+            retentionMin: num(s.retentionMin),
+            // Camera GUIDs in this site/group — drives the Cameras tab
+            // navigator's per-group bucketing.
+            cameraIds:    Array.isArray(s.cameraIds) ? s.cameraIds : []
         }));
 
         // ── SERVERS (recording servers) ───────────────────────────────
@@ -163,6 +166,7 @@
         window.CAMERAS = (Array.isArray(boot.cameras) ? boot.cameras : []).map(c => ({
             id:        str(c.id, "—"),
             site:      str(c.site, "—"),
+            group:     str(c.group, c.site || "—"),
             loc:       str(c.loc || c.name, c.id || "—"),
             model:     str(c.model, "—"),
             res:       str(c.res, "—"),
@@ -213,6 +217,12 @@
         }
     };
 
+    // The page now loads with an empty/async boot (the heavy fleet collect
+    // moved to the tcs.surveillance.data endpoint to keep TTFB low). Mark the
+    // app as loading until the first fetch lands so it can show a spinner
+    // instead of an empty shell.
+    const boot = window.SURVEILLANCE_BOOT || {};
+    window.SURVEILLANCE_LOADING = !boot || boot.async === true || !boot.milestone;
     applyBoot(window.SURVEILLANCE_BOOT);
 
     const REFRESH_MS = 30_000;
@@ -228,12 +238,19 @@
             if (!resp.ok) return;
             const fresh = await resp.json();
             applyBoot(fresh);
+            window.SURVEILLANCE_LOADING = false;
             window.dispatchEvent(new CustomEvent("tcs:surveillance-data", { detail: fresh }));
         } catch (e) {
             console.warn("[tcs] surveillance refresh failed:", e);
+            // Don't strand the page on the loading splash — drop the flag and
+            // re-render into the (empty) shell; the next poll will retry.
+            window.SURVEILLANCE_LOADING = false;
+            window.dispatchEvent(new CustomEvent("tcs:surveillance-data", { detail: null }));
         }
     };
 
     window.tcsSurveillanceRefresh = tick;
+    // Kick off the first fetch immediately (after first paint), then poll.
+    tick();
     setInterval(tick, REFRESH_MS);
 })();

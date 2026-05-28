@@ -22,7 +22,6 @@ const TWEAK_DEFAULTS_OV = /*EDITMODE-BEGIN*/{
   "density": "balanced",
   "accent": "#d92929",
   "showSourceBadges": true,
-  "wallSite": "",
   "activeTab": "overview"
 }/*EDITMODE-END*/;
 
@@ -33,9 +32,15 @@ const NVRApp = () => {
     document.documentElement.style.setProperty("--zbx", t.accent);
     document.documentElement.classList.toggle("hide-src-badges", !t.showSourceBadges);
   }, [t.accent, t.showSourceBadges]);
-  // Publish the wall-site tweak onto window so FleetWidgets (rendered
-  // without prop drilling) can read it.
-  useEffectOV(() => { window.TCS_WALL_SITE = t.wallSite || ""; }, [t.wallSite]);
+  // surveillance-bridge.jsx fetches the fleet async after first paint and
+  // updates the window globals in place. Bump a version on each
+  // tcs:surveillance-data event so the tree re-reads them.
+  const [, setDataVersion] = useStateOV(0);
+  useEffectOV(() => {
+    const onData = () => setDataVersion(v => v + 1);
+    window.addEventListener("tcs:surveillance-data", onData);
+    return () => window.removeEventListener("tcs:surveillance-data", onData);
+  }, []);
 
   // Snapshot the live globals once per render so we never re-deref something
   // mid-tree that the bridge swapped out underneath us.
@@ -43,6 +48,17 @@ const NVRApp = () => {
   const SITES_RAW = Array.isArray(window.SITES) ? window.SITES : [];
   const CAMS_RAW  = Array.isArray(window.CAMERAS) ? window.CAMERAS : [];
   const SRVS_RAW  = Array.isArray(window.SERVERS) ? window.SERVERS : [];
+
+  // First load: the bridge hasn't returned the fleet yet. Hold the boot
+  // splash (instead of an empty shell) until the first fetch lands.
+  if (window.SURVEILLANCE_LOADING && SITES_RAW.length === 0 && CAMS_RAW.length === 0) {
+    return (
+      <div className="tcs-boot" role="status" aria-live="polite">
+        <div className="spinner" aria-hidden="true" />
+        <div className="label">Loading surveillance fleet…</div>
+      </div>
+    );
+  }
 
   const densityVar = t.density === "spacious" ? 1.15 : t.density === "dense" ? 0.85 : 1;
 
@@ -114,9 +130,6 @@ const NVRApp = () => {
         <TweakSection title="Visual">
           <TweakColor label="Primary accent" value={t.accent} options={["#d92929","#5b8cff","#34d399","#7c5cff","#f5b300"]} onChange={v => setTweak("accent", v)} />
           <TweakToggle label="Show data-source badges" value={t.showSourceBadges} onChange={v => setTweak("showSourceBadges", v)} />
-        </TweakSection>
-        <TweakSection title="Camera wall">
-          <TweakSelect label="Site to show" value={t.wallSite} options={SITES_RAW.map(s => ({value: s.name, label: s.name}))} onChange={v => setTweak("wallSite", v)} />
         </TweakSection>
       </TweaksPanel>
     </div>

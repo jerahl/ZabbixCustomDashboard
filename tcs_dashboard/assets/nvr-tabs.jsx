@@ -140,22 +140,59 @@ const NvrTabSites = () => {
 // ─────────────────────────────────────────────────────────────
 const NvrTabCameras = () => {
   const all = _tabsArr(window.CAMERAS);
-  const SITES = ["All", ...new Set(all.map(c => c.site))];
+  const SITES_RAW = _tabsArr(window.SITES);
+
+  // Group membership is attributed server-side (buildCameras walks each
+  // group's cameraIds and stamps cam.group). Same join the Sites tab uses
+  // for its per-site cam counts — so the navigator buckets here line up
+  // with what's shown there.
+  const camSite = (c) => c.group || c.site || "Ungrouped";
+
+  // Site → [cameras] in SITES_RAW order, then any "Ungrouped" / extras after.
+  const camsBySite = new Map();
+  for (const c of all) {
+    const s = camSite(c);
+    if (!camsBySite.has(s)) camsBySite.set(s, []);
+    camsBySite.get(s).push(c);
+  }
+  const sitesList = [];
+  for (const s of SITES_RAW) {
+    sitesList.push({ name: s.name, cams: camsBySite.get(s.name) || [] });
+    camsBySite.delete(s.name);
+  }
+  for (const [name, cams] of camsBySite) sitesList.push({ name, cams });
+
+  const [siteFilter,  setSiteFilter]  = useStateNVT("All");
+  const [stateFilter, setStateFilter] = useStateNVT("all");
+  const [q,           setQ]           = useStateNVT("");
+  const [expanded,    setExpanded]    = useStateNVT(() => new Set());
+
   const STATES = [
     { id: "all",  label: "All",     count: all.length },
     { id: "ok",   label: "Online",  count: all.filter(c => c.state === "ok").length },
     { id: "warn", label: "Warning", count: all.filter(c => c.state === "warn").length },
     { id: "err",  label: "Offline", count: all.filter(c => c.state === "err").length }
   ];
-  const [site, setSite]   = useStateNVT("All");
-  const [state, setState] = useStateNVT("all");
-  const [q, setQ]         = useStateNVT("");
+  const SITE_OPTS = ["All", ...sitesList.map(s => s.name)];
 
-  const rows = all.filter(c =>
-    (site === "All" || c.site === site)
-    && (state === "all" || c.state === state)
-    && (!q || ((c.id || "") + (c.loc || "") + (c.model || "") + (c.ip || "")).toLowerCase().includes(q.toLowerCase()))
+  const matchSearch = (c) => !q ||
+    ((c.id || "") + (c.loc || "") + (c.model || "") + (c.ip || "")).toLowerCase().includes(q.toLowerCase());
+  const matchState  = (c) => stateFilter === "all" || c.state === stateFilter;
+
+  // Filtered cameras (drives the thumbnail grid and the navigator counts).
+  const filteredCams = all.filter(c =>
+    (siteFilter === "All" || camSite(c) === siteFilter)
+    && matchState(c)
+    && matchSearch(c)
   );
+
+  const anyFilter = !!q || stateFilter !== "all" || siteFilter !== "All";
+
+  const toggle = (name) => {
+    const next = new Set(expanded);
+    if (next.has(name)) next.delete(name); else next.add(name);
+    setExpanded(next);
+  };
 
   const M = Object.assign({ licenseDeviceUsed: 0 }, window.MILESTONE || {});
 
@@ -165,79 +202,143 @@ const NvrTabCameras = () => {
         <span className="h-title">Camera fleet — {_tabsNz(M.licenseDeviceUsed).toLocaleString()} licensed</span>
         <SourceBadge src="ext" />
         <div className="h-spacer" />
-        <span className="h-meta">showing {rows.length.toLocaleString()} of {all.length.toLocaleString()}</span>
+        <span className="h-meta">showing {filteredCams.length.toLocaleString()} of {all.length.toLocaleString()}</span>
       </div>
 
-      <div className="cam-filter-bar card" style={{ marginBottom: 12 }}>
-        <div className="cfb-group">
-          <span className="cfb-lbl">State</span>
-          {STATES.map(s => (
-            <span key={s.id}
-                  className={"cfb-chip " + (state === s.id ? "active" : "") + " " + s.id}
-                  onClick={() => setState(s.id)}>
-              {s.label} <b>{s.count}</b>
-            </span>
-          ))}
-        </div>
-        <div className="cfb-group">
-          <span className="cfb-lbl">Site</span>
-          <select className="cfb-select" value={site} onChange={e => setSite(e.target.value)}>
-            {SITES.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </div>
-        <div className="cfb-group" style={{ flex: 1 }}>
-          <span className="cfb-lbl">Search</span>
-          <div className="cfb-search">
-            <Icon name="search" size={12}/>
-            <input placeholder="cam id, location, IP, model…" value={q} onChange={e => setQ(e.target.value)} />
+      <div style={{ display: "grid", gridTemplateColumns: "380px 1fr", gap: 14 }}>
+        {/* Left rail: Camera Navigator (mirrors the AP page's APNavigator). */}
+        <div className="card ap-nav-card">
+          <div className="card-h">
+            <h3>Camera Navigator</h3>
+            <SourceBadge src="ext" />
+            <div className="h-spacer" />
+            <span className="h-meta">{all.length.toLocaleString()} cams</span>
+          </div>
+          <div className="ap-nav-search">
+            <Icon name="search" size={12} />
+            <input
+              placeholder="Find camera, location, model, IP…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              spellCheck={false}
+            />
+            {q ? <span className="ap-nav-clear" onClick={() => setQ("")}>×</span> : null}
+          </div>
+          <div className="ap-nav-filter">
+            <div className="seg-toggle">
+              {STATES.map(s => (
+                <button
+                  key={s.id}
+                  className={"seg-btn" + (stateFilter === s.id ? " active" : "")}
+                  onClick={() => setStateFilter(s.id)}
+                  title={s.label}
+                >
+                  {s.label} <b>{s.count}</b>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="ap-nav-filter" style={{ paddingTop: 0 }}>
+            <select
+              className="cfb-select"
+              style={{ flex: 1 }}
+              value={siteFilter}
+              onChange={(e) => setSiteFilter(e.target.value)}
+            >
+              {SITE_OPTS.map(s => <option key={s} value={s}>Site: {s}</option>)}
+            </select>
+          </div>
+          <div className="ap-nav-summary">
+            <span><b>{filteredCams.length.toLocaleString()}</b> shown</span>
+            <span className="dot-sep">·</span>
+            <span><b style={{ color: "var(--ok)" }}>{all.filter(c => c.state === "ok").length}</b> ok</span>
+            <span className="dot-sep">·</span>
+            <span><b style={{ color: "var(--err)" }}>{all.filter(c => c.state === "err").length}</b> down</span>
+          </div>
+          <div className="ap-nav">
+            {sitesList.map(site => {
+              if (siteFilter !== "All" && siteFilter !== site.name) return null;
+              const cams = site.cams.filter(c => matchState(c) && matchSearch(c));
+              if (anyFilter && cams.length === 0) return null;
+              const open = anyFilter ? true : expanded.has(site.name);
+              const errN = site.cams.filter(c => c.state === "err").length;
+              return (
+                <div className="ap-nav-section" key={site.name}>
+                  <div
+                    className={"ap-nav-site" + (open ? "" : " collapsed")}
+                    onClick={() => !anyFilter && toggle(site.name)}
+                  >
+                    <svg className="caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="m4 6 4 4 4-4" />
+                    </svg>
+                    <span className="site-name">{site.name}</span>
+                    <span className="site-count">{cams.length}</span>
+                    {errN > 0 && (
+                      <span className="site-down" title={`${errN} offline / fault`}>{errN}↓</span>
+                    )}
+                  </div>
+                  <div className={"ap-nav-children" + (open ? "" : " hidden")}>
+                    {cams.map(c => {
+                      const dotColor = c.state === "ok"   ? "var(--ok)"
+                                    : c.state === "warn" ? "var(--warn)"
+                                    : "var(--err)";
+                      const href = c.hostid
+                        ? `zabbix.php?action=tcs.camera.view&hostid=${c.hostid}`
+                        : `zabbix.php?action=tcs.camera.view&id=${encodeURIComponent(c.id)}`;
+                      return (
+                        <a
+                          key={c.id}
+                          className="ap-nav-host"
+                          href={href}
+                          title={`${c.loc || c.id} · ${c.ip} · ${c.model}`}
+                          style={{ textDecoration: "none", color: "inherit" }}
+                        >
+                          <span className="ap-led" style={{ background: dotColor, boxShadow: c.state === "ok" ? `0 0 4px ${dotColor}` : "none" }} />
+                          <div className="ap-meta-col">
+                            <div className="ap-id">{c.loc || c.id}</div>
+                            <div className="ap-sub">{c.ip || "—"} · {c.model}</div>
+                          </div>
+                        </a>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+            {sitesList.every(site => {
+              if (siteFilter !== "All" && siteFilter !== site.name) return true;
+              const cams = site.cams.filter(c => matchState(c) && matchSearch(c));
+              return anyFilter && cams.length === 0;
+            }) && (
+              <div style={{ padding: 22, textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
+                No cameras match the current filter.
+              </div>
+            )}
           </div>
         </div>
-      </div>
 
-      <div className="card">
-        <table className="link-tbl nvr-tbl cam-tbl">
-          <thead>
-            <tr>
-              <th style={{ width: 20 }}></th>
-              <th style={{ width: 110 }}>Camera</th>
-              <th>Location</th>
-              <th style={{ width: 110 }}>Site</th>
-              <th style={{ width: 160 }}>Model</th>
-              <th style={{ width: 110 }}>Resolution</th>
-              <th style={{ width: 60, textAlign: "right" }}>FPS</th>
-              <th style={{ width: 90, textAlign: "right" }}>Bitrate</th>
-              <th style={{ width: 110 }}>Recording</th>
-              <th style={{ width: 60, textAlign: "right" }}>PoE</th>
-              <th style={{ width: 110 }}>Server</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(c => (
-              <tr key={c.id}
-                  className={c.state === "err" ? "row-err" : c.state === "warn" ? "row-warn" : ""}
-                  onClick={() => { if (c.hostid) location.href = `zabbix.php?action=tcs.camera.view&hostid=${c.hostid}`; }}>
-                <td><StatusDot state={c.state}/></td>
-                <td className="mono" style={{ color: "var(--accent)" }}>{c.id}</td>
-                <td>
-                  <div style={{ color: "var(--fg)" }}>{c.loc || "—"}</div>
-                  {c.warnMsg && <div style={{ color: "var(--warn)", fontSize: 10 }}>{c.warnMsg}</div>}
-                  {c.errMsg  && <div style={{ color: "var(--err)",  fontSize: 10 }}>{c.errMsg}</div>}
-                </td>
-                <td style={{ color: "var(--fg-2)" }}>{c.site}</td>
-                <td className="mono" style={{ fontSize: 11 }}>{c.model}</td>
-                <td className="mono" style={{ fontSize: 11 }}>{c.res}{c.codec && c.codec !== "—" ? <span style={{ color: "var(--muted)" }}> · {c.codec}</span> : null}</td>
-                <td className="mono" style={{ textAlign: "right", color: c.fps === 0 ? "var(--muted)" : c.fps < 20 ? "var(--warn)" : "var(--fg-2)" }}>{c.fps || "—"}</td>
-                <td className="mono" style={{ textAlign: "right" }}>{c.bitrate ? `${(c.bitrate/1000).toFixed(1)} Mbps` : "—"}</td>
-                <td><span className={"rec-pill " + (!c.recording || c.recording === "—" ? "off" : c.recording === "Motion" ? "alt" : "")}>{c.recording || "—"}</span></td>
-                <td className="mono" style={{ textAlign: "right" }}>{c.poe ? `${c.poe.toFixed(1)} W` : "—"}</td>
-                <td className="mono" style={{ color: "var(--muted)", fontSize: 11 }}>{(c.server || "").replace("tcs-rec-", "")}</td>
-              </tr>
-            ))}
-            {rows.length === 0 && (
-              <tr><td colSpan={11} style={{ padding: 22, textAlign: "center", color: "var(--muted)" }}>No cameras match the current filter.</td></tr>
-            )}
-          </tbody>
-        </table>
+        {/* Right: thumbnail grid for the filtered cameras. */}
+        <div className="card">
+          <div className="card-h">
+            <h3>Thumbnails</h3>
+            <SourceBadge src="ext" />
+            <div className="h-spacer" />
+            <span className="h-meta">
+              {filteredCams.length.toLocaleString()} cameras shown
+              {filteredCams.length > 48 ? ` · first 48` : ""}
+              {" · live snapshot"}
+            </span>
+          </div>
+          {filteredCams.length === 0 ? (
+            <div style={{ padding: 32, textAlign: "center", color: "var(--muted)" }}>
+              No cameras match the current filter.
+            </div>
+          ) : (
+            <div className="cam-grid">
+              {filteredCams.slice(0, 48).map(c => <CamThumb key={c.id} c={c} />)}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

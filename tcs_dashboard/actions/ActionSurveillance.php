@@ -36,13 +36,16 @@ class ActionSurveillance extends ActionBase {
 
     protected function doAction(): void {
         $hostid = $this->getInput('hostid', '');
-        $boot   = (new ActionSurveillanceData())->collect($hostid);
 
+        // Page load is intentionally minimal so the browser gets HTML
+        // immediately instead of spinning through the heavy fleet collect().
+        // surveillance-bridge.jsx fetches tcs.surveillance.data after first
+        // paint and fills the page in, showing a loading splash meanwhile.
         $data = [
             'title'  => _('TCS Surveillance NOC'),
             'view'   => $this->getInput('view', 'overview'),
             'hostid' => $hostid,
-            'boot'   => $boot
+            'boot'   => ['async' => true]
         ];
 
         $response = new CControllerResponseData($data);
