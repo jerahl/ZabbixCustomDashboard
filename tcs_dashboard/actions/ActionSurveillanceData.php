@@ -1224,6 +1224,16 @@ class ActionSurveillanceData extends ActionDataBase {
     /* --------------------------------------------------------------------- */
 
     /**
+     * Normalise a Milestone camera GUID for cross-source joins. Different
+     * Milestone REST endpoints can return GUIDs braced vs. bare and with
+     * different casing, which silently breaks per-camera lookups; fold both
+     * sides through here before storing/looking up in any cam_id-keyed map.
+     */
+    private function normCamKey(string $id): string {
+        return strtolower(trim($id, "{} \t\n\r"));
+    }
+
+    /**
      * Camera GUID → group name, read from the cameras snapshot's per-camera
      * groupName field (stamped by milestone_cameras_state.py's
      * /cameraGroups walk). Independent of the groups snapshot, so this is
