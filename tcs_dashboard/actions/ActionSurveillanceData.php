@@ -700,6 +700,34 @@ class ActionSurveillanceData extends ActionDataBase {
         // licensedHardwareDeviceCount, ... } per Milestone REST shape.
         $license = $this->parseLicense($primary_si['licenseRaw'] ?? '');
 
+        // Fleet storage roll-up across every RS. storage.total.bytes comes
+        // from /storages.maxSize (configured capacity); storage.used.bytes
+        // now comes from /storageInformation.usedSpace (live), wired up by
+        // milestone_rs_state.py via the dedicated per-storage endpoint.
+        // Retention: shortest across all storages (i.e. the soonest data
+        // becomes unrecoverable). Null entries fall through to null so the
+        // tile shows "—" rather than 0 on installs without RS extras yet.
+        $storage_total_b = 0; $storage_used_b = 0;
+        $any_storage = false; $min_retention_min = null;
+        foreach ($site_items as $bundle) {
+            foreach ($bundle['rs'] ?? [] as $rs) {
+                if (isset($rs['storage.total.bytes']) || isset($rs['storage.used.bytes'])) {
+                    $any_storage = true;
+                    $storage_total_b += (int) ($rs['storage.total.bytes'] ?? 0);
+                    $storage_used_b  += (int) ($rs['storage.used.bytes']  ?? 0);
+                }
+                $r = (int) ($rs['storage.retention.minutes'] ?? 0);
+                if ($r > 0 && ($min_retention_min === null || $r < $min_retention_min)) {
+                    $min_retention_min = $r;
+                }
+            }
+        }
+        $storageTotalTB = $any_storage ? round($storage_total_b / 1e12, 2) : null;
+        $storageUsedTB  = $any_storage ? round($storage_used_b  / 1e12, 2) : null;
+        $retentionDays  = $min_retention_min !== null
+            ? (int) floor($min_retention_min / (60 * 24))
+            : null;
+
         return [
             'product'              => $license['product'] ?? 'XProtect',
             'version'              => $primary_si['siteVersion'] ?? '—',
@@ -716,9 +744,9 @@ class ActionSurveillanceData extends ActionDataBase {
             'webClientSessions'    => null,
             'activeAlarms'         => $active_alarms,
             'alarmsAck'            => $ack,
-            'retentionDays'        => null,
-            'storageTotalTB'       => null,
-            'storageUsedTB'        => null,
+            'retentionDays'        => $retentionDays,
+            'storageTotalTB'       => $storageTotalTB,
+            'storageUsedTB'        => $storageUsedTB,
             'evidenceLockSlots'    => null,
             'evidenceLockUsed'     => null
         ];
