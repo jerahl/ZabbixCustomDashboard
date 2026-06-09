@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # milestone_ess_refresh.sh
 # ------------------------
-# Cron/systemd-timer wrapper around milestone_ess_state.py.
+# Cron/systemd-timer wrapper around the ESS state collector.
 #
-# Runs the WebSocket fetch (which can take 1-2 minutes at 2500+ cameras),
-# writes the result atomically to a JSON file, and logs stderr. Zabbix's
-# external check then just reads the file — no 30-second timeout issue.
+# Picks the REST-based collector (milestone_ess_rest_state.py) by default,
+# falling back to the WebSocket collector (milestone_ess_state.py) only
+# when explicitly requested via TCS_ESS_HELPER. The REST path completes
+# in seconds at any fleet size; the WS path's getState scales linearly
+# and takes 1-2 minutes at 2500+ cameras. Both emit the same JSON shape,
+# so Zabbix templates and the dashboard read either transparently.
 #
 # Usage:
 #   milestone_ess_refresh.sh <host> <username> <password> [--scheme https]
@@ -13,6 +16,10 @@
 # Recommended cron entry (as the zabbix user, once a day at 03:15):
 #   15 3 * * * /usr/local/bin/milestone_ess_refresh.sh \
 #              milestone.example.com zbx_monitor 'password' --scheme https
+#
+# To use the legacy WebSocket collector instead:
+#   TCS_ESS_HELPER=/usr/lib/zabbix/externalscripts/milestone_ess_state.py \
+#       /usr/local/bin/milestone_ess_refresh.sh ...
 #
 # Output file:      /var/lib/zabbix/milestone_ess_state.json
 # Log file:         /var/log/zabbix/milestone_ess_state.log
@@ -25,7 +32,7 @@
 
 set -euo pipefail
 
-HELPER="/usr/lib/zabbix/externalscripts/milestone_ess_state.py"
+HELPER="${TCS_ESS_HELPER:-/usr/lib/zabbix/externalscripts/milestone_ess_rest_state.py}"
 OUT_FILE="/var/lib/zabbix/milestone_ess_state.json"
 ERR_FILE="/var/lib/zabbix/milestone_ess_state.err"
 LOG_FILE="/var/log/zabbix/milestone_ess_state.log"
@@ -43,7 +50,7 @@ if ! flock -n 9; then
 fi
 
 START=$(date +%s)
-echo "$(date -Iseconds) starting ESS fetch: $*" >> "$LOG_FILE"
+echo "$(date -Iseconds) starting ESS fetch via $HELPER: $*" >> "$LOG_FILE"
 
 # Run the helper. stdout -> temp file, stderr -> log.
 # The helper exits non-zero on any failure and prints a JSON error to stderr.
