@@ -201,16 +201,25 @@ items; produce the camera LLD that everything else keys on. No `ExternalScripts`
    > **Phase 0 findings (dev, 2026-06-10):** 22 recording servers, ~2,489
    > hardware (≈1:1 hardware↔camera, single-channel). IDP path
    > `/API/IDP/connect/token`; Config base `…/api/rest/v1`. **Paging works**
-   > (`?size=` truncates) — this is the unlock. `includeChildren` does **not**
-   > work on the RS-scoped `/recordingServers/{id}/hardware` (the original
-   > sketch's endpoint) — confirm it on the **global** `/hardware` (re-probe
-   > pending; the deployed python relies on it). `cameraGroups` have no inline
-   > counts. **Still to confirm before writing the SCRIPT:** (a) global
-   > includeChildren embeds cameras + the MAC setting on this Gateway, and (b)
-   > the paged pull completes inside the SCRIPT item timeout at ~2,489 hardware
-   > (paging lets us split across items if not). If MAC isn't available in bulk,
-   > `$.mac` is dropped (degrades XIQ MAC correlation only; host creation uses
-   > `address`, not MAC).
+   > on both `/hardware` and `/cameras` (`?size=` truncates) — the unlock.
+   > `includeChildren=cameras` works on the **global** `/hardware` (embeds
+   > cameras) but **not** on the RS-scoped `/recordingServers/{id}/hardware`.
+   > **MAC is not available in bulk** (no inline settings) → `$.mac` is dropped
+   > (blank), degrading XIQ MAC correlation only; host creation uses `address`,
+   > not MAC. `cameraGroups` have no inline counts.
+   >
+   > **Implemented (parity mode):** `milestone.cameras.getall` is now in the
+   > template alongside the external item (repointing nothing). It uses the
+   > **two-endpoint paged join** (lean `/hardware` + lean `/cameras`, joined on
+   > `relations.parent.id`) rather than includeChildren — both work, but lean
+   > pages keep the Duktape heap smaller. The enrichment join was validated
+   > against the Phase 0 fixtures: address normalisation, hardwareModel (incl.
+   > Bosch-prefixed → vendor regex still matches), RS id, and 81/81 group-camera
+   > parent resolution all correct. **Two checks remain, dev-import only:**
+   > (a) the paged pull completes inside the Script-item timeout at ~2,489
+   > hardware (60s set; paging lets us split across items if not), and (b)
+   > Duktape handles the ~2×2,489-object heap. Then diff vs. the external item
+   > and cut over (repoint LLD + `milestone.cam.raw`, delete the external).
 4. Replace `milestone_groups_read.sh` with SCRIPT `milestone.groups.get`
    (`GET /cameraGroups`) — and since groups carry **no inline counts** (Phase 0),
    it must also walk `GET /cameraGroups/{id}/cameras` per group (26 calls) to
