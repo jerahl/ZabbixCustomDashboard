@@ -256,6 +256,63 @@ ok "GET /recordingServers/$RS_ID/storages -> $ST_N storages (capacity/used/reten
 echo
 
 # ---------------------------------------------------------------------------
+# 6. GLOBAL-endpoint variants — what milestone.cameras.getall will actually do.
+#    Section 2 (Q-A) probed the RS-SCOPED /recordingServers/{id}/hardware, which
+#    does NOT support includeChildren. The deployed milestone_cameras_state.py
+#    uses the GLOBAL /hardware?includeChildren=cameras,settings with paging.
+#    These probes confirm that path on this Gateway.
+# ---------------------------------------------------------------------------
+echo "== 6. Global /hardware includeChildren + /cameras paging =="
+GINC_F="$(get "/hardware?disabled&includeChildren=cameras,settings&size=3" hw_global_inc)"
+if [[ "$HAVE_JQ" == "1" ]]; then
+    g_cams="$(jq -r '[.array[]? | (.cameras // [] | length)] | add // 0' "$GINC_F" 2>/dev/null)"
+    g_settings="$(jq -r 'any(.array[]?; has("settings")) // false' "$GINC_F" 2>/dev/null)"
+    g_mac="$(jq -r '[.. | objects | to_entries[]? | select((.key|ascii_downcase)|test("mac")) | .value] | length' "$GINC_F" 2>/dev/null)"
+else
+    g_cams="$(pyq "$GINC_F" 'sum(len(h.get("cameras",[])) for h in d.get("array",[]))')"
+    g_settings="$(pyq "$GINC_F" 'any("settings" in h for h in d.get("array",[]))')"
+    g_mac="$(python3 - "$GINC_F" <<'PY' 2>/dev/null || echo 0
+import json,sys
+d=json.load(open(sys.argv[1])); n=0
+def walk(o):
+    global n
+    if isinstance(o,dict):
+        for k,v in o.items():
+            if "mac" in str(k).lower(): n+=1
+            walk(v)
+    elif isinstance(o,list):
+        for v in o: walk(v)
+walk(d); print(n)
+PY
+)"
+fi
+if [[ "${g_cams:-0}" =~ ^[0-9]+$ ]] && (( g_cams > 0 )); then
+    ok "GLOBAL /hardware?includeChildren=cameras embeds cameras ($g_cams in 3 hw)"
+    echo "       => milestone.cameras.getall = paged global includeChildren. Viable."
+else
+    warn "GLOBAL includeChildren=cameras did NOT embed cameras either."
+    warn "=> fall back to two-endpoint join: page /hardware + page /cameras, join on parent."
+fi
+[[ "$g_settings" == "true" ]] && ok "GLOBAL includeChildren=settings present" \
+                              || warn "no inline settings globally -> MAC unavailable in bulk"
+[[ "${g_mac:-0}" =~ ^[0-9]+$ ]] && (( g_mac > 0 )) \
+    && ok "MAC-like field present in global payload ($g_mac hits) -> \$.mac preservable" \
+    || warn "no MAC inline -> \$.mac would be blank unless per-hardware /settings fan-out (infeasible)"
+
+# Does the GLOBAL /cameras collection exist and page? (Two-endpoint-join fallback.)
+GCAM2_F="$(get "/cameras?disabled&size=2" cameras_size2)"; GCAM2_N="$(count_array "$GCAM2_F")"
+GCAM_F="$(get "/cameras?disabled" cameras_all)"; GCAM_N="$(count_array "$GCAM_F")"
+ok "GET /cameras?disabled -> $GCAM_N cameras;  &size=2 -> $GCAM2_N"
+if [[ "$GCAM2_N" =~ ^[0-9]+$ ]] && (( GCAM2_N == 2 )); then
+    ok "global /cameras exists AND pages -> two-endpoint join is a valid fallback"
+elif [[ "$GCAM2_N" == "$GCAM_N" && "$GCAM_N" =~ ^[0-9]+$ ]]; then
+    warn "global /cameras returns all (no paging) -> join fallback needs the full /cameras blob"
+else
+    warn "global /cameras inconclusive ($GCAM2_N) -> inspect fixtures/cameras_size2.json"
+fi
+echo
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 cat <<EOF
@@ -263,15 +320,21 @@ cat <<EOF
   IDP token path that works here : $IDP_PATH
   Config REST base               : $API
   recording servers              : $RS_N
-  hardware (first RS)            : ${HW_N:-?}
-  Q-A includeChildren embeds cams: $( [[ "${emb_cams:-0}" =~ ^[0-9]+$ && "${emb_cams:-0}" -gt 0 ]] && echo "YES ($emb_cams)" || echo "NO" )
-  Q-A inline settings/MAC        : $( [[ "$has_settings" == "true" ]] && echo "YES" || echo "NO" )
+  hardware (first RS / total)    : ${HW_N:-?} / ${ALL_N:-?}
+  Q-A includeChildren (RS-scoped): $( [[ "${emb_cams:-0}" =~ ^[0-9]+$ && "${emb_cams:-0}" -gt 0 ]] && echo "embeds cams" || echo "NO (expected; RS-scoped has no includeChildren)" )
+  Q-A* includeChildren (GLOBAL)  : $( [[ "${g_cams:-0}" =~ ^[0-9]+$ && "${g_cams:-0}" -gt 0 ]] && echo "YES embeds cams ($g_cams/3)" || echo "NO -> use two-endpoint join" )
+  global includeChildren MAC     : $( [[ "${g_mac:-0}" =~ ^[0-9]+$ && "${g_mac:-0}" -gt 0 ]] && echo "YES (\$.mac preservable)" || echo "NO (\$.mac blank)" )
   Q-B paging honoured            : $( [[ "${S2_N:-}" =~ ^[0-9]+$ && "${S2_N:-0}" -eq 2 ]] && echo "YES (size= truncates)" || echo "NO (size= ignored)" )
+  global /cameras pages          : $( [[ "${GCAM2_N:-}" =~ ^[0-9]+$ && "${GCAM2_N:-0}" -eq 2 ]] && echo "YES" || echo "NO/all" )
   cameraGroups inline counts     : ${has_counts:-?}
   Fixtures written to            : $FIX
 
   Decision gate for milestone.cameras.getall (brief Phase 1 task 2/3):
-    * Q-A YES  -> implement the one-call-per-RS aggregator as designed.
-    * Q-A NO   -> implement with the per-hardware fallback; soak-test the
-                  largest RS against the SCRIPT item timeout before cutover.
+    * Q-A* GLOBAL YES -> paged global /hardware?includeChildren=cameras,settings
+                         (matches the proven milestone_cameras_state.py path).
+    * Q-A* GLOBAL NO  -> two-endpoint join: page /hardware (address/model/rsid)
+                         + page /cameras (id/enabled/channel), join on
+                         camera.relations.parent.id == hardware.id; \$.mac blank.
+    * Either way: SOAK-TEST total fetch time against the SCRIPT item timeout at
+      ~2489 hardware before cutover (paging lets us split across items if needed).
 EOF
