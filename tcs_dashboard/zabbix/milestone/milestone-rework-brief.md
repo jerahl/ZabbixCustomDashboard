@@ -18,8 +18,8 @@ rationale + endpoint facts). This brief is the build sequence; that doc is the
 - `tcs_dashboard/zabbix/milestone/` — **acquisition**: the Zabbix templates,
   the existing external scripts being removed, the future `collector/` and
   `test/fixtures/`. The base template export (`Milestone XProtect by HTTP` +
-  camera templates) is versioned here (`zbx_export_templates (6).yaml`; Phase 1
-  renames it to `templates/milestone_by_http_api.yaml`).
+  camera templates) is versioned here at
+  `templates/milestone_by_http_api.yaml`.
 - `tcs_dashboard/` (controllers, views, JSX bridges) — **consumption**: the PHP
   module. No Milestone PHP client exists yet.
 
@@ -149,25 +149,47 @@ items; produce the camera LLD that everything else keys on. No `ExternalScripts`
 
 **Tasks**
 1. Rename/curate the versioned base export to
-   `templates/milestone_by_http_api.yaml` (it currently sits at
-   `zbx_export_templates (6).yaml`). Work against that file; re-import to dev
-   to test.
-2. Add a SCRIPT master per recording server:
-   `milestone.rs.cameras[{#RS.ID}]` that does token → `GET /recordingServers/
-   {RS.ID}/hardware` → `GET /hardware/{HW.ID}/cameras`, returning a compact
-   JSON array (id, name, enabled, hw model, RS id, group). **No
-   `?includeChildren`** (payload-size choice; it's the documented escape hatch
-   if per-hardware fan-out proves too slow inside a SCRIPT item — check the
-   sequential-call count of the biggest RS against the item timeout, max 600s).
-   Drive `{#RS.ID}` from the existing RS discovery.
-3. Repoint `milestone.cameras.discovery` (LLD) and all
-   `milestone.cam.<config>[{#CAM.ID}]` dependents to the per-RS masters. Decide
-   single-LLD-with-concat vs. per-RS prototype sets (default: single LLD, JS
-   preprocessing concatenates the per-RS arrays). **Shape decision included:**
-   dependents today resolve `$["<guid>"]` against a map carrying both `__array`
-   and per-GUID keys, and `ActionSurveillanceData.php` back-fills from
-   `__array` — the concat preprocessing must rebuild the per-GUID map, or every
-   dependent JSONPath (and the PHP) changes.
+   `templates/milestone_by_http_api.yaml` (done). Work against that file;
+   re-import to dev to test.
+2. **Camera plane — single native SCRIPT aggregator** (chosen 2026-06 over the
+   original per-RS-masters sketch; see "Why not per-RS item prototypes" below).
+   Add ONE regular SCRIPT item `milestone.cameras.getall` that does token →
+   loop recording servers → `GET /recordingServers/{RS.ID}/hardware?includeChildren=cameras,settings`
+   (one call **per RS**, *not* per hardware) → assemble the **exact legacy
+   shape** `{__count, __fetched_at, __array:[…], "<guid>":{…}}` the old
+   `milestone_cameras_read.sh` produced, with the KEEP field set from
+   `milestone_cameras_state.py` (id, displayName, enabled, address, mac,
+   hardwareId, hardwareName, hardwareModel, channel, lastModified,
+   recordingServerId, groupName, relations). `groupName` still needs a join
+   against `GET /cameraGroups` membership — fetch once and map.
+   **`includeChildren` is used deliberately here** (the documented escape
+   hatch): per-hardware `/hardware/{id}/cameras` fan-out is O(hardware-count)
+   sequential GETs and blows the SCRIPT timeout at fleet scale; RS-scoped
+   includeChildren collapses it to one call per RS. Keep a per-hardware
+   fallback path (as the python has) for API versions that don't embed
+   children.
+3. **Repoint, don't rewire.** Point `milestone.cameras.discovery` (LLD) and
+   `milestone.cam.raw[{#CAM.ID}]` at `milestone.cameras.getall`; all other
+   `milestone.cam.<config>[{#CAM.ID}]` dependents already hang off
+   `milestone.cam.raw` and need no change. Shape is byte-compatible, so
+   `ActionSurveillanceData.php` (which back-fills from `__array`) is untouched.
+
+   **Why not per-RS item prototypes (the original sketch):** Zabbix forbids a
+   dependent item *prototype* from having a master that is a prototype of a
+   *different* LLD rule. Per-RS camera fetchers would be prototypes of the **RS**
+   LLD; the per-camera dependents are prototypes of the **camera** LLD — so they
+   cannot legally depend on per-RS masters. Keeping the `milestone.cam.*` keys
+   stable (a hard guardrail) therefore forces a single regular master holding
+   the whole fleet, exactly as today. The per-RS benefit is preserved where it
+   matters — the **API fetch** is RS-scoped (bounded calls, no single monster
+   request) — only the final assembled value is fleet-sized (history 0, read
+   only by the LLD + dependents).
+
+   > **Gated on Phase 0 (held 2026-06):** the SCRIPT is not written until Phase
+   > 0 confirms (a) `GET /recordingServers/{id}/hardware?includeChildren=cameras,settings`
+   > actually embeds cameras *and* the MAC setting per RS, and (b) the per-RS
+   > call completes well inside the SCRIPT timeout at the largest RS. See
+   > `test/` for the probe that captures these.
 4. Replace `milestone_groups_read.sh` with SCRIPT `milestone.groups.get`
    (`GET /cameraGroups`). Replace `milestone_rs_read.sh` per the RS-extras
    disposition (rework doc §2a): storage rollups + per-storage LLD via
@@ -178,10 +200,14 @@ items; produce the camera LLD that everything else keys on. No `ExternalScripts`
    items from the template.
 
 **Definition of Done:** template imports clean on dev 7.4; camera LLD discovers
-the full fleet via per-RS masters; per-camera **config** items populate; the
-Servers/Storage tabs and Sites storage bar still render (RS-extras parity);
-zero `milestone_*_read.sh` references remain for config; largest single item
-value is a per-RS slice, not the whole fleet.
+the full fleet via `milestone.cameras.getall`; per-camera **config** items
+populate with byte-compatible values (diffed against the old external snapshot
+during parity); the Servers/Storage tabs and Sites storage bar still render
+(RS-extras parity); zero `milestone_*_read.sh` references remain for config.
+The heaviest **API call** is RS-scoped (no whole-fleet single request); the
+aggregator's stored value is whole-fleet by necessity (history 0) — the
+original "per-RS slice stored value" goal was dropped once the cross-LLD master
+constraint made per-RS prototypes unusable for the camera dependents.
 
 **Out of scope:** ESS/status items (still fed by the old `milestone_ess_read.sh`
 until Phase 3 — leave it running for now), dashboard.
