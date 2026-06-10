@@ -154,20 +154,34 @@ items; produce the camera LLD that everything else keys on. No `ExternalScripts`
 2. **Camera plane — single native SCRIPT aggregator** (chosen 2026-06 over the
    original per-RS-masters sketch; see "Why not per-RS item prototypes" below).
    Add ONE regular SCRIPT item `milestone.cameras.getall` that does token →
-   loop recording servers → `GET /recordingServers/{RS.ID}/hardware?includeChildren=cameras,settings`
-   (one call **per RS**, *not* per hardware) → assemble the **exact legacy
-   shape** `{__count, __fetched_at, __array:[…], "<guid>":{…}}` the old
+   page the **global** `GET /hardware?disabled&includeChildren=cameras,settings`
+   (`page`/`size`) → flatten each hardware's embedded `cameras[]` and enrich
+   each camera from its parent hardware → assemble the **exact legacy shape**
+   `{__count, __fetched_at, __array:[…], "<guid>":{…}}` the old
    `milestone_cameras_read.sh` produced, with the KEEP field set from
    `milestone_cameras_state.py` (id, displayName, enabled, address, mac,
    hardwareId, hardwareName, hardwareModel, channel, lastModified,
-   recordingServerId, groupName, relations). `groupName` still needs a join
-   against `GET /cameraGroups` membership — fetch once and map.
-   **`includeChildren` is used deliberately here** (the documented escape
-   hatch): per-hardware `/hardware/{id}/cameras` fan-out is O(hardware-count)
-   sequential GETs and blows the SCRIPT timeout at fleet scale; RS-scoped
-   includeChildren collapses it to one call per RS. Keep a per-hardware
-   fallback path (as the python has) for API versions that don't embed
-   children.
+   recordingServerId, groupName, relations).
+
+   **Enrichment mapping (from Phase 0 fixtures):** the camera object carries
+   only id/displayName/enabled/channel/lastModified and `relations.parent.id`
+   (= hardware id); everything else comes from the hardware record —
+   `address` (normalise `http://10.x.x.x/` → bare host for the SNMP interface
+   IP), `model` → `hardwareModel`, hardware `displayName` → `hardwareName`,
+   hardware `relations.parent.id` → `recordingServerId`. `groupName` is not on
+   either object: build a `camId → group` map from the 26
+   `GET /cameraGroups/{id}/cameras` calls (groups have no inline counts).
+
+   **`includeChildren` is used deliberately on the GLOBAL endpoint** (the
+   documented escape hatch, and the path the deployed
+   `milestone_cameras_state.py` already uses). Per-hardware
+   `/hardware/{id}/cameras` fan-out is O(hardware-count ≈ 2,500) sequential GETs
+   and blows the SCRIPT timeout; global paged includeChildren is ~3–4 calls.
+   **Two-endpoint-join fallback** if global includeChildren turns out not to
+   embed cameras on a given Gateway: page `/hardware` (address/model/rsid) +
+   page `/cameras` (id/enabled/channel) and join on
+   `camera.relations.parent.id == hardware.id` — but this loses `mac` (settings
+   aren't on either bulk object).
 3. **Repoint, don't rewire.** Point `milestone.cameras.discovery` (LLD) and
    `milestone.cam.raw[{#CAM.ID}]` at `milestone.cameras.getall`; all other
    `milestone.cam.<config>[{#CAM.ID}]` dependents already hang off
@@ -180,21 +194,31 @@ items; produce the camera LLD that everything else keys on. No `ExternalScripts`
    LLD; the per-camera dependents are prototypes of the **camera** LLD — so they
    cannot legally depend on per-RS masters. Keeping the `milestone.cam.*` keys
    stable (a hard guardrail) therefore forces a single regular master holding
-   the whole fleet, exactly as today. The per-RS benefit is preserved where it
-   matters — the **API fetch** is RS-scoped (bounded calls, no single monster
-   request) — only the final assembled value is fleet-sized (history 0, read
-   only by the LLD + dependents).
+   the whole fleet, exactly as today. (Global paged includeChildren also turns
+   out to be *fewer* API calls than the per-RS walk — ~4 vs 22+ — so per-RS
+   staging lost its remaining advantage.)
 
-   > **Gated on Phase 0 (held 2026-06):** the SCRIPT is not written until Phase
-   > 0 confirms (a) `GET /recordingServers/{id}/hardware?includeChildren=cameras,settings`
-   > actually embeds cameras *and* the MAC setting per RS, and (b) the per-RS
-   > call completes well inside the SCRIPT timeout at the largest RS. See
-   > `test/` for the probe that captures these.
+   > **Phase 0 findings (dev, 2026-06-10):** 22 recording servers, ~2,489
+   > hardware (≈1:1 hardware↔camera, single-channel). IDP path
+   > `/API/IDP/connect/token`; Config base `…/api/rest/v1`. **Paging works**
+   > (`?size=` truncates) — this is the unlock. `includeChildren` does **not**
+   > work on the RS-scoped `/recordingServers/{id}/hardware` (the original
+   > sketch's endpoint) — confirm it on the **global** `/hardware` (re-probe
+   > pending; the deployed python relies on it). `cameraGroups` have no inline
+   > counts. **Still to confirm before writing the SCRIPT:** (a) global
+   > includeChildren embeds cameras + the MAC setting on this Gateway, and (b)
+   > the paged pull completes inside the SCRIPT item timeout at ~2,489 hardware
+   > (paging lets us split across items if not). If MAC isn't available in bulk,
+   > `$.mac` is dropped (degrades XIQ MAC correlation only; host creation uses
+   > `address`, not MAC).
 4. Replace `milestone_groups_read.sh` with SCRIPT `milestone.groups.get`
-   (`GET /cameraGroups`). Replace `milestone_rs_read.sh` per the RS-extras
+   (`GET /cameraGroups`) — and since groups carry **no inline counts** (Phase 0),
+   it must also walk `GET /cameraGroups/{id}/cameras` per group (26 calls) to
+   produce `cameraCount`/`hardwareCount` and the `__array`+per-GUID shape the
+   groups LLD expects. Replace `milestone_rs_read.sh` per the RS-extras
    disposition (rework doc §2a): storage rollups + per-storage LLD via
    `GET /recordingServers/{id}/storages` SCRIPT chain; camera/hardware counts
-   derived from the per-RS camera masters; RS service state deferred to the
+   derived from the camera aggregator; RS service state deferred to the
    Phase 2 collector.
 5. Set inventory cadence to 1h (or longer). Remove the now-dead EXTERNAL config
    items from the template.
