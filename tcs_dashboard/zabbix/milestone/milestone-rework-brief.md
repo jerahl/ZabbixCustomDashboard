@@ -186,28 +186,28 @@ cutover is deferred to Phase 3 once the collector is healthy.
    `milestone_cameras_state.py` (paged global `/hardware?includeChildren=cameras`
    then `__array` + per-GUID assembly), but in Python (no Duktape limits) and
    running in the same service that holds the ESS WebSocket.
-3. **Groups plane — collector-fed trapper** (`milestone.groups.get`, to add).
-   Same pattern: trapper item with the legacy `{__array,"<guid>":{…}}` shape;
-   collector walks `/cameraGroups` + per-group membership (26 calls — no inline
-   counts) and pushes once a day. Replaces `milestone_groups_read.sh`.
-4. **RS-extras plane — collector-fed trappers** (to add). Per the rework doc
-   §2a disposition:
-   - storage rollups + per-storage LLD ← collector polls
-     `/recordingServers/{id}/storages` and pushes;
-   - camera/hardware counts ← derived from the camera blob in the collector
-     before push (no separate REST call);
-   - RS service state ← arrives via the ESS WebSocket (already collector-owned)
-     rather than REST polling.
-
-   Replaces `milestone_rs_read.sh` and the `template_milestone_rs_extras.yaml`
-   wiring.
+3. **Groups plane — collector-fed trapper** (`milestone.groups.get`, **done**).
+   Trapper item alongside `milestone_groups_read.sh[3600]`; collector will walk
+   `/cameraGroups` + per-group membership (26 calls — no inline counts) and
+   push the legacy `{__array,"<guid>":{…}}` shape once per REST-pump tick.
+4. **RS-extras plane — collector-fed trapper** (`milestone.rs.extras.get`,
+   **done**, on the `Milestone XProtect RS extras by HTTP` template). One
+   trapper receiving the composed blob; the collector assembles per the rework
+   doc §2a disposition:
+   - storage rollups + per-storage `__storages` list ← REST pump walks
+     `/recordingServers/{id}/storages` per RS;
+   - camera/hardware counts ← derived from the camera blob the REST pump
+     already assembles (no extra REST call);
+   - RS service state ← arrives via the ESS WebSocket (collector WS pump),
+     not REST polling.
 5. Set inventory cadences (collector-side: 1h–1d as appropriate per blob). No
    external removal in this phase.
 
-**Definition of Done:** template imports clean on dev 7.4 with the
-collector-fed trapper items present and empty; the existing externals still run
-and feed the live LLDs unchanged (no regression). Repointing the LLDs and
-deleting the externals is Phase 3.
+**Definition of Done (met, dev-import pending):** template parses; three
+collector-fed trapper items present (`milestone.cameras.getall`,
+`milestone.groups.get`, `milestone.rs.extras.get`) and empty; the existing
+externals still run and feed the live LLDs unchanged (no regression).
+Repointing the LLDs and deleting the externals is Phase 3.
 
 **Out of scope:** the collector implementation (Phase 2); any cutover (Phase 3);
 dashboard (Phase 4).
