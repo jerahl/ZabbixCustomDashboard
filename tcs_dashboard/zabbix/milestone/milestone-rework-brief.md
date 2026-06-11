@@ -142,108 +142,75 @@ all observed and captured as fixtures in
 
 ---
 
-## Phase 1 — Inventory plane: native REST SCRIPT items, staged per RS
+## Phase 1 — Template scaffolding for collector-fed inventory
 
-**Objective:** replace the config external scripts with native Zabbix 7.4 SCRIPT
-items; produce the camera LLD that everything else keys on. No `ExternalScripts`.
+**Architecture pivot (2026-06):** native Zabbix Script items cannot do
+fleet-scale inventory here. Duktape cannot hold ~2,500 hardware + ~2,500 camera
+objects in memory during assembly, and the Script-item timeout is hard-capped
+(so paging more aggressively only fixes the API time, not the assembly OOM).
+The Phase 2 collector — already required for ESS WebSocket state — is extended
+to **also** own inventory: a daily REST poll inside the collector pushes the
+camera/groups/RS-extras blobs to **trapper** items via `zabbix_sender`. Result:
+**one** service replaces all eight externals, not just ESS.
+
+**Objective:** scaffold the template so the collector has trapper items to push
+to, with the camera external still live in parallel. No removal happens here —
+cutover is deferred to Phase 3 once the collector is healthy.
 
 **Tasks**
 1. Rename/curate the versioned base export to
-   `templates/milestone_by_http_api.yaml` (done). Work against that file;
-   re-import to dev to test.
-2. **Camera plane — single native SCRIPT aggregator** (chosen 2026-06 over the
-   original per-RS-masters sketch; see "Why not per-RS item prototypes" below).
-   Add ONE regular SCRIPT item `milestone.cameras.getall` that does token →
-   page the **global** `GET /hardware?disabled&includeChildren=cameras,settings`
-   (`page`/`size`) → flatten each hardware's embedded `cameras[]` and enrich
-   each camera from its parent hardware → assemble the **exact legacy shape**
-   `{__count, __fetched_at, __array:[…], "<guid>":{…}}` the old
-   `milestone_cameras_read.sh` produced, with the KEEP field set from
-   `milestone_cameras_state.py` (id, displayName, enabled, address, mac,
-   hardwareId, hardwareName, hardwareModel, channel, lastModified,
-   recordingServerId, groupName, relations).
-
-   **Enrichment mapping (from Phase 0 fixtures):** the camera object carries
-   only id/displayName/enabled/channel/lastModified and `relations.parent.id`
-   (= hardware id); everything else comes from the hardware record —
-   `address` (normalise `http://10.x.x.x/` → bare host for the SNMP interface
-   IP), `model` → `hardwareModel`, hardware `displayName` → `hardwareName`,
-   hardware `relations.parent.id` → `recordingServerId`. `groupName` is not on
-   either object: build a `camId → group` map from the 26
-   `GET /cameraGroups/{id}/cameras` calls (groups have no inline counts).
-
-   **`includeChildren` is used deliberately on the GLOBAL endpoint** (the
-   documented escape hatch, and the path the deployed
-   `milestone_cameras_state.py` already uses). Per-hardware
-   `/hardware/{id}/cameras` fan-out is O(hardware-count ≈ 2,500) sequential GETs
-   and blows the SCRIPT timeout; global paged includeChildren is ~3–4 calls.
-   **Two-endpoint-join fallback** if global includeChildren turns out not to
-   embed cameras on a given Gateway: page `/hardware` (address/model/rsid) +
-   page `/cameras` (id/enabled/channel) and join on
-   `camera.relations.parent.id == hardware.id` — but this loses `mac` (settings
-   aren't on either bulk object).
-3. **Repoint, don't rewire.** Point `milestone.cameras.discovery` (LLD) and
-   `milestone.cam.raw[{#CAM.ID}]` at `milestone.cameras.getall`; all other
-   `milestone.cam.<config>[{#CAM.ID}]` dependents already hang off
-   `milestone.cam.raw` and need no change. Shape is byte-compatible, so
-   `ActionSurveillanceData.php` (which back-fills from `__array`) is untouched.
-
-   **Why not per-RS item prototypes (the original sketch):** Zabbix forbids a
-   dependent item *prototype* from having a master that is a prototype of a
-   *different* LLD rule. Per-RS camera fetchers would be prototypes of the **RS**
-   LLD; the per-camera dependents are prototypes of the **camera** LLD — so they
-   cannot legally depend on per-RS masters. Keeping the `milestone.cam.*` keys
-   stable (a hard guardrail) therefore forces a single regular master holding
-   the whole fleet, exactly as today. (Global paged includeChildren also turns
-   out to be *fewer* API calls than the per-RS walk — ~4 vs 22+ — so per-RS
-   staging lost its remaining advantage.)
+   `templates/milestone_by_http_api.yaml` (done).
+2. **Camera plane — collector-fed trapper** (`milestone.cameras.getall`, done).
+   Shape matches the legacy external snapshot (`{__count, __fetched_at,
+   __array:[…], "<guid>":{…}}`) so the camera LLD and every
+   `milestone.cam.<config>[{#CAM.ID}]` dependent can be repointed here unchanged
+   on cutover. Item exists alongside the live `milestone_cameras_read.sh[3600]`
+   external; nothing depends on it yet.
 
    > **Phase 0 findings (dev, 2026-06-10):** 22 recording servers, ~2,489
    > hardware (≈1:1 hardware↔camera, single-channel). IDP path
-   > `/API/IDP/connect/token`; Config base `…/api/rest/v1`. **Paging works**
-   > on both `/hardware` and `/cameras` (`?size=` truncates) — the unlock.
-   > `includeChildren=cameras` works on the **global** `/hardware` (embeds
-   > cameras) but **not** on the RS-scoped `/recordingServers/{id}/hardware`.
-   > **MAC is not available in bulk** (no inline settings) → `$.mac` is dropped
-   > (blank), degrading XIQ MAC correlation only; host creation uses `address`,
-   > not MAC. `cameraGroups` have no inline counts.
+   > `/API/IDP/connect/token`; Config base `…/api/rest/v1`. Both `/hardware` and
+   > `/cameras` page (`?size=` truncates); `includeChildren=cameras` works on
+   > the global `/hardware` (embeds cameras) but **not** on the RS-scoped
+   > `/recordingServers/{id}/hardware`. **MAC is not available in bulk** (no
+   > inline settings) → `$.mac` will be blank from the collector path too
+   > (degrades XIQ MAC correlation only; host creation uses `address`).
+   > `cameraGroups` have no inline counts.
    >
-   > **Implemented (parity mode):** `milestone.cameras.getall` is now in the
-   > template alongside the external item (repointing nothing). It uses the
-   > **two-endpoint paged join** (lean `/hardware` + lean `/cameras`, joined on
-   > `relations.parent.id`) rather than includeChildren — both work, but lean
-   > pages keep the Duktape heap smaller. The enrichment join was validated
-   > against the Phase 0 fixtures: address normalisation, hardwareModel (incl.
-   > Bosch-prefixed → vendor regex still matches), RS id, and 81/81 group-camera
-   > parent resolution all correct. **Two checks remain, dev-import only:**
-   > (a) the paged pull completes inside the Script-item timeout at ~2,489
-   > hardware (60s set; paging lets us split across items if not), and (b)
-   > Duktape handles the ~2×2,489-object heap. Then diff vs. the external item
-   > and cut over (repoint LLD + `milestone.cam.raw`, delete the external).
-4. Replace `milestone_groups_read.sh` with SCRIPT `milestone.groups.get`
-   (`GET /cameraGroups`) — and since groups carry **no inline counts** (Phase 0),
-   it must also walk `GET /cameraGroups/{id}/cameras` per group (26 calls) to
-   produce `cameraCount`/`hardwareCount` and the `__array`+per-GUID shape the
-   groups LLD expects. Replace `milestone_rs_read.sh` per the RS-extras
-   disposition (rework doc §2a): storage rollups + per-storage LLD via
-   `GET /recordingServers/{id}/storages` SCRIPT chain; camera/hardware counts
-   derived from the camera aggregator; RS service state deferred to the
-   Phase 2 collector.
-5. Set inventory cadence to 1h (or longer). Remove the now-dead EXTERNAL config
-   items from the template.
+   > A native paged-join Script item was prototyped (validated against fixtures:
+   > 81/81 group-camera parent resolution, Bosch vendor regex still matches).
+   > It was reverted when dev confirmed Duktape OOMs at fleet scale and the
+   > timeout can't be raised — hence the pivot to collector-pushed trapper.
 
-**Definition of Done:** template imports clean on dev 7.4; camera LLD discovers
-the full fleet via `milestone.cameras.getall`; per-camera **config** items
-populate with byte-compatible values (diffed against the old external snapshot
-during parity); the Servers/Storage tabs and Sites storage bar still render
-(RS-extras parity); zero `milestone_*_read.sh` references remain for config.
-The heaviest **API call** is RS-scoped (no whole-fleet single request); the
-aggregator's stored value is whole-fleet by necessity (history 0) — the
-original "per-RS slice stored value" goal was dropped once the cross-LLD master
-constraint made per-RS prototypes unusable for the camera dependents.
+   The collector's REST-poll path will mirror the proven
+   `milestone_cameras_state.py` (paged global `/hardware?includeChildren=cameras`
+   then `__array` + per-GUID assembly), but in Python (no Duktape limits) and
+   running in the same service that holds the ESS WebSocket.
+3. **Groups plane — collector-fed trapper** (`milestone.groups.get`, to add).
+   Same pattern: trapper item with the legacy `{__array,"<guid>":{…}}` shape;
+   collector walks `/cameraGroups` + per-group membership (26 calls — no inline
+   counts) and pushes once a day. Replaces `milestone_groups_read.sh`.
+4. **RS-extras plane — collector-fed trappers** (to add). Per the rework doc
+   §2a disposition:
+   - storage rollups + per-storage LLD ← collector polls
+     `/recordingServers/{id}/storages` and pushes;
+   - camera/hardware counts ← derived from the camera blob in the collector
+     before push (no separate REST call);
+   - RS service state ← arrives via the ESS WebSocket (already collector-owned)
+     rather than REST polling.
 
-**Out of scope:** ESS/status items (still fed by the old `milestone_ess_read.sh`
-until Phase 3 — leave it running for now), dashboard.
+   Replaces `milestone_rs_read.sh` and the `template_milestone_rs_extras.yaml`
+   wiring.
+5. Set inventory cadences (collector-side: 1h–1d as appropriate per blob). No
+   external removal in this phase.
+
+**Definition of Done:** template imports clean on dev 7.4 with the
+collector-fed trapper items present and empty; the existing externals still run
+and feed the live LLDs unchanged (no regression). Repointing the LLDs and
+deleting the externals is Phase 3.
+
+**Out of scope:** the collector implementation (Phase 2); any cutover (Phase 3);
+dashboard (Phase 4).
 
 ---
 
@@ -258,61 +225,108 @@ Milestone sample — it already encodes the production lessons (rework doc §4a)
 `websockets` >=13/<13 header-kwarg shim, `source` prefix-stripping, and
 `stategroupid` dedup (`by_group`).
 
+The collector now owns **two** push paths against the same XProtect Gateway,
+sharing one token-refresh loop and one secrets file:
+
+- **WS push (continuous)** — the original Phase 2 design: holds the ESS
+  WebSocket, baselines via `getState`, streams deltas to the per-camera
+  `milestone.cam.ess.*` trappers.
+- **REST poll (periodic)** — the Phase 1 pivot: daily (or per-blob cadence)
+  fetches of the camera, groups, and RS-storage collections, pushed as JSON
+  blobs to the corresponding `milestone.*` trapper items.
+
+**Seed code:** for the WS path, start from the in-repo `milestone_ess_state.py`
+(production lessons: `max_size` 128 MB, `getState`-vs-keepalive interplay,
+`websockets` >=13/<13 header-kwarg shim, `source` prefix-stripping,
+`stategroupid` dedup). For the REST path, port `milestone_cameras_state.py`'s
+paged global `/hardware?includeChildren=cameras` walk + `__array`+per-GUID
+assembly — it's already proven at this fleet scale and we cleared its constraints
+on Phase 1's failed Script-item attempt.
+
 **Tasks**
 1. Adapt into `collector/milestone_collector.py`:
-   - token fetch + **background refresh** before `expires_in`; apply fresh token
-     on next reconnect (the Milestone sample has neither — both are new work).
-   - connect loop with reconnect/backoff; `startSession` resume via stored
-     `sessionId` + `lastEventId`; **branch on status**: 201 (new *or* failed
-     resume) → `addSubscription` (filter per Phase 0 task 7 outcome) +
-     `getState` baseline; 200 → continue.
-   - **read-pump design**: keepalive pings must be serviced while the 1–2 min
-     `getState` baseline assembles — a long-lived collector can't run with
-     `ping_interval=None` like the one-shot script does. This is the phase's
-     main engineering risk; design it first.
-   - strip the `cameras/` prefix from `source`; classify comm vs. rec via
-     `stategroupid`; emit `zabbix_sender` lines against the single Milestone
-     host (`<host> milestone.cam.ess.comm.type[<guid>] <value>`).
-2. Add **trapper** item prototypes to the template, repointing the existing keys:
-   `milestone.cam.ess.comm.type[{#CAM.ID}]`, `…comm.time`, `…rec.type`,
-   `…ess.raw` → type **Zabbix trapper**, fed by the collector. Keep
-   `milestone.cam.status` / `…alarm` CALCULATED unchanged. Add the RS
-   service-state trapper (RS-extras disposition).
+   - shared token fetch + **background refresh** before `expires_in`; the WS
+     applies fresh token on next reconnect, the REST poll picks it up next tick
+     (the Milestone sample has neither — both are new work).
+   - **WS pump** (async task): connect loop with reconnect/backoff;
+     `startSession` resume via stored `sessionId` + `lastEventId`; **branch on
+     status**: 201 (new *or* failed resume) → `addSubscription` (filter per
+     Phase 0 task 7 outcome) + `getState` baseline; 200 → continue. Read-pump
+     design — keepalive pings must be serviced while the 1–2 min `getState`
+     baseline assembles (the one-shot script's `ping_interval=None` is not an
+     option for a daemon). Strip the `cameras/` prefix from `source`; classify
+     comm vs. rec via `stategroupid`; emit `zabbix_sender` lines.
+   - **REST pump** (scheduled task, daily/per-blob): page
+     `/hardware?includeChildren=cameras`, page `/cameraGroups` + per-group
+     membership, walk `/recordingServers/{id}/storages` per RS; assemble the
+     legacy `{__array,"<guid>":{…}}` shapes the LLDs expect; push as one
+     `zabbix_sender` line per blob to `milestone.cameras.getall`,
+     `milestone.groups.get`, and the RS-storage trappers.
+   - **No GUID→host registry needed:** cameras are LLD item prototypes on the
+     single Milestone host (rework doc §4); sender lines are
+     `<milestone-host> <key[guid]> <value>`.
+2. Add **trapper** item prototypes to the template:
+   - State trappers: repoint `milestone.cam.ess.comm.type[{#CAM.ID}]`,
+     `…comm.time`, `…rec.type`, `…ess.raw` to **Zabbix trapper**, fed by the WS
+     pump. Keep `milestone.cam.status` / `…alarm` CALCULATED unchanged.
+   - Inventory trappers: `milestone.cameras.getall` (done), `milestone.groups.get`,
+     the RS-storage trappers, RS service-state trapper.
 3. Config via env/secrets file (host, scheme, creds, Zabbix server addr, sender
-   host-name strategy). Structured logging; exit non-zero on fatal.
+   host-name strategy, per-blob REST cadences). Structured logging; exit
+   non-zero on fatal.
 4. Provide a `systemd` unit (`collector/milestone-collector.service`) and a
    `--once` / dry-run mode that prints sender lines without sending.
 
-**Definition of Done:** toggling a camera's comm/recording state on dev — or,
-if Phase 0 task 8 confirmed it reaches the WS stream, a synthetic
-`POST /events` trigger — shows up in the corresponding Zabbix trapper item
-within seconds; killing and restarting the collector recovers state (resume
-< 30s, else `getState` re-baseline); a status trigger fires/clears correctly.
-Optionally load-test the sender fan-out with `POST /events/bulk`.
+**Definition of Done:** toggling a camera's comm/recording state on dev — or a
+synthetic `POST /events` trigger if Phase 0 task 8 confirmed it reaches the WS
+stream — shows up in the corresponding Zabbix trapper item within seconds; the
+REST pump's first run populates `milestone.cameras.getall` (and the groups/RS
+trappers) with values byte-compatible against the legacy externals (diffed
+during parity); killing and restarting the collector recovers WS state (resume
+< 30s, else `getState` re-baseline) and re-runs the REST pump on schedule; a
+status trigger fires/clears correctly. Optionally load-test sender fan-out
+with `POST /events/bulk`.
 
-**Out of scope:** decommissioning old ESS script (Phase 3), dashboard.
+**Out of scope:** repointing the LLDs / deleting the externals (Phase 3),
+dashboard (Phase 4).
 
 ---
 
 ## Phase 3 — Cutover & decommission (production gate)
 
-**Objective:** retire all external scripts; collector + REST become the sole
-source. Reversible.
+**Objective:** retire **all** external scripts (state and inventory); the
+collector becomes the sole source. Reversible.
 
 **Tasks**
-1. Run collector + native template **in parallel** with the old
-   `milestone_ess_read.sh` on dev; diff state values for a soak period.
-2. On parity, remove `milestone_ess_read.sh` and any remaining
-   `milestone_*_read.{sh,py}` from template and `ExternalScripts`.
-3. Decommission sweep — run against the **live** `externalscripts/` dir and
+1. Run the collector in parallel with **all** existing externals on dev for a
+   soak period: diff `milestone.cam.ess.*` against `milestone_ess_read.sh`'s
+   parsed output (state), and diff `milestone.cameras.getall`/`milestone.groups.get`/
+   the RS-storage trappers against the corresponding `milestone_*_read.sh`
+   externals (inventory). Field-level parity on the camera blob is the
+   load-bearing check — that's what drives the LLD and every per-camera
+   dependent.
+2. On parity, repoint the LLDs and dependents to the trapper items:
+   - `milestone.cameras.discovery` master + `milestone.cam.raw[{#CAM.ID}]`
+     master → `milestone.cameras.getall` (per-camera dependents below already
+     hang off `milestone.cam.raw` and need no further change).
+   - `milestone.groups.discovery` master + `milestone.grp.raw[{#GRP.ID}]`
+     master → `milestone.groups.get`.
+   - RS-storage discoveries / dependents → the RS-storage trappers.
+   - ESS state items → already trapper-fed at Phase 2 import.
+3. Remove **all** Milestone external items from the template
+   (`milestone_cameras_read.sh[3600]`, `milestone_ess_read.sh[]`,
+   `milestone_groups_read.sh[3600]`, `milestone_rs_read.sh[3600]`) and the
+   `Milestone XProtect RS extras by HTTP` template linkage if its content is
+   now redundant.
+4. Decommission sweep — against the **live** `externalscripts/` dir and
    crontab, not just git (at least one deployed script,
    `milestone_groups_state.py`, was never in the repo): remove cron entries,
    `/var/lib/zabbix/milestone_*.json` snapshots, and the matching
    `.err`/`.lock`/log files.
-4. Confirm `grep -r ExternalScripts` / template has **zero** Milestone external
+5. Confirm `grep -r ExternalScripts` / template has **zero** Milestone external
    refs. Update the milestone README + the dashboard integration-plan §3c (the
-   "deploy 8 scripts" step is gone).
-5. Production rollout: import template, deploy collector service, set secret
+   "deploy N scripts" step is gone).
+6. Production rollout: import template, deploy collector service, set secret
    macros. Keep the old scripts archived (git tag) for rollback.
 
 **Definition of Done:** production runs with no Milestone external scripts (and
