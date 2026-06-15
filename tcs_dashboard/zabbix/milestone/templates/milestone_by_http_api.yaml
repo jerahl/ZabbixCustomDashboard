@@ -1080,176 +1080,32 @@ zabbix_export:
             - tag: component
               value: site
         - uuid: c1d2e3f405162738495a6b7c8d9e0f10
-          name: 'Milestone: Get all cameras (native batch master, parity)'
-          type: SCRIPT
+          name: 'Milestone: All cameras (collector-fed trapper)'
+          type: TRAP
           key: milestone.cameras.getall
-          delay: 1h
           history: '0'
           value_type: TEXT
-          params: |
-            // Native replacement for milestone_cameras_read.sh — no external
-            // script, no cron, no snapshot file. Produces the SAME shape the
-            // external item produced ({__count,__fetched_at,__array:[...],
-            // "<guid>":{...}}) so the camera LLD and every milestone.cam.*
-            // dependent can repoint here unchanged once dev parity is verified.
-            //
-            // PARITY MODE: added alongside milestone_cameras_read.sh[3600];
-            // nothing is repointed yet. Compare this item's value against the
-            // external one on dev, then flip the LLD + milestone.cam.raw master
-            // and delete the external item (Phase 1 cutover).
-            //
-            // Strategy (Phase 0 verified on dev, 2026-06): both /hardware and
-            // /cameras support paging, so page each lean collection and join in
-            // memory on relations.parent.id. Lean pages keep Duktape heap small
-            // vs. includeChildren=cameras (which also works but embeds full
-            // camera objects per hardware).
-            var p = JSON.parse(value);
-            var base = p.scheme + '://' + p.host;
-
-            // 1. OAuth token (same flow as milestone.rs.getall).
-            var reqT = new HttpRequest();
-            reqT.addHeader('Content-Type: application/x-www-form-urlencoded');
-            var tokenResp = reqT.post(base + '/IDP/connect/token',
-              'grant_type=password'
-              + '&username=' + encodeURIComponent(p.user)
-              + '&password=' + encodeURIComponent(p.password)
-              + '&client_id=' + encodeURIComponent(p.client_id));
-            if (reqT.getStatus() !== 200) {
-              throw 'IDP error ' + reqT.getStatus() + ': ' + tokenResp;
-            }
-            var token = JSON.parse(tokenResp).access_token;
-            if (!token) throw 'No access_token returned';
-
-            var api = base + '/api/rest/v1';
-            var req = new HttpRequest();
-            req.addHeader('Authorization: Bearer ' + token);
-            req.addHeader('Accept: application/json');
-
-            // Page a collection endpoint, concatenating .array across pages.
-            function pagedGet(path) {
-              var out = [];
-              var page = 0;
-              var size = 1000;
-              while (page < 100) {
-                var sep = (path.indexOf('?') >= 0) ? '&' : '?';
-                var r = req.get(api + path + sep + 'page=' + page + '&size=' + size);
-                if (req.getStatus() !== 200) {
-                  throw 'GET ' + path + ' page ' + page + ' -> ' + req.getStatus() + ': ' + r;
-                }
-                var arr = JSON.parse(r).array || [];
-                for (var i = 0; i < arr.length; i++) out.push(arr[i]);
-                if (arr.length < size) break;
-                page++;
-              }
-              return out;
-            }
-
-            // Strip scheme/creds/port/path from a hardware address -> bare
-            // host/IP, matching milestone_cameras_state.py's bare_host(). This
-            // is the SNMP interface IP the camera host_prototype uses
-            // ({#CAM.HW.IP} = $.address).
-            function bareHost(a) {
-              if (!a) return '';
-              var s = String(a).replace(/^[a-zA-Z]+:\/\//, '');
-              var at = s.indexOf('@'); if (at >= 0) s = s.substring(at + 1);
-              s = s.split('/')[0];
-              s = s.split(':')[0];
-              return s;
-            }
-
-            // 2. Bulk hardware (address, model, name, parent RS) keyed by id.
-            var hw = pagedGet('/hardware?disabled');
-            var hwMap = {};
-            for (var i = 0; i < hw.length; i++) {
-              if (hw[i] && hw[i].id) hwMap[hw[i].id] = hw[i];
-            }
-
-            // 3. Group membership -> camId : groupName. Best-effort per group
-            //    so one failing group can't sink the whole item. Drop this
-            //    block if the soak test shows the per-group fan-out is too slow
-            //    (the dashboard now buckets cameras by recording server).
-            var camGroup = {};
-            try {
-              var grpResp = req.get(api + '/cameraGroups');
-              if (req.getStatus() === 200) {
-                var groups = JSON.parse(grpResp).array || [];
-                for (var g = 0; g < groups.length; g++) {
-                  var grp = groups[g];
-                  if (!grp || !grp.id) continue;
-                  var gname = grp.displayName || grp.name || '';
-                  try {
-                    var members = pagedGet('/cameraGroups/' + grp.id + '/cameras');
-                    for (var m = 0; m < members.length; m++) {
-                      if (members[m] && members[m].id && !camGroup[members[m].id]) {
-                        camGroup[members[m].id] = gname;
-                      }
-                    }
-                  } catch (e) { /* skip this group's membership */ }
-                }
-              }
-            } catch (e) { /* groups optional */ }
-
-            // 4. Cameras -> enrich from parent hardware. mac is intentionally
-            //    blank: it lives only in per-hardware settings, which this
-            //    Gateway does not embed via includeChildren (Phase 0), and
-            //    per-hardware /settings fan-out (~2500 calls) is not viable in
-            //    a Script item. ONVIF devices already report blank mac.
-            var cams = pagedGet('/cameras?disabled');
-            var out = { __count: 0, __fetched_at: '', __array: [] };
-            for (var c = 0; c < cams.length; c++) {
-              var cam = cams[c];
-              if (!cam || !cam.id) continue;
-              var parentId = (cam.relations && cam.relations.parent) ? cam.relations.parent.id : '';
-              var h = hwMap[parentId] || {};
-              var rsId = (h.relations && h.relations.parent) ? h.relations.parent.id : '';
-              var rec = {
-                id: cam.id,
-                displayName: cam.displayName,
-                enabled: cam.enabled,
-                channel: cam.channel,
-                lastModified: cam.lastModified,
-                address: bareHost(h.address),
-                mac: '',
-                hardwareId: parentId,
-                hardwareName: h.displayName || '',
-                hardwareModel: h.model || '',
-                recordingServerId: rsId,
-                groupName: camGroup[cam.id] || '',
-                relations: cam.relations
-              };
-              out.__array.push(rec);
-              out[cam.id] = rec;
-            }
-            out.__count = out.__array.length;
-            out.__fetched_at = (new Date()).toISOString();
-            return JSON.stringify(out);
           description: |
-            Native (Script-item) replacement for milestone_cameras_read.sh.
-            Pages the global /hardware and /cameras collections (both support
-            paging, verified Phase 0) and joins them in memory on
-            relations.parent.id, emitting the same {__array + per-GUID} shape
-            the external snapshot produced.
+            Fleet camera inventory blob, pushed by the Phase 2 collector service
+            (one daily zabbix_sender push). Shape matches what
+            milestone_cameras_read.sh produced: {__count, __fetched_at,
+            __array:[...], "<guid>":{...}} — so the camera LLD and every
+            milestone.cam.* dependent can be repointed here on cutover with no
+            other schema changes.
 
-            PARITY MODE: runs alongside milestone_cameras_read.sh[3600]; nothing
-            depends on it yet. Diff its value against the external item on dev,
-            confirm field fidelity and that it completes inside the Script-item
-            timeout at ~2500 hardware, then repoint milestone.cameras.discovery
-            and milestone.cam.raw[{#CAM.ID}] here and remove the external item.
+            REASON FOR TRAPPER (not SCRIPT): a native Script item can't hold or
+            assemble ~2500 hardware + ~2500 cameras inside Duktape, and the
+            Script-item timeout is hard-capped (paging doesn't fix the
+            assembly OOM). The collector already owns the long-lived,
+            credential-bearing connection to the Gateway for the ESS WebSocket;
+            adding a daily REST poll there collapses the original "8 externals"
+            into a single service that pushes both inventory (this item) and
+            per-camera state (the milestone.cam.ess.* trappers).
 
-            Known difference vs. the external: $.mac is always "" (the MAC is a
-            per-hardware setting not exposed in bulk; see params comment).
-          timeout: 60s
-          parameters:
-            - name: client_id
-              value: '{$MILESTONE.CLIENT_ID}'
-            - name: host
-              value: '{$MILESTONE.HOST}'
-            - name: password
-              value: '{$MILESTONE.PASSWORD}'
-            - name: scheme
-              value: '{$MILESTONE.SCHEME}'
-            - name: user
-              value: '{$MILESTONE.USER}'
+            Until the collector is in place, this item has no data — the
+            external milestone_cameras_read.sh[3600] above remains the live
+            source. Phase 3 cutover repoints the LLD + milestone.cam.raw here
+            and deletes the external item.
           tags:
             - tag: component
               value: camera
@@ -1302,6 +1158,26 @@ zabbix_export:
                 The daily milestone_ess_refresh.sh cron has not produced a fresh
                 snapshot, or it has been failing. Check the log at
                 /var/log/zabbix/milestone_ess_state.log on the Zabbix server/proxy.
+        - uuid: d2e3f405162738495a6b7c8d9e0f1011
+          name: 'Milestone: All camera groups (collector-fed trapper)'
+          type: TRAP
+          key: milestone.groups.get
+          history: '0'
+          value_type: TEXT
+          description: |
+            Camera-group inventory blob, pushed by the Phase 2 collector
+            (one zabbix_sender push per REST-pump tick). Shape matches what
+            milestone_groups_read.sh produced: {__count, __fetched_at,
+            __array:[...], "<guid>":{...}} — so the groups LLD and per-group
+            dependents below can be repointed here on cutover with no schema
+            changes. The collector walks /cameraGroups + per-group membership
+            (Phase 0: no inline counts) to populate cameraCount/hardwareCount.
+
+            Lives parallel to milestone_groups_read.sh[3600] until Phase 3
+            cutover repoints the LLD and deletes the external.
+          tags:
+            - tag: component
+              value: group
         - uuid: 1f9b3d5cf2914aebaa11a2b6cf57e9d6
           name: 'Milestone: Get all camera groups (batch master)'
           type: EXTERNAL
@@ -2453,6 +2329,32 @@ zabbix_export:
       groups:
         - name: Templates/Video
       items:
+        - uuid: e3f405162738495a6b7c8d9e0f101112
+          name: 'Milestone RS: extras snapshot (collector-fed trapper)'
+          type: TRAP
+          key: milestone.rs.extras.get
+          history: '0'
+          value_type: TEXT
+          description: |
+            Recording-server extras blob (service state, per-RS camera/hardware
+            counts, storage capacity/used/retention, per-storage rows), pushed
+            by the Phase 2 collector. Shape matches what milestone_rs_read.sh
+            produced (__array + per-RS-GUID keys + __storages flat list) — so
+            both LLDs in this template (RS-extras discovery, RS-storage
+            discovery) and their dependents can repoint here at cutover.
+
+            Collector composition (rework doc §2a):
+              - service state: from the WS pump (live, not REST polled);
+              - storage rollups + __storages: REST pump walks
+                /recordingServers/{id}/storages per RS;
+              - camera/hardware counts: derived from the camera blob the REST
+                pump already assembles, no extra REST call.
+
+            Lives parallel to milestone_rs_read.sh[3600] until Phase 3 cutover
+            repoints both LLDs and deletes the external.
+          tags:
+            - tag: component
+              value: recording-server
         - uuid: 3a9c8d4b1e6f4a728d5b0c2e9f1a7b34
           name: 'Milestone RS: state snapshot (master)'
           type: EXTERNAL

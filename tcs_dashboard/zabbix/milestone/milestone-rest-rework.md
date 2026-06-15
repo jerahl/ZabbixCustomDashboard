@@ -43,7 +43,7 @@ cadences, and *transport models* (poll vs. push).
 
 | Plane | Source | Transport | Consumer | Ingest |
 |---|---|---|---|---|
-| Inventory | Gateway `/cameras`, `/cameraGroups`, `/recordingServers`, `/hardware` | REST poll (1h–1d) | Zabbix | SCRIPT item → LLD |
+| Inventory | Gateway `/cameras`, `/cameraGroups`, `/recordingServers`, `/hardware` | REST poll inside the collector (1h–1d) | Zabbix | trapper items ← `zabbix_sender` |
 | Status — monitoring | Events & State WebSocket | push, collector daemon, 24/7, service acct | Zabbix (alerting/history) | trapper items |
 | Status — live UI | Events & State WebSocket | push, browser client, operator-attended | Surveillance NOC page | direct `window.MILESTONE` |
 
@@ -51,67 +51,105 @@ Both status rows hit the **same** WS API (`wss://<host>/api/ws/events/v1`); they
 differ only in consumer and transport. The collector is unattended and durable;
 the browser client is live-only and ephemeral. See §7.
 
+**Inventory pivot (2026-06):** the inventory row was originally specced as
+"Zabbix SCRIPT item → LLD" (native, no helper). Dev import revealed that at
+this fleet's scale (~2,500 hardware / ~2,500 cameras) Duktape cannot hold the
+assembled blob and the SCRIPT-item timeout is hard-capped — paging the API more
+aggressively only fixes the fetch time, not the assembly OOM. The collector
+already owns the long-lived, credential-bearing connection for the WS path, so
+the inventory REST poll moved into the collector too: one service, one
+`zabbix_sender` push path, trapper items on the Zabbix side. See §2 below.
+
 ---
 
-## 2. Inventory plane — pure REST, no `.sh`/`.py` (feasible, unchanged)
+## 2. Inventory plane — collector-pushed trappers (pivot, 2026-06)
 
-The template already runs SCRIPT items doing OAuth + REST inline
-(`milestone.license.get`, `milestone.rs.getall`, `milestone.sites.get`). Convert
-the remaining config externals the same way:
+The template still runs a handful of small Script items that pull a single
+collection inline (`milestone.license.get`, `milestone.rs.getall`,
+`milestone.sites.get`) — those stay native. But the **fleet-scale** config
+collections (cameras, groups, RS storages) move to the collector:
 
 | Current external item | Replace with |
 |---|---|
-| `milestone_cameras_read.sh[3600]` | SCRIPT item(s), staged per recording server (§3) |
-| `milestone_groups_read.sh[3600]` | SCRIPT item `GET /cameraGroups` |
-| `milestone_rs_read.sh[3600]` | richer RS SCRIPT chain — see the RS-extras caveat below |
+| `milestone_cameras_read.sh[3600]` | trapper `milestone.cameras.getall` ← collector REST pump |
+| `milestone_groups_read.sh[3600]` | trapper `milestone.groups.get` ← collector REST pump |
+| `milestone_rs_read.sh[3600]` | RS-storage trappers + RS service state on the WS pump (RS-extras §2a) |
 
-Caveats (true today, hidden by the shell layer): SCRIPT items can't share a
-cached token (each master re-auths — fine at 1h–1d); a single blob of 2,500
-cameras is large and every dependent prototype re-parses it (→ stage, §3).
+**Why this changed from the original "pure REST, no helper" design.** Dev import
+confirmed two limits on Zabbix 7.4 Script items at this fleet's scale:
+Duktape's JS heap cannot hold the assembled `{__array,"<guid>":{…}}` blob with
+~2,500 cameras × ~2,500 hardware joined, and the Script-item timeout is
+hard-capped (paging the API smaller doesn't help — the OOM is in assembly, not
+fetch). Two earlier-rejected alternatives also fail: multi-item shard with
+external assembly collapses back to needing one master item that doesn't
+exist; per-RS staging via the RS LLD can't feed camera-LLD dependents
+(cross-LLD master rule, see §3 below).
 
-### 2a. RS extras need a home (review finding)
+What *does* work, and is also the cleanest end state: the Phase 2 collector
+already owns a long-lived, credential-bearing connection to the Gateway for
+the WS path, so adding a periodic REST pump there costs almost nothing
+operationally and **one** service replaces all eight externals (not just ESS).
+The trapper items on the Zabbix side carry the legacy shape; the LLDs and
+per-camera dependents see no schema change at cutover.
+
+### 2a. RS extras disposition (review finding)
 
 `milestone_rs_read.sh` is **not** a thin `GET /recordingServers` wrapper.
 Per `milestone_rs_state.py` and its README, the snapshot carries RS service
 state, per-RS camera/hardware counts, storage capacity/used/retention rollups,
 and the per-storage LLD that power the Servers/Storage tabs and the Sites
-storage bar. "Fold into `milestone.rs.getall`" loses all of that. Disposition:
+storage bar. Disposition:
 
-- **Storage rollups / per-storage LLD** — `GET /recordingServers/{id}/storages`
-  and `GET /storageInformation/{id}` exist in the Config API; either a richer
-  per-RS SCRIPT chain or fold into the Phase 2 collector.
-- **Camera/hardware counts** — derive for free from the new per-RS
-  `milestone.rs.cameras[{#RS.ID}]` masters (§3); no extra calls.
+- **Storage rollups / per-storage LLD** — collector REST pump walks
+  `GET /recordingServers/{id}/storages` per RS and pushes to RS-storage
+  trappers.
+- **Camera/hardware counts** — derive for free from the camera blob the REST
+  pump already assembles; no extra calls.
 - **RS service state** — live state; by this doc's own split it belongs to the
-  status plane (collector), not REST polling.
+  status plane (collector WS pump), not REST polling.
 
 ---
 
-## 3. Staging the inventory pull — `/cameras` has no pagination
+## 3. Why per-RS Script-item staging doesn't work either (left for context)
 
-`GET /cameras` accepts only `?disabled=` (confirmed against the Config API
-spec — no `page`/`pageSize`, no RS filter). One call = full array. To avoid the
-monster blob:
+`GET /cameras` originally appeared to lack paging (the OpenAPI spec declares
+no `page`/`size`); Phase 0 found paging actually works on this deployment. The
+original sketch was therefore to stage the inventory pull as one Script-item
+master *per recording server* via
+`GET /recordingServers/{id}/hardware` → `GET /hardware/{id}/cameras`. That
+design fails for two independent reasons:
 
-1. **Partition by recording server.** One master per RS via
-   `GET /recordingServers/{id}/hardware` → `GET /hardware/{id}/cameras`. Each
-   blob is a few hundred cameras; fan-out is per-RS; pollers parallelize.
-2. **Minimize the object.** No `?includeChildren=…`. LLD needs only id, name,
-   enabled, hw model, RS id, group.
-3. **Slow cadence.** 1h (current `[3600]`) up to 1d. This is the LLD source —
-   it defines hosts/items, it is *not* where status comes from.
+1. **Cross-LLD master rule.** Zabbix forbids a dependent item *prototype* from
+   having a master that is a prototype of a *different* LLD rule. Per-RS
+   camera fetchers would be prototypes of the **RS** LLD; per-camera dependents
+   are prototypes of the **camera** LLD — they can't legally connect. Keeping
+   the `milestone.cam.*` keys stable (a hard guardrail) requires a single
+   master holding the whole fleet, which is what fails the Script-item heap
+   limits in §2.
+2. **Per-hardware fan-out blows the Script-item timeout.** Even at the largest
+   RS, walking `/hardware/{id}/cameras` per hardware is O(135) sequential GETs
+   per item, and there are 22 such items.
 
-**Pagination caveat (review finding).** The Config API spec declares **no**
-`page`/`size` parameters on `/hardware` or `/cameras`, yet the deployed
-`milestone_cameras_state.py` sends `?disabled&includeChildren=cameras&page=0&size=10000`
-and works — either the Gateway honors undocumented paging or silently ignores
-it and returns everything. Probe this on dev (request `size=2`, see if it
-truncates) before sizing the per-RS SCRIPT payloads. The documented
-`page`/`size` (0+, 1–2000) paging belongs to the *Events* REST API, not the
-Config API — easy to conflate. `includeChildren` itself **is** documented
-per-resource (hardware can embed its cameras); the "no `includeChildren`" rule
-above is a payload-size choice, not a correctness one, and remains the escape
-hatch if per-hardware fan-out is too slow inside a SCRIPT item.
+Both constraints land at the same conclusion as §2: the inventory assembly
+runs in the collector (Python, no Duktape heap, no timeout cap), not in Zabbix.
+
+**Reference notes** (carried over from earlier drafts that planned native
+staging — kept because the collector's REST pump observes the same facts):
+
+- **Pagination.** The Config API OpenAPI spec declares no `page`/`size` on
+  `/hardware` or `/cameras`, but Phase 0 (2026-06) confirmed both collections
+  honour paging on this deployment. The documented `page`/`size` (0+, 1–2000)
+  paging belongs to the Events REST API — easy to conflate.
+- **`includeChildren`.** Works on the **global** `/hardware` (embeds cameras),
+  does **not** work on the RS-scoped `/recordingServers/{id}/hardware`. MAC is
+  not exposed in bulk via any `includeChildren=settings` path on this Gateway
+  (Phase 0); the collector accepts `$.mac=""` rather than fanning out to
+  per-hardware `/settings`.
+- **Minimal object.** The trapper consumers only need id, displayName, enabled,
+  address, hardwareId, hardwareName, hardwareModel, channel, lastModified,
+  recordingServerId, groupName, relations — the collector slims to those
+  before pushing (matches `milestone_cameras_state.py`'s KEEP set).
+- **Cadence.** 1h–1d per blob (collector-side scheduling).
 
 ---
 
@@ -234,15 +272,17 @@ log) must be checked on dev first.
 
 | Current | Target | Notes |
 |---|---|---|
-| `milestone_cameras_read.sh[3600]` | N× `milestone.rs.cameras[{#RS.ID}]` SCRIPT masters | per-RS staging; camera LLD becomes dependent on these |
-| `milestone.cam.*[{#CAM.ID}]` config dependents | unchanged | JSONPath off the per-RS masters |
-| `milestone_ess_read.sh[]` | WebSocket collector → trapper items | push, not external poll |
+| `milestone_cameras_read.sh[3600]` | trapper `milestone.cameras.getall` ← collector REST pump | legacy `{__array,"<guid>":{…}}` shape preserved |
+| `milestone.cam.*[{#CAM.ID}]` config dependents | unchanged | repointed master = the new trapper; same JSONPath |
+| `milestone_ess_read.sh[]` | trapper items ← collector WS pump | push, not external poll |
 | `milestone.cam.ess.*[{#CAM.ID}]` | repointed to trapper masters | keys unchanged; collector populates |
-| `milestone_groups_read.sh[3600]` | `milestone.groups.get` SCRIPT | `GET /cameraGroups` |
-| `milestone_rs_read.sh[3600]` | richer RS SCRIPT chain + collector (see §2a) | storage rollups via `/recordingServers/{id}/storages`; counts from per-RS camera masters; RS state from collector |
+| `milestone_groups_read.sh[3600]` | trapper `milestone.groups.get` ← collector REST pump | groups + per-group membership (no inline counts) |
+| `milestone_rs_read.sh[3600]` | RS-storage trappers ← REST pump; RS state ← WS pump | counts derived from camera blob, no extra REST call |
 
 Result: **zero** files in `ExternalScripts/`; **one** collector service for
-status; everything else native template items.
+both inventory and status; the small inline SCRIPT items already in the
+template (`milestone.license.get`, `milestone.rs.getall`, `milestone.sites.get`)
+remain native.
 
 ---
 
