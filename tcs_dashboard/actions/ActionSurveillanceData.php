@@ -5,6 +5,7 @@ namespace Modules\TcsDashboard\Actions;
 use API;
 use CControllerResponseData;
 use CControllerResponseFatal;
+use Modules\TcsDashboard\Lib\MilestoneClient;
 
 /**
  * GET zabbix.php?action=tcs.surveillance.data
@@ -113,6 +114,10 @@ class ActionSurveillanceData extends ActionDataBase {
                 $out['alarms']        = $this->buildAlarms($problems);
                 $out['siteDetails']   = (object) [];
                 $out['evidenceLocks'] = [];
+                // Mint a short-lived bearer for the browser WS bridge. Best
+                // effort: a failure here just means the page renders without
+                // live state — Zabbix-fed history still works.
+                $out['milestoneWs']   = $this->buildMilestoneWsHandshake();
                 break;
             }
             case 'cameras': {
@@ -1759,6 +1764,42 @@ class ActionSurveillanceData extends ActionDataBase {
         } catch (\Throwable $e) {
             error_log('[tcs] Surveillance API call failed: '.$e->getMessage());
             return [];
+        }
+    }
+
+    /**
+     * Build the {url, token, expiresAt} object the browser WS bridge needs to
+     * open wss://<gateway>/api/ws/events/v1 and authenticate in-band. The
+     * VMS password is never sent to the browser — only a short-lived token
+     * is. Returns null if any of:
+     *   - the Milestone macros aren't configured on this Zabbix
+     *   - the IDP rejected the credentials
+     *   - the curl call to the Gateway failed
+     * In any of those cases the page still renders Zabbix-fed history;
+     * surveillance-ws.jsx just doesn't open a connection.
+     */
+    private function buildMilestoneWsHandshake(): ?array {
+        try {
+            $lookup = function (string $name): string {
+                $rows = API::UserMacro()->get([
+                    'output'      => ['value'],
+                    'globalmacro' => true,
+                    'filter'      => ['macro' => $name],
+                ]) ?: [];
+                return (string) ($rows[0]['value'] ?? '');
+            };
+            $client = MilestoneClient::fromMacros($lookup);
+            if ($client === null) return null;
+            $tok = $client->mintToken();
+            if ($tok === null) return null;
+            return [
+                'url'       => $client->wsUrl(),
+                'token'     => $tok['access_token'],
+                'expiresAt' => time() + (int) $tok['expires_in'],
+            ];
+        } catch (\Throwable $e) {
+            error_log('[tcs] milestone WS handshake: ' . $e->getMessage());
+            return null;
         }
     }
 }
