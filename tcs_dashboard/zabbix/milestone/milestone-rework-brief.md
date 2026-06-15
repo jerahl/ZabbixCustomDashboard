@@ -219,6 +219,22 @@ dashboard (Phase 4).
 **Objective:** one durable service that holds the WS, baselines via `getState`,
 streams deltas, and pushes per-camera state into Zabbix trapper items.
 
+**Operational decisions (locked 2026-06-15):**
+- **Host:** Zabbix **proxy** that already polls the Milestone hosts.
+  `zabbix_sender` targets the proxy on 10051 (loopback if the proxy ships the
+  collector; otherwise short LAN path). Outbound 443 to the API Gateway is
+  already permitted from the proxy.
+- **WS subscription filter:** `modifier:include`, `resourceTypes:['cameras']`,
+  the 5 camera-level event-type GUIDs from the brief's Orientation table
+  (Phase 0 task 7 stategroup-coverage audit confirmed they cover every state
+  group the template's `milestone.cam.ess.*` and CALCULATED items read).
+- **Secrets:** `/etc/milestone-collector/env` (0600 root:root), loaded by the
+  systemd unit via `EnvironmentFile=`. Variables match
+  `test/.env.example` (`MILESTONE_HOST`, `MILESTONE_SCHEME`, `MILESTONE_USER`,
+  `MILESTONE_PASSWORD`, `MILESTONE_CLIENT_ID`, `MILESTONE_VERIFY_TLS`) plus
+  `ZABBIX_SERVER` (proxy address) and `ZABBIX_SENDER_HOST` (the host name the
+  trapper items live on).
+
 **Seed code:** start from the in-repo `milestone_ess_state.py`, **not** the
 Milestone sample — it already encodes the production lessons (rework doc §4a):
 `max_size` 128 MB, the `getState`-vs-keepalive-ping interplay, the
