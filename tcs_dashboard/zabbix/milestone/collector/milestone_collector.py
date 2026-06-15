@@ -261,6 +261,9 @@ class ZabbixSender:
     def __init__(self, cfg: Config, dry_run: bool = False) -> None:
         self.cfg = cfg
         self.dry_run = dry_run
+        # If zabbix_sender is missing (typical on a dev box), log the warning
+        # once at startup instead of on every batch send.
+        self._missing_warned = False
 
     def _zbx_host_port(self) -> tuple[str, str]:
         host, _, port = self.cfg.zabbix_server.partition(":")
@@ -287,8 +290,16 @@ class ZabbixSender:
         try:
             r = subprocess.run(cmd, input=stdin, text=True,
                                capture_output=True, timeout=60)
-        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-            log.error("zabbix_sender failed: %r", e)
+        except FileNotFoundError as e:
+            if not self._missing_warned:
+                log.error("zabbix_sender not found at %r — every send_batch "
+                          "will be a no-op until installed (%r). Use --dry-run "
+                          "on dev boxes that don't have zabbix-sender.",
+                          self.cfg.sender_bin, e)
+                self._missing_warned = True
+            return
+        except subprocess.TimeoutExpired as e:
+            log.error("zabbix_sender timed out: %r", e)
             return
         # zabbix_sender exits 0 on success, 2 on partial. Log both stdout/stderr.
         if r.returncode != 0:
@@ -796,9 +807,28 @@ async def _flush_cameras(sender: ZabbixSender,
 # ---------------------------------------------------------------------------
 async def amain(args: argparse.Namespace) -> int:
     cfg = load_config()
-    sender = ZabbixSender(cfg, dry_run=args.dry_run)
+    # --dry-run takes precedence; MILESTONE_DRY_RUN=1 in the env is a fallback
+    # so it can be forced from a .env file even if the CLI flag is forgotten.
+    dry_run = bool(args.dry_run) or os.environ.get("MILESTONE_DRY_RUN", "0") == "1"
+    sender = ZabbixSender(cfg, dry_run=dry_run)
 
-    connector = aiohttp.TCPConnector(ssl=False if not cfg.verify_tls else None)
+    # Startup banner — confirms what mode the service actually started in,
+    # rather than what the user thinks the flags say.
+    log.info("startup: dry_run=%s ws_only=%s rest_only=%s once=%s "
+             "gateway=%s zbx_server=%s sender_host=%s",
+             dry_run, args.ws_only, args.rest_only, args.once,
+             cfg.base_url, cfg.zabbix_server, cfg.zabbix_sender_host)
+
+    # aiohttp: ssl=False disables TLS entirely; for "https without verify" we
+    # need an SSL context with verification turned off, not None either.
+    ssl_ctx: ssl.SSLContext | bool = True
+    if cfg.scheme == "https" and not cfg.verify_tls:
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
+    elif cfg.scheme != "https":
+        ssl_ctx = False  # plain http only
+    connector = aiohttp.TCPConnector(ssl=ssl_ctx)
     async with aiohttp.ClientSession(connector=connector) as http:
         tokens = TokenStore(cfg, http)
         # Force one upfront refresh so config errors surface immediately.
