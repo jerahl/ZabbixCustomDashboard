@@ -390,19 +390,36 @@ token); detail views render from the shared payload; pages off mock data.
 **Objective:** make the collector and bridge production-grade and observable.
 
 **Tasks**
-1. **Monitor the monitor:** Zabbix item + trigger on collector liveness
-   (heartbeat trapper or systemd watchdog) — alert if state stops flowing.
-2. Token/secret rotation runbook; verify behavior across token expiry, Gateway
-   restart, and network blips (forced reconnect + re-baseline).
-3. Collector metrics: events/sec, reconnect count, last-baseline time, send
-   failures. Log rotation. Backoff caps.
-4. Docs: collector README (install, systemd, config, secrets,
-   troubleshooting); update the dashboard README for the surveillance pages and
-   CORS posture.
+1. **Monitor the monitor (done).** Heartbeat trapper `milestone.collector.heartbeat`
+   on the template; collector emits a JSON metrics snapshot every 60 s from a
+   dedicated asyncio task (independent of the WS/REST pumps). Two triggers:
+   `nodata(...,5m)=1` HIGH on the heartbeat (process down / proxy unreachable),
+   and `last(...ws.connected)=0` AVERAGE (alive but WS detached).
+2. **Token / rotation runbook (done).** `collector/README.md` "Token / secret
+   rotation" covers the proxy `EnvironmentFile` rotation, the dashboard's
+   `{$MILESTONE.PASSWORD}` macro rotation, and the verification steps in the
+   browser console. Induced-failure tests (Gateway restart, token expiry,
+   network blips) listed alongside.
+3. **Collector metrics (done).** `Metrics` bag mutated by the pumps; pushed
+   as the heartbeat JSON. Dependent items on the template surface
+   `ws.connected`, `ws.reconnects`, `ws.events_received`, `sender.failures`
+   for trending. Log rotation is the OS's job (the unit emits to journald);
+   no in-process log file to rotate. Backoff is capped at 60 s in the WS
+   pump already.
+4. **RS service-state plumb-through (done).** Collector's REST pump derives
+   per-RS `state` from `enabled` + `lastStatusHandshake` age (`running` /
+   `stale` / `disabled` / `unknown`) — coarse but accurate on the 15 min
+   REST cadence and avoids subscribing the WS to a second resource type.
+5. **Docs (done).** Top-level `tcs_dashboard/zabbix/milestone/README.md`
+   rewritten with the new architecture and end-state; collector README
+   carries the runbook and induced-failure tests; CORS / `Origin` posture
+   documented there for the Phase 4 bridge.
 
-**Definition of Done:** a deliberately induced Gateway restart and a token
-expiry both auto-recover with no manual action and ≤ one resume gap; collector
-downtime raises a Zabbix alert; runbook covers rotation and rollback.
+**Definition of Done:** heartbeat trapper present and rising; `nodata(5m)`
+trigger configured; runbook covers rotation and induced-failure tests;
+`collector/README.md` "Known gaps" section is empty (`/metrics` exposition
+is parked behind "only if a Prom stack lands on the proxy"). Production
+acceptance is each induced-failure test passing in a dev maintenance window.
 
 ---
 

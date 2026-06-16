@@ -1158,6 +1158,112 @@ zabbix_export:
                 The daily milestone_ess_refresh.sh cron has not produced a fresh
                 snapshot, or it has been failing. Check the log at
                 /var/log/zabbix/milestone_ess_state.log on the Zabbix server/proxy.
+        - uuid: f405162738495a6b7c8d9e0f10111213
+          name: 'Milestone collector: heartbeat (master)'
+          type: TRAP
+          key: milestone.collector.heartbeat
+          history: 7d
+          value_type: TEXT
+          description: |
+            Liveness + metrics JSON pushed by the collector once per minute.
+            Shape:
+              {
+                "ts": <epoch>,
+                "ws":   {"connected": true|false, "session": "...",
+                         "last_baseline_at": <epoch>, "reconnects": N,
+                         "events_received": N, "events_applied": N},
+                "rest": {"last_cameras_at": <epoch>, "last_groups_at": <epoch>,
+                         "last_rs_extras_at": <epoch>, "errors": N},
+                "sender": {"batches": N, "failures": N, "items": N}
+              }
+            Dependent items below surface the load-bearing fields for
+            trending; the raw blob stays here for ad-hoc inspection in
+            Latest Data.
+          triggers:
+            - uuid: 4a5b6c7d8e9f1011213a4b5c6d7e8f90
+              expression: 'nodata(/Milestone XProtect by HTTP/milestone.collector.heartbeat,5m)=1'
+              name: 'Milestone collector: no heartbeat for 5m (state pipeline stale)'
+              priority: HIGH
+              description: |
+                The collector hasn't published a heartbeat in five minutes.
+                milestone-collector.service is either down, deadlocked, or
+                unable to reach the Zabbix proxy (zabbix_sender). While this
+                fires, the ESS state items (milestone.cam.ess.*) are NOT
+                being updated -- live alarms via that path are blind.
+                Check: systemctl status milestone-collector on the proxy,
+                journalctl -u milestone-collector -n 200.
+          tags:
+            - tag: component
+              value: collector
+        - uuid: 05162738495a6b7c8d9e0f1011121314
+          name: 'Milestone collector: WS connected'
+          type: DEPENDENT
+          key: milestone.collector.ws.connected
+          value_type: UNSIGNED
+          valuemap:
+            name: 'Bool string'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.ws.connected
+            - type: BOOL_TO_DECIMAL
+          master_item:
+            key: milestone.collector.heartbeat
+          tags:
+            - tag: component
+              value: collector
+          triggers:
+            - uuid: 162738495a6b7c8d9e0f101112131415
+              expression: 'last(/Milestone XProtect by HTTP/milestone.collector.ws.connected)=0'
+              name: 'Milestone collector: WS not connected'
+              priority: AVERAGE
+              description: |
+                Collector is alive (heartbeats arriving) but its WebSocket
+                to the Gateway is down. Camera state deltas are dropped
+                until reconnect succeeds. Usually clears itself in minutes;
+                a long stretch points at a Gateway outage or credentials.
+        - uuid: 2738495a6b7c8d9e0f10111213141516
+          name: 'Milestone collector: WS reconnects (cumulative)'
+          type: DEPENDENT
+          key: milestone.collector.ws.reconnects
+          value_type: UNSIGNED
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.ws.reconnects
+          master_item:
+            key: milestone.collector.heartbeat
+          tags:
+            - tag: component
+              value: collector
+        - uuid: 38495a6b7c8d9e0f1011121314151617
+          name: 'Milestone collector: WS events received (cumulative)'
+          type: DEPENDENT
+          key: milestone.collector.ws.events
+          value_type: UNSIGNED
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.ws.events_received
+          master_item:
+            key: milestone.collector.heartbeat
+          tags:
+            - tag: component
+              value: collector
+        - uuid: 495a6b7c8d9e0f101112131415161718
+          name: 'Milestone collector: sender failures (cumulative)'
+          type: DEPENDENT
+          key: milestone.collector.sender.failures
+          value_type: UNSIGNED
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.sender.failures
+          master_item:
+            key: milestone.collector.heartbeat
+          tags:
+            - tag: component
+              value: collector
         - uuid: d2e3f405162738495a6b7c8d9e0f1011
           name: 'Milestone: All camera groups (collector-fed trapper)'
           type: TRAP
