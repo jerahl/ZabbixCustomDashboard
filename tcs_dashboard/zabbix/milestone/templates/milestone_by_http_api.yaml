@@ -1079,6 +1079,36 @@ zabbix_export:
           tags:
             - tag: component
               value: site
+        - uuid: c1d2e3f405162738495a6b7c8d9e0f10
+          name: 'Milestone: All cameras (collector-fed trapper)'
+          type: TRAP
+          key: milestone.cameras.getall
+          history: '0'
+          value_type: TEXT
+          description: |
+            Fleet camera inventory blob, pushed by the Phase 2 collector service
+            (one daily zabbix_sender push). Shape matches what
+            milestone_cameras_read.sh produced: {__count, __fetched_at,
+            __array:[...], "<guid>":{...}} — so the camera LLD and every
+            milestone.cam.* dependent can be repointed here on cutover with no
+            other schema changes.
+
+            REASON FOR TRAPPER (not SCRIPT): a native Script item can't hold or
+            assemble ~2500 hardware + ~2500 cameras inside Duktape, and the
+            Script-item timeout is hard-capped (paging doesn't fix the
+            assembly OOM). The collector already owns the long-lived,
+            credential-bearing connection to the Gateway for the ESS WebSocket;
+            adding a daily REST poll there collapses the original "8 externals"
+            into a single service that pushes both inventory (this item) and
+            per-camera state (the milestone.cam.ess.* trappers).
+
+            Until the collector is in place, this item has no data — the
+            external milestone_cameras_read.sh[3600] above remains the live
+            source. Phase 3 cutover repoints the LLD + milestone.cam.raw here
+            and deletes the external item.
+          tags:
+            - tag: component
+              value: camera
         - uuid: f370cf5bc43140869b083d6525c3c49d
           name: 'Milestone: Get all cameras (batch master)'
           type: EXTERNAL
@@ -1128,6 +1158,132 @@ zabbix_export:
                 The daily milestone_ess_refresh.sh cron has not produced a fresh
                 snapshot, or it has been failing. Check the log at
                 /var/log/zabbix/milestone_ess_state.log on the Zabbix server/proxy.
+        - uuid: f405162738495a6b7c8d9e0f10111213
+          name: 'Milestone collector: heartbeat (master)'
+          type: TRAP
+          key: milestone.collector.heartbeat
+          history: 7d
+          value_type: TEXT
+          description: |
+            Liveness + metrics JSON pushed by the collector once per minute.
+            Shape:
+              {
+                "ts": <epoch>,
+                "ws":   {"connected": true|false, "session": "...",
+                         "last_baseline_at": <epoch>, "reconnects": N,
+                         "events_received": N, "events_applied": N},
+                "rest": {"last_cameras_at": <epoch>, "last_groups_at": <epoch>,
+                         "last_rs_extras_at": <epoch>, "errors": N},
+                "sender": {"batches": N, "failures": N, "items": N}
+              }
+            Dependent items below surface the load-bearing fields for
+            trending; the raw blob stays here for ad-hoc inspection in
+            Latest Data.
+          triggers:
+            - uuid: 4a5b6c7d8e9f1011213a4b5c6d7e8f90
+              expression: 'nodata(/Milestone XProtect by HTTP/milestone.collector.heartbeat,5m)=1'
+              name: 'Milestone collector: no heartbeat for 5m (state pipeline stale)'
+              priority: HIGH
+              description: |
+                The collector hasn't published a heartbeat in five minutes.
+                milestone-collector.service is either down, deadlocked, or
+                unable to reach the Zabbix proxy (zabbix_sender). While this
+                fires, the ESS state items (milestone.cam.ess.*) are NOT
+                being updated -- live alarms via that path are blind.
+                Check: systemctl status milestone-collector on the proxy,
+                journalctl -u milestone-collector -n 200.
+          tags:
+            - tag: component
+              value: collector
+        - uuid: 05162738495a6b7c8d9e0f1011121314
+          name: 'Milestone collector: WS connected'
+          type: DEPENDENT
+          key: milestone.collector.ws.connected
+          value_type: UNSIGNED
+          valuemap:
+            name: 'Bool string'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.ws.connected
+            - type: BOOL_TO_DECIMAL
+          master_item:
+            key: milestone.collector.heartbeat
+          tags:
+            - tag: component
+              value: collector
+          triggers:
+            - uuid: 162738495a6b7c8d9e0f101112131415
+              expression: 'last(/Milestone XProtect by HTTP/milestone.collector.ws.connected)=0'
+              name: 'Milestone collector: WS not connected'
+              priority: AVERAGE
+              description: |
+                Collector is alive (heartbeats arriving) but its WebSocket
+                to the Gateway is down. Camera state deltas are dropped
+                until reconnect succeeds. Usually clears itself in minutes;
+                a long stretch points at a Gateway outage or credentials.
+        - uuid: 2738495a6b7c8d9e0f10111213141516
+          name: 'Milestone collector: WS reconnects (cumulative)'
+          type: DEPENDENT
+          key: milestone.collector.ws.reconnects
+          value_type: UNSIGNED
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.ws.reconnects
+          master_item:
+            key: milestone.collector.heartbeat
+          tags:
+            - tag: component
+              value: collector
+        - uuid: 38495a6b7c8d9e0f1011121314151617
+          name: 'Milestone collector: WS events received (cumulative)'
+          type: DEPENDENT
+          key: milestone.collector.ws.events
+          value_type: UNSIGNED
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.ws.events_received
+          master_item:
+            key: milestone.collector.heartbeat
+          tags:
+            - tag: component
+              value: collector
+        - uuid: 495a6b7c8d9e0f101112131415161718
+          name: 'Milestone collector: sender failures (cumulative)'
+          type: DEPENDENT
+          key: milestone.collector.sender.failures
+          value_type: UNSIGNED
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - $.sender.failures
+          master_item:
+            key: milestone.collector.heartbeat
+          tags:
+            - tag: component
+              value: collector
+        - uuid: d2e3f405162738495a6b7c8d9e0f1011
+          name: 'Milestone: All camera groups (collector-fed trapper)'
+          type: TRAP
+          key: milestone.groups.get
+          history: '0'
+          value_type: TEXT
+          description: |
+            Camera-group inventory blob, pushed by the Phase 2 collector
+            (one zabbix_sender push per REST-pump tick). Shape matches what
+            milestone_groups_read.sh produced: {__count, __fetched_at,
+            __array:[...], "<guid>":{...}} — so the groups LLD and per-group
+            dependents below can be repointed here on cutover with no schema
+            changes. The collector walks /cameraGroups + per-group membership
+            (Phase 0: no inline counts) to populate cameraCount/hardwareCount.
+
+            Lives parallel to milestone_groups_read.sh[3600] until Phase 3
+            cutover repoints the LLD and deletes the external.
+          tags:
+            - tag: component
+              value: group
         - uuid: 1f9b3d5cf2914aebaa11a2b6cf57e9d6
           name: 'Milestone: Get all camera groups (batch master)'
           type: EXTERNAL
@@ -2279,6 +2435,32 @@ zabbix_export:
       groups:
         - name: Templates/Video
       items:
+        - uuid: e3f405162738495a6b7c8d9e0f101112
+          name: 'Milestone RS: extras snapshot (collector-fed trapper)'
+          type: TRAP
+          key: milestone.rs.extras.get
+          history: '0'
+          value_type: TEXT
+          description: |
+            Recording-server extras blob (service state, per-RS camera/hardware
+            counts, storage capacity/used/retention, per-storage rows), pushed
+            by the Phase 2 collector. Shape matches what milestone_rs_read.sh
+            produced (__array + per-RS-GUID keys + __storages flat list) — so
+            both LLDs in this template (RS-extras discovery, RS-storage
+            discovery) and their dependents can repoint here at cutover.
+
+            Collector composition (rework doc §2a):
+              - service state: from the WS pump (live, not REST polled);
+              - storage rollups + __storages: REST pump walks
+                /recordingServers/{id}/storages per RS;
+              - camera/hardware counts: derived from the camera blob the REST
+                pump already assembles, no extra REST call.
+
+            Lives parallel to milestone_rs_read.sh[3600] until Phase 3 cutover
+            repoints both LLDs and deletes the external.
+          tags:
+            - tag: component
+              value: recording-server
         - uuid: 3a9c8d4b1e6f4a728d5b0c2e9f1a7b34
           name: 'Milestone RS: state snapshot (master)'
           type: EXTERNAL

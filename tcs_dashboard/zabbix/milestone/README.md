@@ -1,26 +1,54 @@
-# Milestone XProtect — Recording Server extras
+# Milestone XProtect → Zabbix integration
 
-External helper + Zabbix template that add per-Recording-Server signals
-the base `Milestone XProtect by HTTP` template doesn't carry yet:
+This directory holds everything for the Milestone XProtect side of the TCS
+dashboard: the Zabbix template, the Phase 2 collector service that replaces
+the legacy externals, and the Phase 0 dev harness.
 
-- Service / running state (`/recordingServers.state`)
-- Camera count + parent-hardware count per RS
-- Per-RS storage rollup: total capacity, used, shortest retention
-- Per-storage discovery: path, size, used, retention (one item-set per storage)
-
-These power the Surveillance NOC dashboard's Servers and Storage tabs and the
-Sites-tab storage bar.
+**Architecture (post-rework):** one Python service on the Zabbix proxy
+(`collector/`) owns both the live ESS WebSocket and a daily REST poll
+against the API Gateway, and pushes everything to **trapper** items on the
+template. Eight legacy shell+Python externals collapse into that one
+service. See `milestone-rest-rework.md` (the "why") and
+`milestone-rework-brief.md` (the phased build sequence).
 
 ## Layout
 
 ```
 tcs_dashboard/zabbix/milestone/
-├── milestone_rs_state.py              # REST fetcher (run by cron)
-├── milestone_rs_refresh.sh            # cron wrapper
-├── milestone_rs_read.sh               # Zabbix EXTERNAL item reader
-├── template_milestone_rs_extras.yaml  # additive Zabbix 7.4 template
-└── README.md                          # this file
+├── templates/
+│   └── milestone_by_http_api.yaml        # versioned base + RS-extras template
+├── collector/                            # Phase 2 service
+│   ├── milestone_collector.py            # WS pump + REST pump + heartbeat
+│   ├── milestone-collector.service       # systemd unit
+│   ├── requirements.txt                  # aiohttp, websockets
+│   └── README.md                         # install + rotation runbook
+├── test/                                 # Phase 0 dev harness
+│   ├── phase0_config_probe.sh            # token + endpoint + paging probes
+│   ├── .env.example                      # collector creds template
+│   └── README.md                         # runbook
+├── milestone-rest-rework.md              # design rationale
+├── milestone-rework-brief.md             # phased build sequence + decisions
+├── milestone_*_{read,refresh,state}.{sh,py}
+│                                         # legacy externals (until Phase 3
+│                                         # cutover deletes them)
+├── template_milestone_rs_extras.yaml     # legacy RS-extras template (same)
+└── README.md                             # this file
 ```
+
+## End state (after Phase 3 cutover)
+
+- All Milestone data — inventory and live state — flows through one
+  systemd service on the Zabbix proxy.
+- No files under `/usr/lib/zabbix/externalscripts/milestone_*`.
+- No cron entries running Milestone helpers.
+- Three inventory trappers (`milestone.cameras.getall`,
+  `milestone.groups.get`, `milestone.rs.extras.get`) and one heartbeat
+  trapper (`milestone.collector.heartbeat`) carry everything.
+- Surveillance NOC page opens a browser WS directly to the Gateway with
+  a server-minted short-lived token (Phase 4) for sub-second state
+  updates; the same 5-GUID subscription the collector uses.
+
+## Legacy-externals section (kept for archival reference)
 
 ## Deploy
 
