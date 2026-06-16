@@ -111,14 +111,105 @@ externals during the Phase 3 soak.
 - **Sender batching:** every WS event batch produces one `zabbix_sender`
   invocation (stdin-fed lines). REST blobs each produce one invocation.
 
-## Known gaps (Phase 5)
+## Liveness + metrics ("monitor the monitor")
 
-- Liveness heartbeat trapper for "monitor the monitor" — not wired yet;
-  Phase 5 adds it.
-- The RS-extras blob's per-RS `state` field is currently `null`; wiring
-  the WS pump's RS service-state events through to the REST pump's RS
-  records is Phase 5 work.
-- Structured metrics (events/sec, reconnect count, last-baseline time,
-  sender failures) are logged but not exposed; Phase 5 adds a small
-  prometheus or Zabbix-side exposition.
-- Token-rotation runbook — see Phase 5.
+The collector pushes one heartbeat per minute to `milestone.collector.heartbeat`
+(TRAP) with all internal counters as one JSON blob:
+
+```json
+{
+  "ts": 1781615200,
+  "ws":     {"connected": true, "session": "...",
+             "last_baseline_at": 1781615180, "reconnects": 3,
+             "events_received": 41822, "events_applied": 612},
+  "rest":   {"last_cameras_at": 1781614800, "last_groups_at": 1781614800,
+             "last_rs_extras_at": 1781615100, "errors": 0},
+  "sender": {"batches": 9412, "items": 23104, "failures": 0}
+}
+```
+
+Dependent items on the template surface the load-bearing fields for trending:
+`milestone.collector.ws.connected`, `…ws.reconnects`, `…ws.events`,
+`…sender.failures`. Two triggers are wired:
+
+- `nodata(milestone.collector.heartbeat, 5m) = 1` (HIGH) — the process is
+  down, deadlocked, or can't reach the proxy. The state pipeline is blind.
+- `last(milestone.collector.ws.connected) = 0` (AVERAGE) — heartbeats are
+  still landing but the WS is detached. Usually self-heals within a minute
+  or two; long stretches point at a Gateway or credentials problem.
+
+Heartbeat runs as its own asyncio task — independent of both pumps. A wedged
+pump still produces a heartbeat whose counters reveal the symptom (e.g.
+`ws.connected=false`, `sender.failures` climbing), so the operator can
+distinguish "process dead" from "process alive but stuck".
+
+## Token / secret rotation
+
+Rotation of the XProtect Basic user's password (or the user itself):
+
+1. Provision the new credentials in XProtect Management Client. Verify the
+   read-only role assignment is intact.
+2. On the Zabbix proxy hosting the collector:
+   ```bash
+   sudo $EDITOR /etc/milestone-collector/env      # update MILESTONE_PASSWORD (and USER if rotated)
+   sudo systemctl restart milestone-collector
+   journalctl -u milestone-collector -f -n 20
+   ```
+   Expect `token refreshed via …` within ~1 s; then `WS up` after the
+   reconnect; then the next heartbeat shows `ws.connected=true`.
+3. Update the Zabbix global macro for the dashboard's browser bridge:
+   Administration → General → Macros → `{$MILESTONE.PASSWORD}` (and
+   `{$MILESTONE.USER}` if rotated). No service restart needed; the next
+   `ActionSurveillanceData` summary poll mints a token with the new creds.
+4. Verify on the Surveillance NOC page: DevTools console shows `[tcs-ws]
+   handshake updated; reconnecting` → `WS up`. The 30 s
+   `ActionSurveillanceData` poll picks the rotation up automatically; no
+   page reload required.
+
+If the Zabbix template macros are themselves rotated (e.g. the host moves):
+update the four macros (`{$MILESTONE.HOST/SCHEME/USER/PASSWORD}`) AND
+`/etc/milestone-collector/env` together. The two paths read independently —
+the proxy via env, the dashboard via Zabbix API — so they can drift if only
+one side is updated.
+
+## Induced-failure tests (Phase 5 acceptance)
+
+A clean Phase 5 deployment should pass each of these in a maintenance window:
+
+- **Gateway restart:** the WS closes; collector logs `WS error: …`,
+  schedules a backoff reconnect, then `WS up` and a fresh `getState`
+  baseline. Heartbeat `ws.reconnects` increments by 1, `ws.connected`
+  briefly 0 then 1.
+- **Token expiry:** force by setting `MILESTONE_TOKEN_TTL_OVERRIDE`
+  (TODO if/when supported) or simply wait past `expires_in`. On the next
+  WS reconnect (forced or natural), `token refreshed via …` appears and
+  the new token is applied. No manual intervention.
+- **Network blip from proxy → Gateway:** drop the relevant route for
+  60–90 s with `iptables`. Collector logs WS errors with backoff;
+  recovers automatically when the route returns. `ws.connected` recovers.
+- **Network blip from proxy → Zabbix:** `zabbix_sender` calls log
+  `rc=…` errors and `sender.failures` increments; heartbeat itself
+  bounces (the heartbeat sender is the same path). When connectivity
+  returns, heartbeats resume; the 5-min nodata trigger may have fired
+  if the gap exceeded its window, and it auto-clears.
+
+## CORS / `Origin` posture (dashboard side)
+
+Browser WebSocket handshakes do not honor CORS, but Milestone validates
+the `Origin` header. Phase 0 task 5 confirms whether the Gateway accepts
+the Zabbix-UI host's origin. If it does not:
+
+- **Preferred:** put the dashboard behind a same-origin reverse proxy
+  so the browser opens a same-host `wss://`.
+- **Acceptable:** scope CORS on the Gateway to the exact dashboard
+  origin only.
+- **Never:** `Access-Control-Allow-Origin: *` on a production VMS.
+
+## Known gaps (deferred)
+
+- `MILESTONE_TOKEN_TTL_OVERRIDE` env knob isn't implemented — runbook
+  refers to it as a hypothetical for token-expiry tests; in practice the
+  next backoff reconnect already exercises the refresh path.
+- Prometheus exposition: heartbeat JSON in Zabbix is the current
+  interface; no `/metrics` endpoint. Add only if a Prom-based observability
+  stack lands on the proxy.

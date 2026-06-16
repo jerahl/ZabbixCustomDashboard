@@ -104,6 +104,7 @@ CAMERA_KEEP_FIELDS = (
 KEY_CAMERAS_BLOB = "milestone.cameras.getall"
 KEY_GROUPS_BLOB = "milestone.groups.get"
 KEY_RS_EXTRAS_BLOB = "milestone.rs.extras.get"
+KEY_HEARTBEAT = "milestone.collector.heartbeat"  # Phase 5
 KEY_CAM_COMM_TYPE = "milestone.cam.ess.comm.type[{guid}]"
 KEY_CAM_COMM_TIME = "milestone.cam.ess.comm.time[{guid}]"
 KEY_CAM_REC_TYPE = "milestone.cam.ess.rec.type[{guid}]"
@@ -203,6 +204,52 @@ def load_config() -> Config:
 
 
 # ---------------------------------------------------------------------------
+# Metrics — single counter bag shared across pumps. Read by the heartbeat
+# task, mutated by everyone else. Counters are cumulative since process start
+# so they're rate-graphable in Zabbix; gauges and timestamps overwrite.
+# ---------------------------------------------------------------------------
+class Metrics:
+    def __init__(self) -> None:
+        self.ws_connected: bool = False
+        self.ws_session_id: str = ""
+        self.ws_reconnects: int = 0
+        self.ws_events_received: int = 0
+        self.ws_events_applied: int = 0
+        self.ws_last_baseline_at: int = 0
+        self.rest_last_cameras_at: int = 0
+        self.rest_last_groups_at: int = 0
+        self.rest_last_rs_extras_at: int = 0
+        self.rest_errors: int = 0
+        self.sender_batches: int = 0
+        self.sender_items: int = 0
+        self.sender_failures: int = 0
+
+    def snapshot(self) -> dict:
+        return {
+            "ts": int(time.time()),
+            "ws": {
+                "connected": self.ws_connected,
+                "session": self.ws_session_id,
+                "last_baseline_at": self.ws_last_baseline_at,
+                "reconnects": self.ws_reconnects,
+                "events_received": self.ws_events_received,
+                "events_applied": self.ws_events_applied,
+            },
+            "rest": {
+                "last_cameras_at": self.rest_last_cameras_at,
+                "last_groups_at": self.rest_last_groups_at,
+                "last_rs_extras_at": self.rest_last_rs_extras_at,
+                "errors": self.rest_errors,
+            },
+            "sender": {
+                "batches": self.sender_batches,
+                "items": self.sender_items,
+                "failures": self.sender_failures,
+            },
+        }
+
+
+# ---------------------------------------------------------------------------
 # TokenStore — single source of truth for the bearer, refreshed in background.
 # ---------------------------------------------------------------------------
 class TokenStore:
@@ -258,9 +305,11 @@ class TokenStore:
 # batching is the simplest reliable interface.
 # ---------------------------------------------------------------------------
 class ZabbixSender:
-    def __init__(self, cfg: Config, dry_run: bool = False) -> None:
+    def __init__(self, cfg: Config, dry_run: bool = False,
+                 metrics: "Metrics | None" = None) -> None:
         self.cfg = cfg
         self.dry_run = dry_run
+        self.metrics = metrics
         # If zabbix_sender is missing (typical on a dev box), log the warning
         # once at startup instead of on every batch send.
         self._missing_warned = False
@@ -276,6 +325,9 @@ class ZabbixSender:
             return
         host = self.cfg.zabbix_sender_host
         stdin = "\n".join(f'"{host}" "{k}" "{_escape(v)}"' for k, v in items) + "\n"
+        if self.metrics is not None:
+            self.metrics.sender_batches += 1
+            self.metrics.sender_items += len(items)
         if self.dry_run:
             for k, v in items:
                 preview = v if len(v) < 120 else f"{v[:117]}…"
@@ -291,6 +343,8 @@ class ZabbixSender:
             r = subprocess.run(cmd, input=stdin, text=True,
                                capture_output=True, timeout=60)
         except FileNotFoundError as e:
+            if self.metrics is not None:
+                self.metrics.sender_failures += 1
             if not self._missing_warned:
                 log.error("zabbix_sender not found at %r — every send_batch "
                           "will be a no-op until installed (%r). Use --dry-run "
@@ -299,10 +353,14 @@ class ZabbixSender:
                 self._missing_warned = True
             return
         except subprocess.TimeoutExpired as e:
+            if self.metrics is not None:
+                self.metrics.sender_failures += 1
             log.error("zabbix_sender timed out: %r", e)
             return
         # zabbix_sender exits 0 on success, 2 on partial. Log both stdout/stderr.
         if r.returncode != 0:
+            if self.metrics is not None:
+                self.metrics.sender_failures += 1
             log.error("zabbix_sender rc=%s stderr=%s", r.returncode, r.stderr.strip())
         elif log.isEnabledFor(logging.DEBUG):
             log.debug("zabbix_sender ok: %s", r.stdout.strip())
@@ -484,12 +542,55 @@ async def assemble_groups_blob(http: aiohttp.ClientSession, tokens: TokenStore,
     return _legacy_shape(records)
 
 
+# Threshold above which a recording-server handshake is considered stale.
+# Milestone's own UI uses ~5 min before flagging an RS as unreachable; we
+# mirror that for the trapper-side rollup. Tunable via env if needed.
+RS_HANDSHAKE_STALE_S = int(os.environ.get("MILESTONE_RS_HANDSHAKE_STALE_S", "300"))
+
+
+def _rs_state(rs: dict) -> str:
+    """Derive a coarse state string from a /recordingServers record: one of
+    'running' (enabled + handshake fresh), 'stale' (enabled but handshake old),
+    'disabled' (administratively disabled), or 'unknown' (no handshake field).
+    """
+    if not rs.get("enabled", True):
+        return "disabled"
+    ts = rs.get("lastStatusHandshake")
+    if not ts:
+        return "unknown"
+    try:
+        # The API returns ISO8601 with trailing Z and microsecond precision.
+        # fromisoformat doesn't accept 'Z' on <3.11; normalise to +00:00.
+        s = str(ts).replace("Z", "+00:00")
+        # Truncate the fractional seconds to 6 digits (Milestone emits 7).
+        if "." in s:
+            head, _, tail = s.partition(".")
+            frac = ""
+            i = 0
+            while i < len(tail) and tail[i].isdigit():
+                frac += tail[i]; i += 1
+            s = f"{head}.{frac[:6]}{tail[i:]}"
+        import datetime as _dt  # local: keep top imports minimal
+        dt = _dt.datetime.fromisoformat(s)
+        age = (_dt.datetime.now(_dt.timezone.utc) - dt).total_seconds()
+        return "running" if age <= RS_HANDSHAKE_STALE_S else "stale"
+    except (ValueError, TypeError):
+        return "unknown"
+
+
 async def assemble_rs_extras_blob(http: aiohttp.ClientSession, tokens: TokenStore,
                                   api: str, cameras_blob: dict) -> dict:
     """Compose RS extras: storage rollups via /recordingServers/{id}/storages
-    per RS, plus camera/hardware counts derived from the cameras blob. RS
-    service state arrives via the WS pump; this routine leaves it null so the
-    trapper item updates atomically when state is wired in (TODO(phase5)).
+    per RS, plus camera/hardware counts derived from the cameras blob, plus
+    a coarse service-state derived from the RS record's own fields (Phase 5).
+
+    Phase 5 note on state: the WS subscription is resourceTypes:['cameras']
+    only (matches the existing 5-GUID coverage), so we don't get push-mode RS
+    state events. Instead, derive it from the REST record we already have —
+    `enabled` plus the staleness of `lastStatusHandshake`. This matches what
+    the legacy milestone_rs_state.py snapshot wrote, and is good enough for
+    the Servers tab's running/down indicator on the cadence the trapper
+    updates (REST_POLL_RS_EXTRAS_S = 15 min by default).
     """
     rs_list = (await get_json(http, tokens, api, "/recordingServers")).get("array") or []
     # Derive counts from the cameras blob in one pass.
@@ -545,9 +646,9 @@ async def assemble_rs_extras_blob(http: aiohttp.ClientSession, tokens: TokenStor
         rec = {
             "id": rid,
             "displayName": rs.get("displayName", ""),
-            # state: filled in by the WS pump on next state event; null until
-            # the running state map is wired through (TODO see __main__).
-            "state": None,
+            "state": _rs_state(rs),
+            "enabled": bool(rs.get("enabled", True)),
+            "lastStatusHandshake": rs.get("lastStatusHandshake", ""),
             "cameraCount": cam_count_by_rs.get(rid, 0),
             "hardwareCount": len(hw_set_by_rs.get(rid, set())),
             "storageTotalBytes": total,
@@ -564,6 +665,7 @@ async def assemble_rs_extras_blob(http: aiohttp.ClientSession, tokens: TokenStor
 
 async def rest_pump(cfg: Config, http: aiohttp.ClientSession,
                     tokens: TokenStore, sender: ZabbixSender,
+                    metrics: Metrics,
                     once: bool = False) -> None:
     """Repeatedly assemble + push the three inventory blobs at their own
     cadences. With --once, runs the full cycle one time and returns."""
@@ -579,12 +681,14 @@ async def rest_pump(cfg: Config, http: aiohttp.ClientSession,
                 log.info("REST: assembling cameras blob")
                 cameras_blob, _ = await assemble_cameras_blob(http, tokens, cfg.api_url)
                 await sender.send_batch([(KEY_CAMERAS_BLOB, json.dumps(cameras_blob))])
+                metrics.rest_last_cameras_at = int(time.time())
                 log.info("REST: pushed cameras (%d)", cameras_blob.get("__count", 0))
                 next_cameras = now + REST_POLL_CAMERAS_S
             if now >= next_groups:
                 log.info("REST: assembling groups blob")
                 groups_blob = await assemble_groups_blob(http, tokens, cfg.api_url)
                 await sender.send_batch([(KEY_GROUPS_BLOB, json.dumps(groups_blob))])
+                metrics.rest_last_groups_at = int(time.time())
                 log.info("REST: pushed groups (%d)", groups_blob.get("__count", 0))
                 next_groups = now + REST_POLL_GROUPS_S
             if now >= next_rs:
@@ -597,9 +701,11 @@ async def rest_pump(cfg: Config, http: aiohttp.ClientSession,
                 rs_blob = await assemble_rs_extras_blob(http, tokens, cfg.api_url,
                                                         cameras_blob)
                 await sender.send_batch([(KEY_RS_EXTRAS_BLOB, json.dumps(rs_blob))])
+                metrics.rest_last_rs_extras_at = int(time.time())
                 log.info("REST: pushed RS extras (%d)", rs_blob.get("__count", 0))
                 next_rs = now + REST_POLL_RS_EXTRAS_S
         except Exception as e:  # noqa: BLE001
+            metrics.rest_errors += 1
             log.exception("REST pump iteration failed: %r", e)
         if once:
             return
@@ -681,7 +787,8 @@ def _sender_lines_for_camera(cam: str, by_group: dict[str, dict],
 
 async def ws_pump(cfg: Config, http: aiohttp.ClientSession,
                   tokens: TokenStore, sender: ZabbixSender,
-                  stop: asyncio.Event, once: bool = False) -> None:
+                  stop: asyncio.Event, metrics: Metrics,
+                  once: bool = False) -> None:
     state = WsState()
     backoff = WS_RECONNECT_BACKOFF_INITIAL_S
     ssl_ctx: ssl.SSLContext | None = None
@@ -718,6 +825,8 @@ async def ws_pump(cfg: Config, http: aiohttp.ClientSession,
                 if status not in (200, 201):
                     raise RuntimeError(f"startSession failed: {start}")
                 state.session_id = start.get("sessionId", state.session_id)
+                metrics.ws_session_id = state.session_id
+                metrics.ws_connected = True
                 is_new_session = (status == 201)
                 log.info("WS: startSession status=%s (%s)", status,
                          "new session" if is_new_session else "resumed")
@@ -742,12 +851,15 @@ async def ws_pump(cfg: Config, http: aiohttp.ClientSession,
                         raise RuntimeError(f"getState failed: {state_resp}")
                     baseline = state_resp.get("states", []) or []
                     log.info("WS: baseline %d states", len(baseline))
+                    metrics.ws_events_received += len(baseline)
+                    metrics.ws_last_baseline_at = int(time.time())
                     # Apply baseline; emit one sender batch.
                     touched: dict[str, dict] = {}
                     for entry in baseline:
                         cam = state.apply_state_entry(entry)
                         if cam:
                             touched[cam] = state.cameras[cam]
+                    metrics.ws_events_applied += len(touched)
                     await _flush_cameras(sender, touched)
 
                 backoff = WS_RECONNECT_BACKOFF_INITIAL_S
@@ -767,17 +879,22 @@ async def ws_pump(cfg: Config, http: aiohttp.ClientSession,
                     events = msg.get("events")
                     if not events:
                         continue
+                    metrics.ws_events_received += len(events)
                     touched = {}
                     for entry in events:
                         cam = state.apply_state_entry(entry)
                         if cam:
                             touched[cam] = state.cameras[cam]
+                    metrics.ws_events_applied += len(touched)
                     if events and events[-1].get("id"):
                         state.last_event_id = events[-1]["id"]
                     await _flush_cameras(sender, touched)
         except asyncio.CancelledError:
+            metrics.ws_connected = False
             raise
         except Exception as e:  # noqa: BLE001
+            metrics.ws_connected = False
+            metrics.ws_reconnects += 1
             log.warning("WS error: %r — reconnecting in %.1fs", e, backoff)
             try:
                 await asyncio.wait_for(stop.wait(), timeout=backoff)
@@ -785,6 +902,30 @@ async def ws_pump(cfg: Config, http: aiohttp.ClientSession,
             except asyncio.TimeoutError:
                 backoff = min(backoff * 2.0, WS_RECONNECT_BACKOFF_MAX_S)
                 continue
+
+
+async def heartbeat_pump(metrics: Metrics, sender: ZabbixSender,
+                         stop: asyncio.Event, period_s: float = 60.0) -> None:
+    """Push one JSON heartbeat per period. The 5-minute nodata() trigger on
+    milestone.collector.heartbeat fires if four consecutive heartbeats are
+    missed — covers process crashes, deadlocks, and proxy unreachability.
+
+    Runs independently of the pumps so a stuck pump still produces a
+    heartbeat whose counters reveal the symptom (e.g. ws_connected=False,
+    sender_failures climbing). The pumps drive the actual stuck/healthy
+    decision in the operator's head.
+    """
+    while not stop.is_set():
+        try:
+            payload = json.dumps(metrics.snapshot(), separators=(",", ":"))
+            await sender.send_batch([(KEY_HEARTBEAT, payload)])
+        except Exception as e:  # noqa: BLE001
+            log.warning("heartbeat push failed: %r", e)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=period_s)
+            return  # stop was set
+        except asyncio.TimeoutError:
+            continue
 
 
 async def _flush_cameras(sender: ZabbixSender,
@@ -810,7 +951,8 @@ async def amain(args: argparse.Namespace) -> int:
     # --dry-run takes precedence; MILESTONE_DRY_RUN=1 in the env is a fallback
     # so it can be forced from a .env file even if the CLI flag is forgotten.
     dry_run = bool(args.dry_run) or os.environ.get("MILESTONE_DRY_RUN", "0") == "1"
-    sender = ZabbixSender(cfg, dry_run=dry_run)
+    metrics = Metrics()
+    sender = ZabbixSender(cfg, dry_run=dry_run, metrics=metrics)
 
     # Startup banner — confirms what mode the service actually started in,
     # rather than what the user thinks the flags say.
@@ -854,12 +996,18 @@ async def amain(args: argparse.Namespace) -> int:
         tasks: list[asyncio.Task] = []
         if not args.ws_only:
             tasks.append(asyncio.create_task(
-                rest_pump(cfg, http, tokens, sender, once=args.once),
+                rest_pump(cfg, http, tokens, sender, metrics, once=args.once),
                 name="rest-pump"))
         if not args.rest_only:
             tasks.append(asyncio.create_task(
-                ws_pump(cfg, http, tokens, sender, stop, once=args.once),
+                ws_pump(cfg, http, tokens, sender, stop, metrics, once=args.once),
                 name="ws-pump"))
+        # Heartbeat only makes sense in daemon mode — --once exits before a
+        # second heartbeat could land anyway, so skip it for cleaner dry-runs.
+        if not args.once:
+            tasks.append(asyncio.create_task(
+                heartbeat_pump(metrics, sender, stop),
+                name="heartbeat"))
 
         if not tasks:
             log.error("--ws-only and --rest-only are mutually exclusive")
