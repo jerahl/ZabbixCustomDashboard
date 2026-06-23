@@ -136,10 +136,14 @@ const FGKPIStrip = () => {
 // ───────── Throughput 24h chart (SVG dual-area) ─────────
 const FGThroughputChart = () => {
   const { ingress, egress } = FG_THROUGHPUT_24H;
-  const max = (Math.max(...ingress, ...egress) || 1) * 1.15;
+  const max = (Math.max(...ingress, ...egress, 0) || 1) * 1.15;
   const W = 100, H = 100; // viewBox %
-  const stepX = W / (ingress.length - 1);
+  const n = Math.max(ingress.length, egress.length);
+  const stepX = n > 1 ? W / (n - 1) : 0;
   const toPath = (data, fillBottom = true) => {
+    // Need at least two points to draw a line; an empty series (no history
+    // yet) would otherwise emit a malformed "d" attribute.
+    if (!data || data.length < 2) return "";
     const pts = data.map((v, i) => [i * stepX, H - (v / max) * H]);
     const line = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(" ");
     return fillBottom ? `${line} L${W},${H} L0,${H} Z` : line;
