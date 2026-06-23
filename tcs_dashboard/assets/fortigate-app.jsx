@@ -320,6 +320,7 @@ const FGIPsec = () => (
     <div className="card-h">
       <h3>IPsec Site-to-Site Tunnels</h3>
       <SourceBadge src="zbx" />
+      <SourceBadge src="fa" />
       <div className="h-spacer" />
       <span className="h-meta">{FG_IPSEC.filter(t=>t.state==="up").length} / {FG_IPSEC.length} up</span>
     </div>
@@ -354,7 +355,7 @@ const FGSSLVPN = () => (
     <div className="card-h">
       <h3>SSL-VPN · Connected Users</h3>
       <SourceBadge src="zbx" />
-      <SourceBadge src="pf" />
+      <SourceBadge src="fa" />
       <div className="h-spacer" />
       <span className="h-meta">{FG_SSLVPN.length} active · peak 24h {FG_TOTALS.vpn.ssl_peak_24h}</span>
     </div>
@@ -429,6 +430,7 @@ const FGUtmGrid = () => (
     <div className="card-h">
       <h3>UTM · Threat Protection · 24h</h3>
       <SourceBadge src="zbx" />
+      <SourceBadge src="fa" />
       <div className="h-spacer" />
       <span className="h-meta">FortiGuard subscriptions active</span>
     </div>
@@ -462,7 +464,7 @@ const FGTopThreats = () => (
   <div className="card">
     <div className="card-h">
       <h3>Top Threat Signatures · 24h</h3>
-      <SourceBadge src="zbx" />
+      <SourceBadge src="fa" />
       <div className="h-spacer" />
       <a className="h-link">Open in FortiAnalyzer <Icon name="external" size={11} /></a>
     </div>
@@ -493,7 +495,7 @@ const FGTopPolicies = () => {
     <div className="card">
       <div className="card-h">
         <h3>Top Policies by Hit Count · 24h</h3>
-        <SourceBadge src="zbx" />
+        <SourceBadge src="fa" />
         <div className="h-spacer" />
         <span className="h-meta">{FG_TOTALS.policies.total} total · {FG_TOTALS.policies.unused_30d} unused 30d</span>
       </div>

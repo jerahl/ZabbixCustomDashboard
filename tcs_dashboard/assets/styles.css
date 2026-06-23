@@ -17,6 +17,7 @@
   --ext: #7c5cff;     /* ExtremeCloud read-through */
   --cx:  #2bd6c0;     /* 3CX teal — phone system source */
   --xdr: #e84393;     /* Cortex XDR — endpoint detection & response */
+  --fa:  #ee6c2b;     /* FortiAnalyzer orange — log-derived FortiGate data */
 
   --ok:   #34d399;
   --warn: #f5b300;

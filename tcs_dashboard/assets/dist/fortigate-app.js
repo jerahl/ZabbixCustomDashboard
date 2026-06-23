@@ -596,6 +596,8 @@ const FGIPsec = () => /*#__PURE__*/React.createElement("div", {
   className: "card-h"
 }, /*#__PURE__*/React.createElement("h3", null, "IPsec Site-to-Site Tunnels"), /*#__PURE__*/React.createElement(SourceBadge, {
   src: "zbx"
+}), /*#__PURE__*/React.createElement(SourceBadge, {
+  src: "fa"
 }), /*#__PURE__*/React.createElement("div", {
   className: "h-spacer"
 }), /*#__PURE__*/React.createElement("span", {
@@ -642,7 +644,7 @@ const FGSSLVPN = () => /*#__PURE__*/React.createElement("div", {
 }, /*#__PURE__*/React.createElement("h3", null, "SSL-VPN \xB7 Connected Users"), /*#__PURE__*/React.createElement(SourceBadge, {
   src: "zbx"
 }), /*#__PURE__*/React.createElement(SourceBadge, {
-  src: "pf"
+  src: "fa"
 }), /*#__PURE__*/React.createElement("div", {
   className: "h-spacer"
 }), /*#__PURE__*/React.createElement("span", {
@@ -768,6 +770,8 @@ const FGUtmGrid = () => /*#__PURE__*/React.createElement("div", {
   className: "card-h"
 }, /*#__PURE__*/React.createElement("h3", null, "UTM \xB7 Threat Protection \xB7 24h"), /*#__PURE__*/React.createElement(SourceBadge, {
   src: "zbx"
+}), /*#__PURE__*/React.createElement(SourceBadge, {
+  src: "fa"
 }), /*#__PURE__*/React.createElement("div", {
   className: "h-spacer"
 }), /*#__PURE__*/React.createElement("span", {
@@ -847,7 +851,7 @@ const FGTopThreats = () => /*#__PURE__*/React.createElement("div", {
 }, /*#__PURE__*/React.createElement("div", {
   className: "card-h"
 }, /*#__PURE__*/React.createElement("h3", null, "Top Threat Signatures \xB7 24h"), /*#__PURE__*/React.createElement(SourceBadge, {
-  src: "zbx"
+  src: "fa"
 }), /*#__PURE__*/React.createElement("div", {
   className: "h-spacer"
 }), /*#__PURE__*/React.createElement("a", {
@@ -890,7 +894,7 @@ const FGTopPolicies = () => {
   }, /*#__PURE__*/React.createElement("div", {
     className: "card-h"
   }, /*#__PURE__*/React.createElement("h3", null, "Top Policies by Hit Count \xB7 24h"), /*#__PURE__*/React.createElement(SourceBadge, {
-    src: "zbx"
+    src: "fa"
   }), /*#__PURE__*/React.createElement("div", {
     className: "h-spacer"
   }), /*#__PURE__*/React.createElement("span", {

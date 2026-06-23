@@ -7,6 +7,7 @@ const SourceBadge = ({ src }) => {
     ext: { label: "EXT", title: "Source: ExtremeCloud IQ (read-through)", color: "var(--ext)" },
     "3cx": { label: "3CX", title: "Source: 3CX Phone System API", color: "var(--cx)" },
     xdr: { label: "XDR", title: "Source: Cortex XDR tenant", color: "var(--xdr)" },
+    fa:  { label: "FAZ", title: "Source: FortiAnalyzer (logview)", color: "var(--fa)" },
   };
   const m = map[src] || map.zbx;
   return (

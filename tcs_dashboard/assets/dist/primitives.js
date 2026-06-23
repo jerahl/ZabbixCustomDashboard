@@ -28,6 +28,11 @@ const SourceBadge = ({
       label: "XDR",
       title: "Source: Cortex XDR tenant",
       color: "var(--xdr)"
+    },
+    fa: {
+      label: "FAZ",
+      title: "Source: FortiAnalyzer (logview)",
+      color: "var(--fa)"
     }
   };
   const m = map[src] || map.zbx;
