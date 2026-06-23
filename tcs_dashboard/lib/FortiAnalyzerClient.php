@@ -345,9 +345,10 @@ class FortiAnalyzerClient {
 
         $end   = time();
         $start = $end - max(1, $hours) * 3600;
+        // ISO 8601 with the literal 'T' separator, per the FAZ logsearch API.
         $range = [
-            'start' => date('Y-m-d H:i:s', $start),
-            'end'   => date('Y-m-d H:i:s', $end),
+            'start' => date('Y-m-d\TH:i:s', $start),
+            'end'   => date('Y-m-d\TH:i:s', $end),
         ];
 
         $params = [
@@ -479,9 +480,10 @@ class FortiAnalyzerClient {
             throw new \RuntimeException("FortiAnalyzerClient: login failed (HTTP $status)");
         }
         $session = (string) ($payload['session'] ?? '');
-        $code    = (int) ($payload['result'][0]['status']['code'] ?? 0);
-        if ($session === '' || $code !== 0) {
-            $msg = (string) ($payload['result'][0]['status']['message'] ?? 'unknown');
+        if ($session === '') {
+            $msg = (string) ($payload['result'][0]['status']['message']
+                ?? $payload['error']['message']
+                ?? 'no session in response');
             throw new \RuntimeException("FortiAnalyzerClient: login rejected ($msg)");
         }
 
@@ -498,9 +500,10 @@ class FortiAnalyzerClient {
      */
     private function raw(string $method, array $params, ?string $session): array {
         $envelope = [
-            'id'     => 1,
-            'method' => $method,
-            'params' => [$params],
+            'id'      => 1,
+            'jsonrpc' => '2.0',
+            'method'  => $method,
+            'params'  => [$params],
         ];
         if ($session !== null && $session !== '') {
             $envelope['session'] = $session;
