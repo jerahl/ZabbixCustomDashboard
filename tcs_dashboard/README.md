@@ -212,8 +212,16 @@ Two auth modes:
   `Authorization: Bearer` header and takes precedence over `USER`/`PASS` — no
   login round-trip.
 
-Create a **read-only** FAZ admin / API user scoped to the ADOM that holds your
-FortiGate's logs. The dashboard only ever reads (`logview` searches).
+Create a FAZ admin / API user scoped to the ADOM that holds your FortiGate's
+logs. **The admin must have `JSON API Access` set to `Read-Write`**
+(System Settings → Admin → Administrators → *user* → JSON API Access). This is
+the most common gotcha: session login (`/sys/login/user`) succeeds regardless
+of this setting, but every actual API call — including the `logsearch` the
+dashboard runs — returns `-32603 "Access denied. user=, userfrom=JSON(api_user)"`
+until it's enabled. `Read-Write` (not just `Read`) is required because
+`logsearch` uses the `add` method to create a search task. The admin's profile
+also needs access to the relevant ADOM and Log View; the dashboard itself only
+ever reads.
 
 ### How it fetches
 
