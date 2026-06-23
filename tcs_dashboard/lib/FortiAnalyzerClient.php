@@ -365,9 +365,13 @@ class FortiAnalyzerClient {
         }
 
         $started = $this->rpc('add', $params);
-        $tid = $started['result'][0]['tid'] ?? ($started['result']['tid'] ?? null);
+        $tid = $started['result'][0]['tid'] ?? ($started['result']['tid'] ?? $started['tid'] ?? null);
         if ($tid === null) {
-            error_log('[tcs_dashboard] FortiAnalyzerClient::logSearch(' . $logtype . '): no tid in response');
+            // Surface what FAZ actually returned — the status block tells us
+            // why (permission denied, bad ADOM/url, apiver mismatch, …).
+            error_log('[tcs_dashboard] FortiAnalyzerClient::logSearch(' . $logtype
+                . '): no tid. adom=' . $this->adom
+                . ' resp=' . substr((string) json_encode($started, JSON_UNESCAPED_SLASHES), 0, 600));
             return [];
         }
 
