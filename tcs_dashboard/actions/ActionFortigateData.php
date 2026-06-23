@@ -325,15 +325,25 @@ class ActionFortigateData extends ActionDataBase {
         $ipsec    = $client->ipsecStats($serial, $h);
         $utm      = $client->utmBlockCounts($serial, $h);
 
+        // Diagnostic: how many rows each aggregator actually produced. If a
+        // logsearch returned rows but the matching count here is 0, the field
+        // mapping for that section is off (vs. simply no source data).
+        error_log(sprintf(
+            '[tcs_dashboard] FAZ produced: threats=%d policies=%d sslvpn=%d ipsec=%d utm=%s (serial=%s)',
+            count($threats), count($policies), count($sslvpn), count($ipsec),
+            json_encode($utm), $serial !== '' ? $serial : '(all)'
+        ));
+
         return [
             'topThreats'  => $threats,
             'topPolicies' => $policies,
             'sslvpn'      => $sslvpn,
             'ipsec'       => $ipsec,
             'utm'         => $utm,
-            // Mark the source live if any query returned something; otherwise
-            // FAZ is reachable but had no matching logs in the window.
-            '_ok' => (bool) ($threats || $policies || $sslvpn || $ipsec || $utm),
+            // Mark the source live only when something meaningful came back.
+            // ($utm always has its 4 keys, so test for a non-zero count.)
+            '_ok' => (bool) ($threats || $policies || $sslvpn || $ipsec
+                || array_sum(array_map('intval', $utm)) > 0),
         ];
     }
 
@@ -372,16 +382,39 @@ class ActionFortigateData extends ActionDataBase {
         ];
     }
 
+    /** Filesystem fallback path for the FA fragment when APCu is unavailable. */
+    private const FA_CACHE_FILE = '/tmp/tcs_dashboard_cache/fortigate_fa_v1.json';
+
     private static function faCacheGet(): ?array {
-        if (!function_exists('apcu_fetch')) return null;
-        $hit = apcu_fetch(self::FA_CACHE_KEY, $ok);
-        return ($ok && is_array($hit)) ? $hit : null;
+        if (function_exists('apcu_fetch')) {
+            $hit = apcu_fetch(self::FA_CACHE_KEY, $ok);
+            if ($ok && is_array($hit)) return $hit;
+        }
+        // Filesystem fallback — Zabbix frontends often run without APCu, in
+        // which case every page load would otherwise re-run all FAZ searches.
+        if (is_file(self::FA_CACHE_FILE)) {
+            $raw = @file_get_contents(self::FA_CACHE_FILE);
+            if ($raw !== false) {
+                $row = json_decode($raw, true);
+                if (is_array($row) && (int) ($row['_expires'] ?? 0) > time() && is_array($row['data'] ?? null)) {
+                    return $row['data'];
+                }
+            }
+        }
+        return null;
     }
 
     private static function faCacheSet(array $fragment): void {
         if (function_exists('apcu_store')) {
             apcu_store(self::FA_CACHE_KEY, $fragment, self::FA_CACHE_TTL);
         }
+        $dir = dirname(self::FA_CACHE_FILE);
+        if (!is_dir($dir)) @mkdir($dir, 0700, true);
+        @file_put_contents(self::FA_CACHE_FILE, json_encode([
+            '_expires' => time() + self::FA_CACHE_TTL,
+            'data'     => $fragment,
+        ], JSON_UNESCAPED_SLASHES));
+        @chmod(self::FA_CACHE_FILE, 0600);
     }
 
     // ── Host discovery ─────────────────────────────────────────────────────

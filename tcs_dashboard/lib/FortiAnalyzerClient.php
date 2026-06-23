@@ -226,9 +226,16 @@ class FortiAnalyzerClient {
 
         $byUser = [];
         foreach ($rows as $r) {
-            // Only ssl-vpn rows carry a tunneltype/vpntype of ssl-* .
+            // The subtype==vpn event stream mixes IPsec IKE negotiation logs
+            // (no tunneltype, no bytes) with SSL-VPN logs. Keep only rows with
+            // an explicit SSL marker so IKE rows don't pollute the user list.
             $vpntype = strtolower((string) ($r['tunneltype'] ?? $r['vpntype'] ?? ''));
-            if ($vpntype !== '' && !str_contains($vpntype, 'ssl')) continue;
+            $logdesc = strtolower((string) ($r['logdesc'] ?? ''));
+            $action  = strtolower((string) ($r['action'] ?? ''));
+            $isSsl = str_contains($vpntype, 'ssl')
+                || str_contains($logdesc, 'ssl')
+                || str_contains($action, 'ssl');
+            if (!$isSsl) continue;
 
             $user = (string) ($r['user'] ?? $r['xauthuser'] ?? '');
             if ($user === '') continue;
@@ -273,12 +280,15 @@ class FortiAnalyzerClient {
             $vpntype = strtolower((string) ($r['tunneltype'] ?? $r['vpntype'] ?? ''));
             if ($vpntype !== '' && !str_contains($vpntype, 'ipsec')) continue;
 
-            $name = (string) ($r['tunnelid'] ?? $r['vpntunnel'] ?? $r['cookies'] ?? '');
+            $name = (string) ($r['tunnelid'] ?? $r['vpntunnel'] ?? '');
             if ($name === '') continue;
             $key = strtolower($name);
 
             $sent  = (float) ($r['sentbyte'] ?? $r['tunnelsentbyte'] ?? 0);
             $rcvd  = (float) ($r['rcvdbyte'] ?? $r['tunnelrcvdbyte'] ?? 0);
+            // IKE negotiation logs carry no byte counters; only keep rows that
+            // actually report traffic so we don't zero out the SNMP rows.
+            if ($sent <= 0 && $rcvd <= 0) continue;
 
             if (!isset($byTunnel[$key])) {
                 $byTunnel[$key] = ['rxMb' => 0, 'txMb' => 0, 'peer' => (string) ($r['remip'] ?? $r['remgw'] ?? '—')];
@@ -309,17 +319,25 @@ class FortiAnalyzerClient {
             'ac'  => self::LOGTYPE['app-ctrl'],
             'dns' => self::LOGTYPE['dns'],
         ];
+        // Block-ish action strings across the UTM engines (virus/webfilter/
+        // app-ctrl/dns). Counted in PHP rather than via a server-side filter:
+        // FAZ logview filter syntax uses the `or` keyword, not `|`, and the
+        // exact block-action string differs per engine — counting locally is
+        // robust against both. Row-capped, so this is "blocks in the sampled
+        // window", not an exact server-side total.
+        $blockActions = ['block', 'blocked', 'dropped', 'drop', 'reset', 'redirect'];
         $out = [];
         foreach ($map as $cell => $logtype) {
             try {
-                $rows = $this->logSearch($logtype, $deviceId, $hours, 'action==block|action==blocked|action==dropped');
+                $rows = $this->logSearch($logtype, $deviceId, $hours, '');
             } catch (\Throwable $e) {
                 error_log('[tcs_dashboard] FortiAnalyzerClient::utmBlockCounts ' . $cell . ': ' . $e->getMessage());
                 continue;
             }
             $sum = 0;
             foreach ($rows as $r) {
-                $sum += (int) ($r['count'] ?? 1);
+                $a = strtolower((string) ($r['action'] ?? ''));
+                if ($a !== '' && in_array($a, $blockActions, true)) $sum++;
             }
             $out[$cell] = $sum;
         }
