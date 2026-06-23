@@ -403,7 +403,23 @@ class FortiAnalyzerClient {
             ]);
         } catch (\Throwable) { /* non-fatal */ }
 
-        return array_slice($rows, 0, self::MAX_ROWS);
+        $rows = array_slice($rows, 0, self::MAX_ROWS);
+
+        // Diagnostic: log the row count and the FIELD NAMES of the first row
+        // (names only — no log values, so nothing sensitive). This is how we
+        // reconcile the aggregators' expected field names against what this
+        // FAZ/FortiOS build actually emits. Cheap: at most a handful of lines
+        // per FA cache miss (~once / 120s).
+        error_log(sprintf(
+            '[tcs_dashboard] FAZ logsearch logtype=%s device=%s filter=%s → %d row(s)%s',
+            $logtype,
+            $deviceId !== '' ? $deviceId : '(all)',
+            $filter !== '' ? $filter : '(none)',
+            count($rows),
+            $rows ? '; fields: ' . implode(',', array_keys($rows[0])) : ''
+        ));
+
+        return $rows;
     }
 
     /* ------------------------------------------------------------------ */
