@@ -136,10 +136,14 @@ const FGKPIStrip = () => {
 // ───────── Throughput 24h chart (SVG dual-area) ─────────
 const FGThroughputChart = () => {
   const { ingress, egress } = FG_THROUGHPUT_24H;
-  const max = (Math.max(...ingress, ...egress) || 1) * 1.15;
+  const max = (Math.max(...ingress, ...egress, 0) || 1) * 1.15;
   const W = 100, H = 100; // viewBox %
-  const stepX = W / (ingress.length - 1);
+  const n = Math.max(ingress.length, egress.length);
+  const stepX = n > 1 ? W / (n - 1) : 0;
   const toPath = (data, fillBottom = true) => {
+    // Need at least two points to draw a line; an empty series (no history
+    // yet) would otherwise emit a malformed "d" attribute.
+    if (!data || data.length < 2) return "";
     const pts = data.map((v, i) => [i * stepX, H - (v / max) * H]);
     const line = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(" ");
     return fillBottom ? `${line} L${W},${H} L0,${H} Z` : line;
@@ -320,6 +324,7 @@ const FGIPsec = () => (
     <div className="card-h">
       <h3>IPsec Site-to-Site Tunnels</h3>
       <SourceBadge src="zbx" />
+      <SourceBadge src="fa" />
       <div className="h-spacer" />
       <span className="h-meta">{FG_IPSEC.filter(t=>t.state==="up").length} / {FG_IPSEC.length} up</span>
     </div>
@@ -354,7 +359,7 @@ const FGSSLVPN = () => (
     <div className="card-h">
       <h3>SSL-VPN · Connected Users</h3>
       <SourceBadge src="zbx" />
-      <SourceBadge src="pf" />
+      <SourceBadge src="fa" />
       <div className="h-spacer" />
       <span className="h-meta">{FG_SSLVPN.length} active · peak 24h {FG_TOTALS.vpn.ssl_peak_24h}</span>
     </div>
@@ -429,6 +434,7 @@ const FGUtmGrid = () => (
     <div className="card-h">
       <h3>UTM · Threat Protection · 24h</h3>
       <SourceBadge src="zbx" />
+      <SourceBadge src="fa" />
       <div className="h-spacer" />
       <span className="h-meta">FortiGuard subscriptions active</span>
     </div>
@@ -462,7 +468,7 @@ const FGTopThreats = () => (
   <div className="card">
     <div className="card-h">
       <h3>Top Threat Signatures · 24h</h3>
-      <SourceBadge src="zbx" />
+      <SourceBadge src="fa" />
       <div className="h-spacer" />
       <a className="h-link">Open in FortiAnalyzer <Icon name="external" size={11} /></a>
     </div>
@@ -493,7 +499,7 @@ const FGTopPolicies = () => {
     <div className="card">
       <div className="card-h">
         <h3>Top Policies by Hit Count · 24h</h3>
-        <SourceBadge src="zbx" />
+        <SourceBadge src="fa" />
         <div className="h-spacer" />
         <span className="h-meta">{FG_TOTALS.policies.total} total · {FG_TOTALS.policies.unused_30d} unused 30d</span>
       </div>

@@ -6,6 +6,7 @@ Custom-skinned operations pages that live inside Zabbix:
 | --------------------- | ------------------------------------------------ | ---------------------------- |
 | Global Dashboard      | `zabbix.php?action=tcs.global.view`              | Mock data (synthetic)        |
 | AP Detail (Wireless)  | `zabbix.php?action=tcs.dashboard.view&hostid=N`  | Wired to live Zabbix data    |
+| FortiGate Firewall    | `zabbix.php?action=tcs.fortigate.view`           | Live (SNMP + FortiAnalyzer)  |
 | Switch Port Status    | `zabbix.php?action=tcs.switches.view`            | Mock data (SNMP wiring)      |
 | Servers               | `zabbix.php?action=tcs.servers.view`             | Mock data (agent wiring)     |
 | Surveillance NOC      | `zabbix.php?action=tcs.surveillance.view`        | Mock data (Milestone wiring) |
@@ -169,6 +170,73 @@ curl -sS http://<zabbix>/api_jsonrpc.php \
   -d '{"jsonrpc":"2.0","method":"item.get","params":{"output":["key_","name"],"hostids":["10847"]},"auth":"<token>","id":1}' \
   | jq -r '.result[] | "\(.key_)\t\(.name)"'
 ```
+
+## FortiGate firewall data — FortiAnalyzer
+
+The FortiGate page (`zabbix.php?action=tcs.fortigate.view`) is driven by the
+**"FortiGate by SNMP"** template for everything SNMP exposes — device health,
+interfaces, IPsec tunnel up/down, SD-WAN SLA, sessions, and the IPS counters.
+Four sections SNMP can't cover are filled from **FortiAnalyzer** instead:
+
+| Section                  | Source     | Notes                                            |
+| ------------------------ | ---------- | ------------------------------------------------ |
+| Top Threat Signatures    | FortiAnalyzer | IPS/`attack` logs, grouped by signature       |
+| Top Policies by Hit Count| FortiAnalyzer | `traffic` logs, grouped by `policyid`         |
+| SSL-VPN · Connected Users| FortiAnalyzer (+ZBX count) | `event`/vpn logs, latest session per user |
+| IPsec RX/TX MB + peer    | FortiAnalyzer (+ZBX up/down) | `event`/vpn logs, summed per tunnel  |
+| UTM block counts (AV/WF/App/DNS) | FortiAnalyzer | per-engine block logs                  |
+
+If FortiAnalyzer isn't configured the dashboard still works — those cards just
+render their empty state and carry a `FAZ` badge showing the source is
+unconfigured. SNMP data is never blocked by a FortiAnalyzer outage.
+
+### Configure (Zabbix global macros)
+
+Set these under **Administration → General → Macros**:
+
+| Macro                              | Required | Example                          |
+| ---------------------------------- | -------- | -------------------------------- |
+| `{$TCS.FORTIANALYZER.URL}`         | yes      | `https://fortianalyzer.tcs.local`|
+| `{$TCS.FORTIANALYZER.USER}`        | session auth | `dashboard_ro`               |
+| `{$TCS.FORTIANALYZER.PASS}`        | session auth | (read-only API user password)|
+| `{$TCS.FORTIANALYZER.TOKEN}`       | token auth   | (FAZ 7.x API-user token)     |
+| `{$TCS.FORTIANALYZER.ADOM}`        | no (default `root`) | `root`                |
+| `{$TCS.FORTIANALYZER.VERIFY.SSL}`  | no (default `1`) | `0` to skip TLS verify    |
+
+Two auth modes:
+
+- **Session login** (works on all FAZ versions): set `USER` + `PASS`. The
+  client calls `exec /sys/login/user`, caches the session id, and re-logs in
+  on expiry.
+- **API token** (FAZ 7.x "API user"): set `TOKEN`. It's sent as a
+  `Authorization: Bearer` header and takes precedence over `USER`/`PASS` — no
+  login round-trip.
+
+Create a FAZ admin / API user scoped to the ADOM that holds your FortiGate's
+logs. **The admin must have `JSON API Access` set to `Read-Write`**
+(System Settings → Admin → Administrators → *user* → JSON API Access). This is
+the most common gotcha: session login (`/sys/login/user`) succeeds regardless
+of this setting, but every actual API call — including the `logsearch` the
+dashboard runs — returns `-32603 "Access denied. user=, userfrom=JSON(api_user)"`
+until it's enabled. `Read-Write` (not just `Read`) is required because
+`logsearch` uses the `add` method to create a search task. The admin's profile
+also needs access to the relevant ADOM and Log View; the dashboard itself only
+ever reads.
+
+### How it fetches
+
+`lib/FortiAnalyzerClient.php` issues JSON-RPC `logsearch` calls to
+`<URL>/jsonrpc`, polls the async search task, and aggregates the top-N in PHP.
+Results are cached **120s** (separate from the 30s SNMP cache) so the slow log
+searches don't run on every page refresh. Searches are filtered to the primary
+FortiGate by serial (`inventory.serialno_a`) when known, else they cover the
+whole ADOM. The look-back window is 24h.
+
+**Log field names** follow the FortiOS 7.x schema (`attack`, `policyid`,
+`sentbyte`, `tunnelid`, …). If your FAZ runs an older FortiOS or a customized
+log format and a card stays empty, check a raw `logsearch` response and adjust
+the field reads in `FortiAnalyzerClient` (the aggregators and the `LOGTYPE`
+map). A field mismatch degrades to an empty card — it never errors the page.
 
 ## PacketFence data
 

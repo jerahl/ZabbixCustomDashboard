@@ -288,11 +288,13 @@ const FGThroughputChart = () => {
     ingress,
     egress
   } = FG_THROUGHPUT_24H;
-  const max = (Math.max(...ingress, ...egress) || 1) * 1.15;
+  const max = (Math.max(...ingress, ...egress, 0) || 1) * 1.15;
   const W = 100,
     H = 100; // viewBox %
-  const stepX = W / (ingress.length - 1);
+  const n = Math.max(ingress.length, egress.length);
+  const stepX = n > 1 ? W / (n - 1) : 0;
   const toPath = (data, fillBottom = true) => {
+    if (!data || data.length < 2) return "";
     const pts = data.map((v, i) => [i * stepX, H - v / max * H]);
     const line = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(" ");
     return fillBottom ? `${line} L${W},${H} L0,${H} Z` : line;
@@ -596,6 +598,8 @@ const FGIPsec = () => /*#__PURE__*/React.createElement("div", {
   className: "card-h"
 }, /*#__PURE__*/React.createElement("h3", null, "IPsec Site-to-Site Tunnels"), /*#__PURE__*/React.createElement(SourceBadge, {
   src: "zbx"
+}), /*#__PURE__*/React.createElement(SourceBadge, {
+  src: "fa"
 }), /*#__PURE__*/React.createElement("div", {
   className: "h-spacer"
 }), /*#__PURE__*/React.createElement("span", {
@@ -642,7 +646,7 @@ const FGSSLVPN = () => /*#__PURE__*/React.createElement("div", {
 }, /*#__PURE__*/React.createElement("h3", null, "SSL-VPN \xB7 Connected Users"), /*#__PURE__*/React.createElement(SourceBadge, {
   src: "zbx"
 }), /*#__PURE__*/React.createElement(SourceBadge, {
-  src: "pf"
+  src: "fa"
 }), /*#__PURE__*/React.createElement("div", {
   className: "h-spacer"
 }), /*#__PURE__*/React.createElement("span", {
@@ -768,6 +772,8 @@ const FGUtmGrid = () => /*#__PURE__*/React.createElement("div", {
   className: "card-h"
 }, /*#__PURE__*/React.createElement("h3", null, "UTM \xB7 Threat Protection \xB7 24h"), /*#__PURE__*/React.createElement(SourceBadge, {
   src: "zbx"
+}), /*#__PURE__*/React.createElement(SourceBadge, {
+  src: "fa"
 }), /*#__PURE__*/React.createElement("div", {
   className: "h-spacer"
 }), /*#__PURE__*/React.createElement("span", {
@@ -847,7 +853,7 @@ const FGTopThreats = () => /*#__PURE__*/React.createElement("div", {
 }, /*#__PURE__*/React.createElement("div", {
   className: "card-h"
 }, /*#__PURE__*/React.createElement("h3", null, "Top Threat Signatures \xB7 24h"), /*#__PURE__*/React.createElement(SourceBadge, {
-  src: "zbx"
+  src: "fa"
 }), /*#__PURE__*/React.createElement("div", {
   className: "h-spacer"
 }), /*#__PURE__*/React.createElement("a", {
@@ -890,7 +896,7 @@ const FGTopPolicies = () => {
   }, /*#__PURE__*/React.createElement("div", {
     className: "card-h"
   }, /*#__PURE__*/React.createElement("h3", null, "Top Policies by Hit Count \xB7 24h"), /*#__PURE__*/React.createElement(SourceBadge, {
-    src: "zbx"
+    src: "fa"
   }), /*#__PURE__*/React.createElement("div", {
     className: "h-spacer"
   }), /*#__PURE__*/React.createElement("span", {
